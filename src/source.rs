@@ -14,6 +14,7 @@ use rhai::{Dynamic, Map};
 
 use crate::model::{self, Model};
 use crate::motion::{Motion, Rig};
+use crate::springs::{Adjust, KINDS, Tuning};
 use crate::obs::{self, Ptr};
 use crate::render::{Gpu, PLAIN_STYLE, Shader, View};
 use crate::styles::{self, Frame, Prop, Style};
@@ -136,7 +137,34 @@ unsafe extern "C" fn get_defaults(settings: Ptr) {
         (api.obs_data_set_default_double)(settings, S_ARMS.as_ptr(), m.arms_down as f64);
         (api.obs_data_set_default_double)(settings, S_IDLE.as_ptr(), m.idle as f64);
         (api.obs_data_set_default_bool)(settings, S_SPRINGS.as_ptr(), m.springs);
+        for kind in 0..KINDS.len() {
+            for what in TUNING {
+                (api.obs_data_set_default_double)(settings, tune_key(kind, what).as_ptr(), 1.0);
+            }
+        }
+        (api.obs_data_set_default_double)(settings, S_COLLIDERS.as_ptr(), 1.0);
     }
+}
+
+/// The spring tuning each kind gets (springs::Tuning's fields), with their labels
+const TUNING: [&str; 3] = ["stiffness", "gravity", "drag"];
+const S_COLLIDERS: &CStr = c"tune.colliders";
+
+/// A spring kind's tuning setting (tune.hair.stiffness)
+fn tune_key(kind: usize, what: &str) -> CString {
+    cstring(&format!("tune.{}.{what}", KINDS[kind]))
+}
+
+/// The spring tuning in `settings`
+fn read_adjust(settings: Ptr) -> Adjust {
+    let api = obs::api();
+    let get = |key: &CStr| unsafe { (api.obs_data_get_double)(settings, key.as_ptr()) as f32 };
+    let mut adjust = Adjust::default();
+    for (kind, t) in adjust.kinds.iter_mut().enumerate() {
+        *t = Tuning { stiffness: get(&tune_key(kind, "stiffness")), gravity: get(&tune_key(kind, "gravity")), drag: get(&tune_key(kind, "drag")) };
+    }
+    adjust.colliders = get(S_COLLIDERS);
+    adjust
 }
 
 /// Every slot's settings for every style: given its script's defaults, then
@@ -236,6 +264,30 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
         (api.obs_properties_add_float_slider)(props, S_ARMS.as_ptr(), c"Arms down (degrees from the T-pose)".as_ptr(), 0.0, 85.0, 1.0);
         (api.obs_properties_add_float_slider)(props, S_IDLE.as_ptr(), c"Idle motion".as_ptr(), 0.0, 1.0, 0.01);
         (api.obs_properties_add_bool)(props, S_SPRINGS.as_ptr(), c"Spring bones (hair, skirt…)".as_ptr());
+
+        // The springs' tuning: the avatar's own kinds (all, before it's loaded)
+        let kinds: Vec<usize> = if data.is_null() {
+            Vec::new()
+        } else {
+            (&*(data as *const Puppet)).rig.lock().unwrap().as_ref().map(|r| r.spring_kinds()).unwrap_or_default()
+        };
+        let kinds = if kinds.is_empty() { (0..KINDS.len()).collect() } else { kinds };
+        let group = (api.obs_properties_create)();
+        (api.obs_properties_add_text)(
+            group,
+            c"tune_info".as_ptr(),
+            c"Multipliers on what the avatar's file says (1 = as made). Stiffness: how fast it springs back. Gravity: how much it hangs. Damping: how quickly a swing dies down.".as_ptr(),
+            obs::OBS_TEXT_INFO,
+        );
+        for kind in kinds {
+            let name = KINDS[kind];
+            let title = format!("{}{}", name[..1].to_uppercase(), &name[1..]);
+            for (what, label, max) in [("stiffness", "stiffness", 4.0), ("gravity", "gravity", 4.0), ("drag", "damping", 2.0)] {
+                (api.obs_properties_add_float_slider)(group, tune_key(kind, what).as_ptr(), cstring(&format!("{title}: {label}")).as_ptr(), 0.0, max, 0.05);
+            }
+        }
+        (api.obs_properties_add_float_slider)(group, S_COLLIDERS.as_ptr(), c"Colliders: thickness".as_ptr(), 0.0, 3.0, 0.05);
+        (api.obs_properties_add_group)(props, c"spring_tuning".as_ptr(), c"Spring bones: adjust".as_ptr(), obs::OBS_GROUP_NORMAL, group);
         props
     }
 }
@@ -361,6 +413,7 @@ unsafe extern "C" fn update(data: Ptr, settings: Ptr) {
             idle: (api.obs_data_get_double)(settings, S_IDLE.as_ptr()) as f32,
             yaw: 0.0,
             springs: (api.obs_data_get_bool)(settings, S_SPRINGS.as_ptr()),
+            adjust: read_adjust(settings),
         };
     }
     *puppet.slots.lock().unwrap() = std::array::from_fn(|slot| get_string(settings, &slot_setting(slot)));

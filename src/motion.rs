@@ -9,7 +9,7 @@ use glam::Quat;
 
 use crate::model::Model;
 use crate::pose::{self, Pose};
-use crate::springs::Springs;
+use crate::springs::{Adjust, Springs};
 
 /// How the avatar moves, from the source's settings
 #[derive(Clone, Copy, Debug)]
@@ -21,11 +21,13 @@ pub struct Motion {
     /// Turn, degrees
     pub yaw: f32,
     pub springs: bool,
+    /// The springs' tuning per kind, and the colliders' thickness
+    pub adjust: Adjust,
 }
 
 impl Default for Motion {
     fn default() -> Self {
-        Motion { arms_down: 65.0, idle: 0.5, yaw: 0.0, springs: true }
+        Motion { arms_down: 65.0, idle: 0.5, yaw: 0.0, springs: true, adjust: Adjust::default() }
     }
 }
 
@@ -61,6 +63,11 @@ impl Rig {
         let points = model.primitives.iter().map(|p| vec![[0.0; 4]; p.positions.len()]).collect();
         let normals = model.primitives.iter().map(|p| vec![[0.0; 4]; p.positions.len()]).collect();
         Rig { model, pose, springs, time: 0.0, yaw: f32::NAN, settled: false, points, normals, dirty: false }
+    }
+
+    /// The spring kinds this avatar has (indices into springs::KINDS)
+    pub fn spring_kinds(&self) -> Vec<usize> {
+        self.springs.kinds()
     }
 
     fn bones(&self) -> Bones {
@@ -128,7 +135,7 @@ impl Rig {
                 self.springs.reset(pose);
                 self.settled = true;
             }
-            self.springs.step(&model, pose, dt, 1.0);
+            self.springs.step(&model, pose, dt, &motion.adjust);
         } else {
             self.settled = false;
         }

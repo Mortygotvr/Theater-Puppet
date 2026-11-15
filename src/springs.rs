@@ -32,6 +32,8 @@ impl Default for Settings {
 
 struct Joint {
     node: usize,
+    /// Its chain's kind (hair, skirt…: an index into KINDS)
+    kind: usize,
     /// Toward the tail, in the node's own space at rest
     axis: Vec3,
     length: f32,
@@ -39,6 +41,36 @@ struct Joint {
     settings: Settings,
     tail: Vec3,
     prev_tail: Vec3,
+}
+
+/// Theater Rig's spring kinds (spring_<kind>_…); anything else is "misc"
+pub const KINDS: [&str; 8] = ["hair", "bust", "skirt", "tail", "ear", "ribbon", "cloth", "misc"];
+
+/// The source's adjustments: multipliers on what the avatar's file says
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Tuning {
+    pub stiffness: f32,
+    pub gravity: f32,
+    pub drag: f32,
+}
+
+impl Default for Tuning {
+    fn default() -> Self {
+        Tuning { stiffness: 1.0, gravity: 1.0, drag: 1.0 }
+    }
+}
+
+/// Each kind's tuning (KINDS' order), and how thick the colliders are
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Adjust {
+    pub kinds: [Tuning; KINDS.len()],
+    pub colliders: f32,
+}
+
+impl Default for Adjust {
+    fn default() -> Self {
+        Adjust { kinds: [Tuning::default(); KINDS.len()], colliders: 1.0 }
+    }
 }
 
 /// A capsule from a bone to a point that moves with it (its child bone, or
@@ -119,6 +151,8 @@ impl Springs {
                 chains += 1;
             }
             let settings = settings_of(&model.nodes[root].extras);
+            let kind_name = chain.strip_prefix("spring_").and_then(|c| c.split('_').next()).unwrap_or("misc");
+            let kind = KINDS.iter().position(|k| *k == kind_name).unwrap_or(KINDS.len() - 1);
             let head = pose.position(i);
             let tail_node = (0..model.nodes.len()).find(|&c| model.nodes[c].parent == Some(i));
             let tail = match tail_node {
@@ -133,7 +167,7 @@ impl Springs {
                 continue;
             }
             let axis = (pose.world_rotation(i).inverse() * (tail - head)).normalize();
-            joints.push(Joint { node: i, axis, length, rest_rotation: pose.rotation[i], settings, tail, prev_tail: tail });
+            joints.push(Joint { node: i, kind, axis, length, rest_rotation: pose.rotation[i], settings, tail, prev_tail: tail });
         }
         // Parents before children: a joint's head moves with the joints above it
         let rank: Vec<usize> = {
@@ -174,6 +208,14 @@ impl Springs {
         Springs { joints, colliders, chains }
     }
 
+    /// The kinds this avatar has (indices into KINDS)
+    pub fn kinds(&self) -> Vec<usize> {
+        let mut k: Vec<usize> = self.joints.iter().map(|j| j.kind).collect();
+        k.sort();
+        k.dedup();
+        k
+    }
+
     pub fn joints(&self) -> usize {
         self.joints.len()
     }
@@ -190,7 +232,7 @@ impl Springs {
 
     /// Moves the springs `dt` seconds on `pose` (the body already posed and
     /// its world current), setting their rotations; the world is updated.
-    pub fn step(&mut self, model: &Model, pose: &mut Pose, dt: f32, strength: f32) {
+    pub fn step(&mut self, model: &Model, pose: &mut Pose, dt: f32, adjust: &Adjust) {
         // Small steps: stable whatever OBS's frame rate
         let steps = ((dt / (1.0 / 60.0)).ceil() as usize).clamp(1, 4);
         let dt = (dt / steps as f32).min(1.0 / 30.0);
@@ -199,7 +241,7 @@ impl Springs {
             .iter()
             .map(|c| {
                 let (a, b) = c.ends(pose);
-                (a, b, c.radius)
+                (a, b, c.radius * adjust.colliders.max(0.0))
             })
             .collect();
         for _ in 0..steps {
@@ -210,8 +252,10 @@ impl Springs {
                 let head = pose.position(j.node);
                 let rest_dir = pose.world_rotation(j.node) * j.axis;
                 let s = &j.settings;
-                let inertia = (j.tail - j.prev_tail) * (1.0 - s.drag);
-                let mut next = j.tail + inertia + rest_dir * s.stiffness * dt + Vec3::NEG_Y * s.gravity * strength * dt;
+                let t = adjust.kinds[j.kind];
+                let drag = (s.drag * t.drag).clamp(0.0, 1.0);
+                let inertia = (j.tail - j.prev_tail) * (1.0 - drag);
+                let mut next = j.tail + inertia + rest_dir * s.stiffness * t.stiffness * dt + Vec3::NEG_Y * s.gravity * t.gravity * dt;
                 next = head + (next - head).normalize_or(rest_dir) * j.length;
                 for &(a, b, r) in &capsules {
                     let c = closest_on_segment(next, a, b);
@@ -238,6 +282,34 @@ impl Springs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// THEATER_PUPPET_GLB=<a Rig export> cargo test -- --nocapture
+    #[test]
+    fn adjustments_change_the_hang() {
+        let Ok(path) = std::env::var("THEATER_PUPPET_GLB") else { return };
+        let model = crate::model::load(std::path::Path::new(&path)).unwrap();
+        let tip = model.node("spring_hair_1_3").or_else(|| model.node("spring_hair_1_1")).unwrap();
+        let hair = KINDS.iter().position(|k| *k == "hair").unwrap();
+        let settle = |adjust: Adjust| {
+            let mut pose = Pose::rest(&model);
+            let mut springs = Springs::new(&model, &pose);
+            assert!(springs.kinds().contains(&hair));
+            for _ in 0..180 {
+                pose.reset(&model);
+                pose.update_world(&model);
+                springs.step(&model, &mut pose, 1.0 / 60.0, &adjust);
+            }
+            pose.position(tip)
+        };
+        let normal = settle(Adjust::default());
+        let mut heavy = Adjust::default();
+        heavy.kinds[hair] = Tuning { stiffness: 0.2, gravity: 4.0, drag: 1.0 };
+        let heavy = settle(heavy);
+        let thick = settle(Adjust { colliders: 2.0, ..Adjust::default() });
+        println!("hair tip: as made {normal:?}, heavy {heavy:?}, thick colliders {thick:?}");
+        assert!(heavy.y < normal.y - 0.005, "heavier hair doesn't hang lower");
+        assert!((thick - normal).length() > 0.001, "thicker colliders change nothing");
+    }
 
     #[test]
     fn spring_names_read() {
@@ -267,12 +339,12 @@ mod tests {
         for _ in 0..120 {
             pose.reset(&model);
             pose.update_world(&model);
-            springs.step(&model, &mut pose, 1.0 / 60.0, 1.0);
+            springs.step(&model, &mut pose, 1.0 / 60.0, &Adjust::default());
         }
         let settled = pose.position(tip);
         pose.reset(&model);
         pose.update_world(&model);
-        springs.step(&model, &mut pose, 1.0 / 60.0, 1.0);
+        springs.step(&model, &mut pose, 1.0 / 60.0, &Adjust::default());
         let still = (pose.position(tip) - settled).length();
         println!("tip at rest {rest_tip:?}, settled {settled:?} (moved {:.3} m), then {still:.5} m in a frame", (settled - rest_tip).length());
         assert!(still < 0.002, "still moving {still}");
@@ -288,7 +360,7 @@ mod tests {
             pose.rotate_in_world(&model, hips, Quat::from_rotation_y(angle));
             pose.update_world(&model);
             let rigid = pose.position(tip);
-            springs.step(&model, &mut pose, 1.0 / 60.0, 1.0);
+            springs.step(&model, &mut pose, 1.0 / 60.0, &Adjust::default());
             lag = lag.max((pose.position(tip) - rigid).length());
         }
         println!("hair lag while turning: {lag:.3} m");
