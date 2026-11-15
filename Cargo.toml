@@ -1,0 +1,21 @@
+[package]
+name = "theater_puppet"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-2.0-or-later"
+
+# Theater Puppet: an OBS source drawing a Theater Rig avatar (GLB), deployed
+# as theater-puppet.dll. It finds libobs's functions at run time, like
+# Theater Reader, so it builds without OBS's import libraries.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# The avatar: glTF binary, its textures decoded (PNG, JPEG), material extras
+gltf = { version = "1.4", features = ["extras", "names", "utils", "import", "image"] }
+glam = "0.29"
+serde_json = "1.0"
+# Snapshots (snapshot.rs): a frame saved as PNG
+image = { version = "0.25", default-features = false, features = ["png"] }
+# Styles: Rhai scripts, like Theater Scene's filters
+rhai = { version = "1.26", features = ["sync"] }

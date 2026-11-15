@@ -1,0 +1,18 @@
+# Copies Theater Puppet into OBS's plugin folders (per machine and per user).
+# Close OBS first. Usage: cargo build --release; .\deploy.ps1
+$ErrorActionPreference = 'Stop'
+
+$dll = "$PSScriptRoot\target\release\theater_puppet.dll"
+if (!(Test-Path $dll)) { throw "$dll not found - run cargo build --release first." }
+if (Get-Process obs64 -ErrorAction SilentlyContinue) { throw 'OBS is running - close it first.' }
+
+foreach ($root in @("C:\ProgramData\obs-studio\plugins\theater-puppet", "$env:APPDATA\obs-studio\plugins\theater-puppet")) {
+    New-Item -ItemType Directory -Path "$root\bin\64bit" -Force | Out-Null
+    New-Item -ItemType Directory -Path "$root\data" -Force | Out-Null
+    Copy-Item $dll "$root\bin\64bit\theater-puppet.dll" -Force
+    # The styles it ships with (yours go in plugin_config\theater-puppet\styles)
+    New-Item -ItemType Directory -Path "$root\data\styles" -Force | Out-Null
+    Copy-Item "$PSScriptRoot\styles\*.rhai" "$root\data\styles\" -Force
+}
+Write-Host "=== C:\ProgramData\obs-studio\plugins\theater-puppet ==="
+Get-ChildItem -Path "C:\ProgramData\obs-studio\plugins\theater-puppet" -Recurse -File | Format-Table FullName, LastWriteTime, Length

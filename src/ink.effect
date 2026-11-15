@@ -1,0 +1,91 @@
+// Theater Puppet's ink: lines found in the picture, like Blender's Line Art.
+// gbuf holds each pixel's normal (rgb) and distance (a, 0 = nothing there);
+// a line goes where the distance jumps (silhouettes, hair over the face) or
+// the normal turns sharply (folds, creases). Its width wanders and the
+// wander is redrawn `boil` times a second, like a hand-drawn line.
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform texture2d gbuf;
+uniform float2 texel;
+uniform float width_px;
+uniform float4 ink_color;
+uniform float depth_sens;
+uniform float normal_sens;
+uniform float jitter;
+uniform float boil;
+uniform float time;
+
+sampler_state point_clamp {
+	Filter   = Point;
+	AddressU = Clamp;
+	AddressV = Clamp;
+};
+
+sampler_state linear_clamp {
+	Filter   = Linear;
+	AddressU = Clamp;
+	AddressV = Clamp;
+};
+
+struct VertData {
+	float4 pos : POSITION;
+	float2 uv  : TEXCOORD0;
+};
+
+VertData VSInk(VertData v)
+{
+	VertData o;
+	o.pos = mul(float4(v.pos.xyz, 1.0), ViewProj);
+	o.uv = v.uv;
+	return o;
+}
+
+// Nothing there reads as very far
+float distance_of(float4 g)
+{
+	return g.a + step(g.a, 0.0) * 100000.0;
+}
+
+float edge(float2 uv, float4 here)
+{
+	float4 there = gbuf.Sample(point_clamp, uv);
+	float d0 = distance_of(here);
+	float d1 = distance_of(there);
+	float jump = abs(d1 - d0) / min(d0, d1);
+	float e = smoothstep(depth_sens, depth_sens * 2.0, jump);
+	float both = step(0.0001, here.a) * step(0.0001, there.a);
+	float turn = 1.0 - dot(here.rgb * 2.0 - 1.0, there.rgb * 2.0 - 1.0);
+	return max(e, smoothstep(normal_sens, normal_sens * 1.5, turn) * both);
+}
+
+float4 PSInk(VertData v) : TARGET
+{
+	float2 px = v.uv / texel;
+	float seed = floor(time * boil) * 7.31;
+	// The stroke drifts and swells, a little differently at each redraw
+	float2 drift = float2(sin(px.y * 0.045 + seed), cos(px.x * 0.04 + seed * 1.7)) * jitter * width_px * 0.5;
+	float w = width_px * 0.5 * max(0.35, 1.0 + jitter * 0.7 * sin(px.x * 0.021 + px.y * 0.017 + seed * 2.1));
+	float2 uv = (px + drift) * texel;
+	float4 here = gbuf.Sample(point_clamp, uv);
+	float2 dx = float2(w, 0.0) * texel;
+	float2 dy = float2(0.0, w) * texel;
+	float2 dd = float2(w * 0.7, w * 0.7) * texel;
+	float2 de = float2(w * 0.7, -w * 0.7) * texel;
+	float e = max(max(edge(uv + dx, here), edge(uv - dx, here)), max(edge(uv + dy, here), edge(uv - dy, here)));
+	e = max(e, max(max(edge(uv + dd, here), edge(uv - dd, here)), max(edge(uv + de, here), edge(uv - de, here))));
+
+	// The picture is premultiplied: ink over it, and on the clear around it
+	float4 c = image.Sample(linear_clamp, v.uv);
+	float ink = e * ink_color.a;
+	return float4(c.rgb * (1.0 - ink) + ink_color.rgb * ink, c.a * (1.0 - ink) + ink);
+}
+
+technique Draw
+{
+	pass
+	{
+		vertex_shader = VSInk(v);
+		pixel_shader  = PSInk(v);
+	}
+}
