@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use glam::{Mat4, Vec3};
+use glam::{Mat4, Quat, Vec3};
 
 pub struct Image {
     pub width: u32,
@@ -36,6 +36,7 @@ pub struct Material {
 }
 
 pub struct Primitive {
+    /// At rest (skinned), in the avatar's space
     pub positions: Vec<[f32; 3]>,
     pub normals: Vec<[f32; 3]>,
     pub uvs: Vec<[f32; 2]>,
@@ -43,6 +44,36 @@ pub struct Primitive {
     pub parts: Vec<f32>,
     pub indices: Vec<u32>,
     pub material: usize,
+    /// How it follows the skeleton (pose.rs)
+    pub binding: Binding,
+    /// Each vertex's node that moves it most (colliders are fitted to them)
+    pub dominant: Vec<usize>,
+}
+
+/// How a primitive follows a pose
+pub enum Binding {
+    /// Skinned: its own (bind) positions and normals, blended by its joints
+    Skin { skin: usize, positions: Vec<[f32; 3]>, normals: Vec<[f32; 3]>, joints: Vec<[u16; 4]>, weights: Vec<[f32; 4]> },
+    /// Moves with one node (its own positions, before the node's matrix)
+    Node { node: usize, positions: Vec<[f32; 3]>, normals: Vec<[f32; 3]> },
+}
+
+/// A node of the glTF scene: a bone, a mesh's node, the armature
+#[derive(Clone, Debug)]
+pub struct Node {
+    pub name: String,
+    pub parent: Option<usize>,
+    pub translation: Vec3,
+    pub rotation: Quat,
+    pub scale: Vec3,
+    /// glTF extras (Theater Rig keeps spring settings here)
+    pub extras: serde_json::Value,
+}
+
+pub struct Skin {
+    /// Node indices, in the skin's joint order
+    pub joints: Vec<usize>,
+    pub inverse_bind: Vec<Mat4>,
 }
 
 /// The body parts Theater Scene can aim at and hear about
@@ -99,6 +130,17 @@ pub struct Model {
     pub images: Vec<Image>,
     pub min: Vec3,
     pub max: Vec3,
+    pub nodes: Vec<Node>,
+    /// Node indices, every parent before its children
+    pub order: Vec<usize>,
+    pub skins: Vec<Skin>,
+}
+
+impl Model {
+    /// The node called `name`
+    pub fn node(&self, name: &str) -> Option<usize> {
+        self.nodes.iter().position(|n| n.name == name || n.name.strip_prefix("mixamorig:") == Some(name))
+    }
 }
 
 /// Color<N> anywhere in a name, any case (the Rig's convention)
@@ -132,6 +174,55 @@ pub fn load(path: &Path) -> Result<Model, String> {
             walk(&node, Mat4::IDENTITY, &mut world);
         }
     }
+
+    // The skeleton: every node's rest transform and parent, parents first
+    let mut parent = vec![None; doc.nodes().len()];
+    for node in doc.nodes() {
+        for child in node.children() {
+            parent[child.index()] = Some(node.index());
+        }
+    }
+    let nodes: Vec<Node> = doc
+        .nodes()
+        .map(|n| {
+            let (t, r, s) = n.transform().decomposed();
+            Node {
+                name: n.name().unwrap_or("").to_string(),
+                parent: parent[n.index()],
+                translation: Vec3::from(t),
+                rotation: Quat::from_array(r).normalize(),
+                scale: Vec3::from(s),
+                extras: n.extras().as_ref().and_then(|e| serde_json::from_str(e.get()).ok()).unwrap_or_default(),
+            }
+        })
+        .collect();
+    let mut order = Vec::with_capacity(nodes.len());
+    fn visit(i: usize, children: &[Vec<usize>], order: &mut Vec<usize>) {
+        order.push(i);
+        for &c in &children[i] {
+            visit(c, children, order);
+        }
+    }
+    let mut children = vec![Vec::new(); nodes.len()];
+    for (i, n) in nodes.iter().enumerate() {
+        if let Some(p) = n.parent {
+            children[p].push(i);
+        }
+    }
+    for i in (0..nodes.len()).filter(|&i| nodes[i].parent.is_none()) {
+        visit(i, &children, &mut order);
+    }
+    let skins: Vec<Skin> = doc
+        .skins()
+        .map(|skin| Skin {
+            joints: skin.joints().map(|j| j.index()).collect(),
+            inverse_bind: skin
+                .reader(|b| Some(&buffers[b.index()]))
+                .read_inverse_bind_matrices()
+                .map(|it| it.map(|m| Mat4::from_cols_array_2d(&m)).collect())
+                .unwrap_or_else(|| vec![Mat4::IDENTITY; skin.joints().count()]),
+        })
+        .collect();
 
     let mut materials: Vec<Material> = doc.materials().map(material).collect();
     let default_material = materials.len();
@@ -175,7 +266,17 @@ pub fn load(path: &Path) -> Result<Model, String> {
             let node_m = world[node.index()];
             let mut out_p = Vec::with_capacity(n);
             let mut out_n = Vec::with_capacity(n);
-            // A vertex is the part of the joint that moves it most
+            // The node that moves each vertex most, and so its body part
+            let skin_joints: Vec<usize> = node.skin().map(|s| s.joints().map(|j| j.index()).collect()).unwrap_or_default();
+            let dominant: Vec<usize> = (0..n)
+                .map(|i| match &skin {
+                    Some((js, ws)) => {
+                        let k = (0..4).max_by(|&a, &b| ws[i][a].total_cmp(&ws[i][b])).unwrap_or(0);
+                        skin_joints.get(js[i][k] as usize).copied().unwrap_or(node.index())
+                    }
+                    None => node.index(),
+                })
+                .collect();
             let out_parts: Vec<f32> = (0..n)
                 .map(|i| match &skin {
                     Some((js, ws)) => {
@@ -205,6 +306,10 @@ pub fn load(path: &Path) -> Result<Model, String> {
                 out_p.push(p.to_array());
                 out_n.push(nn.to_array());
             }
+            let binding = match (node.skin(), skin) {
+                (Some(s), Some((js, ws))) => Binding::Skin { skin: s.index(), positions, normals, joints: js, weights: ws },
+                _ => Binding::Node { node: node.index(), positions, normals },
+            };
             primitives.push(Primitive {
                 positions: out_p,
                 normals: out_n,
@@ -212,6 +317,8 @@ pub fn load(path: &Path) -> Result<Model, String> {
                 parts: out_parts,
                 indices,
                 material: prim.material().index().unwrap_or(default_material),
+                binding,
+                dominant,
             });
         }
     }
@@ -224,7 +331,7 @@ pub fn load(path: &Path) -> Result<Model, String> {
             m.image = None;
         }
     }
-    Ok(Model { primitives, materials, images: images.into_iter().map(rgba).collect(), min, max })
+    Ok(Model { primitives, materials, images: images.into_iter().map(rgba).collect(), min, max, nodes, order, skins })
 }
 
 fn material(m: gltf::Material) -> Material {

@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 use rhai::{Dynamic, Map};
 
 use crate::model::{self, Model};
+use crate::motion::{Motion, Rig};
 use crate::obs::{self, Ptr};
 use crate::render::{Gpu, PLAIN_STYLE, Shader, View};
 use crate::styles::{self, Frame, Prop, Style};
@@ -26,6 +27,9 @@ const S_HEIGHT: &CStr = c"height";
 const S_ZOOM: &CStr = c"zoom";
 const S_CENTRE: &CStr = c"centre";
 const S_YAW: &CStr = c"yaw";
+const S_ARMS: &CStr = c"arms_down";
+const S_IDLE: &CStr = c"idle";
+const S_SPRINGS: &CStr = c"springs";
 
 /// Style slots, applied in order
 const SLOTS: usize = 4;
@@ -75,6 +79,9 @@ struct Puppet {
     generation: Arc<AtomicU64>,
     loaded: Arc<Mutex<Option<(u64, Result<Model, String>)>>>,
     gpu: Mutex<Option<Gpu>>,
+    /// Its skeleton, springs and posed vertices (motion.rs)
+    rig: Mutex<Option<Rig>>,
+    motion: Mutex<Motion>,
     /// The compiled shader, and which stack (id#version, …) it's from
     shader: Mutex<Option<(String, Shader)>>,
 }
@@ -125,6 +132,10 @@ unsafe extern "C" fn get_defaults(settings: Ptr) {
         (api.obs_data_set_default_double)(settings, S_ZOOM.as_ptr(), 1.0);
         (api.obs_data_set_default_double)(settings, S_CENTRE.as_ptr(), 0.0);
         (api.obs_data_set_default_double)(settings, S_YAW.as_ptr(), 0.0);
+        let m = Motion::default();
+        (api.obs_data_set_default_double)(settings, S_ARMS.as_ptr(), m.arms_down as f64);
+        (api.obs_data_set_default_double)(settings, S_IDLE.as_ptr(), m.idle as f64);
+        (api.obs_data_set_default_bool)(settings, S_SPRINGS.as_ptr(), m.springs);
     }
 }
 
@@ -222,6 +233,9 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
         (api.obs_properties_add_float_slider)(props, S_ZOOM.as_ptr(), c"Zoom".as_ptr(), 0.2, 8.0, 0.05);
         (api.obs_properties_add_float_slider)(props, S_CENTRE.as_ptr(), c"Centre (feet to head)".as_ptr(), -1.0, 1.0, 0.01);
         (api.obs_properties_add_float_slider)(props, S_YAW.as_ptr(), c"Turn".as_ptr(), -180.0, 180.0, 1.0);
+        (api.obs_properties_add_float_slider)(props, S_ARMS.as_ptr(), c"Arms down (degrees from the T-pose)".as_ptr(), 0.0, 85.0, 1.0);
+        (api.obs_properties_add_float_slider)(props, S_IDLE.as_ptr(), c"Idle motion".as_ptr(), 0.0, 1.0, 0.01);
+        (api.obs_properties_add_bool)(props, S_SPRINGS.as_ptr(), c"Spring bones (hair, skirt…)".as_ptr());
         props
     }
 }
@@ -290,6 +304,8 @@ unsafe extern "C" fn create(settings: Ptr, source: Ptr) -> Ptr {
         generation: Arc::new(AtomicU64::new(0)),
         loaded: Arc::new(Mutex::new(None)),
         gpu: Mutex::new(None),
+        rig: Mutex::new(None),
+        motion: Mutex::new(Motion::default()),
         shader: Mutex::new(None),
     });
     let data = Box::into_raw(puppet) as Ptr;
@@ -340,6 +356,12 @@ unsafe extern "C" fn update(data: Ptr, settings: Ptr) {
             height: (api.obs_data_get_double)(settings, S_CENTRE.as_ptr()) as f32,
             yaw: (api.obs_data_get_double)(settings, S_YAW.as_ptr()) as f32,
         };
+        *puppet.motion.lock().unwrap() = Motion {
+            arms_down: (api.obs_data_get_double)(settings, S_ARMS.as_ptr()) as f32,
+            idle: (api.obs_data_get_double)(settings, S_IDLE.as_ptr()) as f32,
+            yaw: 0.0,
+            springs: (api.obs_data_get_bool)(settings, S_SPRINGS.as_ptr()),
+        };
     }
     *puppet.slots.lock().unwrap() = std::array::from_fn(|slot| get_string(settings, &slot_setting(slot)));
     puppet.styles_read.store(styles::generation(), Ordering::SeqCst);
@@ -383,6 +405,12 @@ unsafe extern "C" fn update(data: Ptr, settings: Ptr) {
 unsafe extern "C" fn video_tick(data: Ptr, dt: f32) {
     let puppet = unsafe { &*(data as *const Puppet) };
     crate::snapshot::poll();
+    // The avatar's pose and springs, skinned (the render uploads them)
+    if let Some(rig) = puppet.rig.lock().unwrap().as_mut() {
+        let mut motion = *puppet.motion.lock().unwrap();
+        motion.yaw = puppet.view.lock().unwrap().yaw;
+        rig.step(dt, motion);
+    }
     // A style file changed: its settings' defaults may have too
     let generation = styles::generation();
     if puppet.styles_read.swap(generation, Ordering::SeqCst) != generation {
@@ -467,13 +495,24 @@ unsafe extern "C" fn video_render(data: Ptr, _effect: Ptr) {
             if let Some(old) = gpu.take() {
                 old.destroy();
             }
-            match result.and_then(|m| Gpu::upload(&m)) {
-                Ok(g) => *gpu = Some(g),
+            match result.and_then(|m| Gpu::upload(&m).map(|g| (g, m))) {
+                Ok((g, m)) => {
+                    *gpu = Some(g);
+                    // Its skeleton and springs, moved from video_tick on
+                    *puppet.rig.lock().unwrap() = Some(Rig::new(Arc::new(m)));
+                }
                 Err(e) => crate::log(&format!("[Puppet] ⚠️ {e}")),
             }
         }
     }
     let Some(g) = gpu.as_ref() else { return };
+    // This frame's pose
+    if let Some(rig) = puppet.rig.lock().unwrap().as_mut() {
+        if rig.dirty {
+            g.update_vertices(&rig.points, &rig.normals);
+            rig.dirty = false;
+        }
+    }
 
     let (key, code, frame) = stack(&puppet.running.lock().unwrap());
     let mut shader = puppet.shader.lock().unwrap();

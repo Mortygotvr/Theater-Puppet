@@ -3,11 +3,14 @@
 //! shape keys, Color<N> slots). This first version draws it at rest.
 
 pub mod model;
+pub mod motion;
 pub mod obs;
 pub mod parts;
+pub mod pose;
 pub mod render;
 pub mod snapshot;
 pub mod source;
+pub mod springs;
 pub mod styles;
 
 use std::path::PathBuf;

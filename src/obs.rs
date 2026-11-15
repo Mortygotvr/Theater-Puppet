@@ -77,6 +77,8 @@ pub const GS_RGBA16F: u32 = 9;
 pub const GS_ZS_NONE: u32 = 0;
 pub const GS_Z24_S8: u32 = 2;
 pub const GS_UNSIGNED_LONG: u32 = 1;
+/// A buffer updated after creation (gs_vertexbuffer_flush)
+pub const GS_DYNAMIC: u32 = 1 << 1;
 pub const GS_TRIS: u32 = 3;
 pub const GS_CLEAR_COLOR: u32 = 1 << 0;
 pub const GS_CLEAR_DEPTH: u32 = 1 << 1;
@@ -149,6 +151,8 @@ api! {
     bfree: fn(*mut c_void);
     gs_vertexbuffer_create: fn(*mut VbData, u32) -> Ptr;
     gs_vertexbuffer_destroy: fn(Ptr);
+    gs_vertexbuffer_get_data: fn(Ptr) -> *mut VbData;
+    gs_vertexbuffer_flush: fn(Ptr);
     gs_indexbuffer_create: fn(u32, *mut c_void, usize, u32) -> Ptr;
     gs_indexbuffer_destroy: fn(Ptr);
     gs_load_vertexbuffer: fn(Ptr);

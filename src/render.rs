@@ -219,6 +219,9 @@ struct Mesh {
     ib: Ptr,
     count: u32,
     material: usize,
+    /// Its primitive in the model (the posed vertices come per primitive)
+    prim: usize,
+    vertices: usize,
 }
 
 pub struct Gpu {
@@ -304,7 +307,7 @@ impl Gpu {
             .collect();
 
         let mut meshes = Vec::new();
-        for p in &model.primitives {
+        for (prim, p) in model.primitives.iter().enumerate() {
             let n = p.positions.len();
             let points: Vec<[f32; 4]> = p.positions.iter().map(|v| [v[0], v[1], v[2], 0.0]).collect();
             let normals: Vec<[f32; 4]> = p.normals.iter().map(|v| [v[0], v[1], v[2], 0.0]).collect();
@@ -326,13 +329,14 @@ impl Gpu {
                     (*tv.add(1 + group)).array = obs_copy(&channels) as *mut _;
                 }
                 (*data).tvarray = tv;
-                (api.gs_vertexbuffer_create)(data, 0)
+                // Dynamic: re-posed every frame (update_vertices)
+                (api.gs_vertexbuffer_create)(data, obs::GS_DYNAMIC)
             };
             let ib = unsafe { (api.gs_indexbuffer_create)(obs::GS_UNSIGNED_LONG, obs_copy(&p.indices) as *mut _, p.indices.len(), 0) };
             if vb.is_null() || ib.is_null() {
                 continue;
             }
-            meshes.push(Mesh { vb, ib, count: p.indices.len() as u32, material: p.material });
+            meshes.push(Mesh { vb, ib, count: p.indices.len() as u32, material: p.material, prim, vertices: n });
         }
         let target = unsafe { (api.gs_texrender_create)(obs::GS_RGBA, obs::GS_Z24_S8) };
         if target.is_null() {
@@ -370,9 +374,9 @@ impl Gpu {
         let centre = (self.min + self.max) * 0.5;
         let fov = 30f32.to_radians();
         let aspect = width as f32 / height.max(1) as f32;
-        let yaw = Mat4::from_rotation_y(view.yaw.to_radians());
-        // Standing on the origin, turned, then looked at from the front (+Z)
-        let model = yaw * Mat4::from_translation(Vec3::new(-centre.x, 0.0, -centre.z));
+        // Standing on the origin, looked at from the front (+Z). (Turn turns
+        // the body itself, motion.rs: its hair swings after it.)
+        let model = Mat4::from_translation(Vec3::new(-centre.x, 0.0, -centre.z));
         let visible = size.y * 1.08 / view.zoom.max(0.05);
         let target = Vec3::new(0.0, centre.y + view.height * size.y * 0.5, 0.0);
         let distance = visible * 0.5 / (fov * 0.5).tan() + size.z;
@@ -460,6 +464,27 @@ impl Gpu {
                 (api.gs_draw_sprite)(texture, 0, width, height);
             }
             (api.gs_blend_state_pop)();
+        }
+    }
+
+    /// The posed vertices (pose::skin's, per primitive) into the GPU's
+    /// buffers. Call on the graphics thread.
+    pub fn update_vertices(&self, points: &[Vec<[f32; 4]>], normals: &[Vec<[f32; 4]>]) {
+        let api = obs::api();
+        for mesh in &self.meshes {
+            let (Some(p), Some(n)) = (points.get(mesh.prim), normals.get(mesh.prim)) else { continue };
+            if p.len() != mesh.vertices || n.len() != mesh.vertices {
+                continue;
+            }
+            unsafe {
+                let data = (api.gs_vertexbuffer_get_data)(mesh.vb);
+                if data.is_null() || (*data).num != mesh.vertices {
+                    continue;
+                }
+                std::ptr::copy_nonoverlapping(p.as_ptr(), (*data).points, mesh.vertices);
+                std::ptr::copy_nonoverlapping(n.as_ptr(), (*data).normals, mesh.vertices);
+                (api.gs_vertexbuffer_flush)(mesh.vb);
+            }
         }
     }
 
