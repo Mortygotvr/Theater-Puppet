@@ -1,7 +1,8 @@
 // Toon (whole avatar): a filter on the finished picture, in Theater Scene's
 // Rhai filter format, so it works in both. Light and shade in flat bands,
-// the shadow being the colour it falls on, darker (never one tint, never
-// black), and lines drawn around the whole avatar at once:
+// the shadow a colour layer blended over what's under it as in Procreate
+// (Multiply, Color Burn, Linear Burn, Subtract), and lines drawn around the
+// whole avatar at once:
 // its silhouette, where colours change, and, in Theater Puppet, where its
 // shape folds or overlaps (gbuf: each pixel's normal and distance).
 
@@ -18,9 +19,9 @@ uniform float2 texel;
 uniform float bands;
 uniform float threshold;
 uniform float softness;
-uniform float shadow_amount;
-uniform float shadow_saturation;
-uniform float4 shadow_tint;
+uniform float shadow_mode;
+uniform float4 shadow_color;
+uniform float shadow_opacity;
 uniform float light_x;
 uniform float light_y;
 uniform float saturation;
@@ -103,13 +104,20 @@ float4 PSToon(VertData v) : TARGET
 	float x = saturate((t - threshold) / max(1.0 - threshold, 0.001) * 0.5 + 0.5) * n;
 	float q = saturate((floor(x) + smoothstep(0.5 - softness, 0.5 + softness, frac(x))) / n);
 
-	// The shadow is the colour it falls on, darker: the same hue and
-	// saturation, whatever is under it (richness and tint are extras, off
-	// by default)
-	float3 shade = c0.rgb * (1.0 - shadow_amount);
-	float sg = lum(shade);
-	shade = lerp(float3(sg, sg, sg), shade, 1.0 + shadow_saturation);
-	shade = saturate(shade * shadow_tint.rgb);
+	// The shadow is a layer, as in Procreate: its colour blended over the
+	// colour under it (0 Multiply, 1 Color Burn, 2 Linear Burn, 3 Subtract),
+	// at its opacity
+	float3 base = saturate(c0.rgb);
+	float3 sc = shadow_color.rgb;
+	float3 layered = base * sc;
+	if (shadow_mode > 2.5) {
+		layered = base - sc;
+	} else if (shadow_mode > 1.5) {
+		layered = base + sc - 1.0;
+	} else if (shadow_mode > 0.5) {
+		layered = 1.0 - (1.0 - base) / max(sc, float3(0.001, 0.001, 0.001));
+	}
+	float3 shade = lerp(base, saturate(layered), shadow_opacity);
 	float3 col = lerp(shade, c0.rgb, q);
 	float grey = lum(col);
 	col = saturate(lerp(float3(grey, grey, grey), col, saturation));
@@ -135,9 +143,9 @@ fn defaults() {
         bands: 1,
         threshold: 0.5,
         softness: 0.05,
-        shadow_amount: 0.35,
-        shadow_saturation: 0.0,
-        shadow_tint: 0xFFFFFFFF,
+        shadow_mode: 0,
+        shadow_color: 0xFFA898C8,
+        shadow_opacity: 1.0,
         light_x: -0.4,
         light_y: 0.6,
         saturation: 1.1,
@@ -153,9 +161,9 @@ fn properties() {
         int_slider("bands", "Bands (1 = light and shade)", 1, 6, 1),
         slider("threshold", "Light / shade split", 0.0, 1.0, 0.01),
         slider("softness", "Edge softness", 0.0, 0.5, 0.01),
-        slider("shadow_amount", "Shadow darkness (the colour under it, darker)", 0.0, 1.0, 0.01),
-        slider("shadow_saturation", "Extra: shadow richness (0 = same colour)", 0.0, 1.5, 0.01),
-        color("shadow_tint", "Extra: shadow tint (white = none)"),
+        choice("shadow_mode", "Shadow blend mode", [["Multiply", 0], ["Color Burn", 1], ["Linear Burn", 2], ["Subtract", 3]]),
+        color("shadow_color", "Shadow colour"),
+        slider("shadow_opacity", "Shadow opacity", 0.0, 1.0, 0.01),
         slider("light_x", "Light from (left / right)", -1.5, 1.5, 0.05),
         slider("light_y", "Light from (below / above)", -1.5, 1.5, 0.05),
         slider("saturation", "Saturation", 0.0, 2.0, 0.01),
@@ -174,9 +182,9 @@ fn tick(dt) {
         bands: s.bands,
         threshold: s.threshold,
         softness: s.softness,
-        shadow_amount: s.shadow_amount,
-        shadow_saturation: s.shadow_saturation,
-        shadow_tint: [((s.shadow_tint >> 16) & 255) / 255.0, ((s.shadow_tint >> 8) & 255) / 255.0, (s.shadow_tint & 255) / 255.0, 1.0],
+        shadow_mode: s.shadow_mode,
+        shadow_color: [((s.shadow_color >> 16) & 255) / 255.0, ((s.shadow_color >> 8) & 255) / 255.0, (s.shadow_color & 255) / 255.0, 1.0],
+        shadow_opacity: s.shadow_opacity,
         light_x: s.light_x,
         light_y: s.light_y,
         saturation: s.saturation,
