@@ -62,13 +62,23 @@ use rhai::{AST, Array, CallFnOptions, Dynamic, Engine, ImmutableString, Map, Sco
 
 const MAX_OPERATIONS: u64 = 1_000_000;
 
-const PRELUDE: &str = r#"
+/// Property helpers, Theater Scene's own (a Scene filter's properties()
+/// runs here too; kinds Puppet has no use for are left out of its lists)
+pub(crate) const PRELUDE: &str = r#"
 fn slider(key, label, min, max, step) { #{ kind: "slider", key: key, label: label, min: min, max: max, step: step } }
 fn int_slider(key, label, min, max, step) { #{ kind: "int_slider", key: key, label: label, min: min, max: max, step: step } }
+fn int_input(key, label, min, max, step) { #{ kind: "int_slider", key: key, label: label, min: min, max: max, step: step } }
 fn toggle(key, label) { #{ kind: "toggle", key: key, label: label } }
 fn color(key, label) { #{ kind: "color", key: key, label: label } }
 fn choice(key, label, options) { #{ kind: "choice", key: key, label: label, options: options } }
 fn info(label) { #{ kind: "info", label: label } }
+fn text(key, label) { #{ kind: "text", key: key, label: label } }
+fn button(key, label) { #{ kind: "button", key: key, label: label } }
+fn font_list(key, label) { #{ kind: "font_list", key: key, label: label } }
+fn file(key, label) { #{ kind: "file", key: key, label: label, filter: "" } }
+fn file(key, label, filter) { #{ kind: "file", key: key, label: label, filter: filter } }
+fn source_list(key, label, filter_id) { #{ kind: "source_list", key: key, label: label, filter: filter_id } }
+fn remote(prop, source_key, filter_id, remote_key) { prop }
 "#;
 
 /// One property of a style, as its script declared it
@@ -249,11 +259,11 @@ fn call(style: &Style, this: Option<&mut Dynamic>, name: &str, args: impl rhai::
         .map_err(|e| format!("{}: {name}(): {e}", style.path.display()))
 }
 
-fn number(v: &Dynamic) -> Option<f64> {
+pub(crate) fn number(v: &Dynamic) -> Option<f64> {
     v.as_float().ok().or_else(|| v.as_int().ok().map(|i| i as f64)).or_else(|| v.as_bool().ok().map(|b| if b { 1.0 } else { 0.0 }))
 }
 
-fn to_value(v: &Dynamic) -> Option<Value> {
+pub(crate) fn to_value(v: &Dynamic) -> Option<Value> {
     if let Some(n) = number(v) {
         return Some(Value::Float(n as f32));
     }
@@ -262,7 +272,7 @@ fn to_value(v: &Dynamic) -> Option<Value> {
     (2..=4).contains(&nums.len()).then_some(Value::Vec(nums))
 }
 
-fn prop(v: Dynamic) -> Option<Prop> {
+pub(crate) fn prop(v: Dynamic) -> Option<Prop> {
     let m = v.try_cast::<Map>()?;
     let s = |k: &str| m.get(k).and_then(|v| v.clone().into_string().ok()).unwrap_or_default();
     let f = |k: &str| m.get(k).and_then(number).unwrap_or(0.0);

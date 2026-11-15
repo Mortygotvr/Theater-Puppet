@@ -16,8 +16,9 @@ use crate::model::{self, Model};
 use crate::motion::{Motion, Rig};
 use crate::springs::{Adjust, KINDS, Tuning};
 use crate::obs::{self, Ptr};
-use crate::render::{Gpu, PLAIN_STYLE, Shader, View};
-use crate::styles::{self, Frame, Prop, Style};
+use crate::filters::{self, Filter};
+use crate::render::{FilterPass, Gpu, PLAIN_STYLE, Shader, View};
+use crate::styles::{self, Frame, Prop, Style, Value};
 
 const ID: &CStr = c"theater_puppet";
 const NAME: &CStr = c"\u{1F3AD} Theater Puppet";
@@ -49,6 +50,30 @@ fn setting_key(slot: usize, style: &str, key: &str) -> CString {
 
 fn group_name(slot: usize, style: &str) -> CString {
     cstring(&format!("group_{}_{style}", slot + 1))
+}
+
+/// Filter slots, applied in order on the whole picture
+const FILTER_SLOTS: usize = 4;
+
+fn filter_slot_setting(slot: usize) -> CString {
+    cstring(&format!("filter{}", slot + 1))
+}
+
+/// A filter's setting in filter slot `slot` (f1.theater_toon_filter.bands)
+fn filter_key(slot: usize, filter: &str, key: &str) -> CString {
+    cstring(&format!("f{}.{filter}.{key}", slot + 1))
+}
+
+fn filter_group(slot: usize, filter: &str) -> CString {
+    cstring(&format!("fgroup_{}_{filter}", slot + 1))
+}
+
+/// A filter running in one slot: its `this`, and its values this frame
+struct RunningFilter {
+    filter: Arc<Filter>,
+    this: Dynamic,
+    values: Vec<(String, Value)>,
+    failed: bool,
 }
 
 /// A style running in one slot: its `this`, and what its last tick asked for
@@ -85,6 +110,13 @@ struct Puppet {
     motion: Mutex<Motion>,
     /// The compiled shader, and which stack (id#version, …) it's from
     shader: Mutex<Option<(String, Shader)>>,
+    /// Each filter slot's filter id ("" = empty), settings, running filter,
+    /// and its compiled effect (id#version, effect, wants gbuf)
+    filter_slots: Mutex<[String; FILTER_SLOTS]>,
+    filter_settings: Mutex<HashMap<(usize, String), Map>>,
+    filters_read: AtomicU64,
+    running_filters: Mutex<[Option<RunningFilter>; FILTER_SLOTS]>,
+    filter_effects: Mutex<[Option<(String, Ptr, bool)>; FILTER_SLOTS]>,
 }
 
 pub fn register() {
@@ -170,50 +202,72 @@ fn read_adjust(settings: Ptr) -> Adjust {
 /// Every slot's settings for every style: given its script's defaults, then
 /// read back
 fn read_style_settings(settings: Ptr) -> HashMap<(usize, String), Map> {
-    let api = obs::api();
     let mut out = HashMap::new();
     for style in styles::all() {
         for slot in 0..SLOTS {
-            let mut map = Map::new();
-            for prop in &style.props {
-                let Some(key) = prop.key() else { continue };
-                let name = setting_key(slot, &style.id, key);
-                let default = style.defaults.get(key);
-                let value = unsafe {
-                    match prop {
-                        Prop::Slider { .. } => {
-                            let d = default.and_then(|v| v.as_float().ok().or_else(|| v.as_int().ok().map(|i| i as f64))).unwrap_or(0.0);
-                            (api.obs_data_set_default_double)(settings, name.as_ptr(), d);
-                            Dynamic::from_float((api.obs_data_get_double)(settings, name.as_ptr()))
-                        }
-                        Prop::IntSlider { .. } => {
-                            let d = default.and_then(|v| v.as_int().ok().or_else(|| v.as_float().ok().map(|f| f as i64))).unwrap_or(0);
-                            (api.obs_data_set_default_int)(settings, name.as_ptr(), d);
-                            Dynamic::from_int((api.obs_data_get_int)(settings, name.as_ptr()))
-                        }
-                        Prop::Toggle { .. } => {
-                            (api.obs_data_set_default_bool)(settings, name.as_ptr(), default.and_then(|v| v.as_bool().ok()).unwrap_or(false));
-                            Dynamic::from_bool((api.obs_data_get_bool)(settings, name.as_ptr()))
-                        }
-                        Prop::Color { .. } => {
-                            let d = default.and_then(|v| v.as_int().ok()).unwrap_or(0xFFFF_FFFF);
-                            (api.obs_data_set_default_int)(settings, name.as_ptr(), swap_red_blue(d));
-                            Dynamic::from_int(swap_red_blue((api.obs_data_get_int)(settings, name.as_ptr())))
-                        }
-                        Prop::Choice { .. } => {
-                            let d = cstring(&default.map(|v| v.to_string()).unwrap_or_default());
-                            (api.obs_data_set_default_string)(settings, name.as_ptr(), d.as_ptr());
-                            Dynamic::from(get_string(settings, &name))
-                        }
-                        Prop::Info { .. } => continue,
-                    }
-                };
-                map.insert(key.into(), value);
-            }
-            out.insert((slot, style.id.clone()), map);
+            out.insert((slot, style.id.clone()), read_props(settings, &style.props, &style.defaults, |k| setting_key(slot, &style.id, k)));
         }
     }
     out
+}
+
+/// Every filter slot's settings for every filter, the same way
+fn read_filter_settings(settings: Ptr) -> HashMap<(usize, String), Map> {
+    let mut out = HashMap::new();
+    for filter in filters::all() {
+        for slot in 0..FILTER_SLOTS {
+            out.insert((slot, filter.id.clone()), read_props(settings, &filter.props, &filter.defaults, |k| filter_key(slot, &filter.id, k)));
+        }
+    }
+    out
+}
+
+/// A script's settings (its `props`, under `key(name)`): given its
+/// defaults, then read back as its `this.settings`
+fn read_props(settings: Ptr, props: &[Prop], defaults: &Map, key: impl Fn(&str) -> CString) -> Map {
+    let api = obs::api();
+    let mut map = Map::new();
+    for prop in props {
+        let Some(k) = prop.key() else { continue };
+        let name = key(k);
+        let default = defaults.get(k);
+        let value = unsafe {
+            match prop {
+                Prop::Slider { .. } => {
+                    let d = default.and_then(|v| v.as_float().ok().or_else(|| v.as_int().ok().map(|i| i as f64))).unwrap_or(0.0);
+                    (api.obs_data_set_default_double)(settings, name.as_ptr(), d);
+                    Dynamic::from_float((api.obs_data_get_double)(settings, name.as_ptr()))
+                }
+                Prop::IntSlider { .. } => {
+                    let d = default.and_then(|v| v.as_int().ok().or_else(|| v.as_float().ok().map(|f| f as i64))).unwrap_or(0);
+                    (api.obs_data_set_default_int)(settings, name.as_ptr(), d);
+                    Dynamic::from_int((api.obs_data_get_int)(settings, name.as_ptr()))
+                }
+                Prop::Toggle { .. } => {
+                    (api.obs_data_set_default_bool)(settings, name.as_ptr(), default.and_then(|v| v.as_bool().ok()).unwrap_or(false));
+                    Dynamic::from_bool((api.obs_data_get_bool)(settings, name.as_ptr()))
+                }
+                Prop::Color { .. } => {
+                    let d = default.and_then(|v| v.as_int().ok()).unwrap_or(0xFFFF_FFFF);
+                    (api.obs_data_set_default_int)(settings, name.as_ptr(), swap_red_blue(d));
+                    Dynamic::from_int(swap_red_blue((api.obs_data_get_int)(settings, name.as_ptr())))
+                }
+                Prop::Choice { .. } => {
+                    let d = cstring(&default.map(|v| v.to_string()).unwrap_or_default());
+                    (api.obs_data_set_default_string)(settings, name.as_ptr(), d.as_ptr());
+                    // A number when it is one (Scene's filters choose numbers: [label, 2])
+                    let s = get_string(settings, &name);
+                    s.parse::<i64>()
+                        .map(Dynamic::from_int)
+                        .or_else(|_| s.parse::<f64>().map(Dynamic::from_float))
+                        .unwrap_or_else(|_| Dynamic::from(s))
+                }
+                Prop::Info { .. } => continue,
+            }
+        };
+        map.insert(k.into(), value);
+    }
+    map
 }
 
 unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
@@ -246,7 +300,7 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
             for s in &all {
                 let group = (api.obs_properties_create)();
                 for (i, prop) in s.props.iter().enumerate() {
-                    add_prop(group, slot, &s.id, i, prop);
+                    add_prop(group, &|k| setting_key(slot, &s.id, k), i, prop);
                 }
                 let title = cstring(&format!("{} {}", s.name, slot + 1));
                 let g = (api.obs_properties_add_group)(props, group_name(slot, &s.id).as_ptr(), title.as_ptr(), obs::OBS_GROUP_NORMAL, group);
@@ -255,6 +309,38 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
         }
         let folder = cstring(&format!("Your own styles (.rhai) go in {}", crate::config_dir().join("styles").display()));
         (api.obs_properties_add_text)(props, c"styles_info".as_ptr(), folder.as_ptr(), obs::OBS_TEXT_INFO);
+
+        // Filters: on the whole avatar as one picture, after the styles
+        let current_filters: [String; FILTER_SLOTS] =
+            if data.is_null() { Default::default() } else { (&*(data as *const Puppet)).filter_slots.lock().unwrap().clone() };
+        let all_filters = filters::all();
+        (api.obs_properties_add_text)(
+            props,
+            c"filters_order".as_ptr(),
+            c"Filters work on the whole avatar as one picture, after the styles, top to bottom: Theater Scene's Rhai filters (the same files).".as_ptr(),
+            obs::OBS_TEXT_INFO,
+        );
+        for slot in 0..FILTER_SLOTS {
+            let label = cstring(&format!("Filter {}", slot + 1));
+            let list = (api.obs_properties_add_list)(props, filter_slot_setting(slot).as_ptr(), label.as_ptr(), obs::OBS_COMBO_TYPE_LIST, obs::OBS_COMBO_FORMAT_STRING);
+            (api.obs_property_list_add_string)(list, c"(none)".as_ptr(), c"".as_ptr());
+            for f in &all_filters {
+                let (name, id) = (cstring(&f.name), cstring(&f.id));
+                (api.obs_property_list_add_string)(list, name.as_ptr(), id.as_ptr());
+            }
+            (api.obs_property_set_modified_callback)(list, style_changed);
+            for f in &all_filters {
+                let group = (api.obs_properties_create)();
+                for (i, prop) in f.props.iter().enumerate() {
+                    add_prop(group, &|k| filter_key(slot, &f.id, k), i, prop);
+                }
+                let title = cstring(&format!("{} (filter {})", f.name, slot + 1));
+                let g = (api.obs_properties_add_group)(props, filter_group(slot, &f.id).as_ptr(), title.as_ptr(), obs::OBS_GROUP_NORMAL, group);
+                (api.obs_property_set_visible)(g, f.id == current_filters[slot]);
+            }
+        }
+        let folder = cstring(&format!("Your own filters (.rhai) go in {} (Theater Scene's are listed too)", crate::config_dir().join("filters").display()));
+        (api.obs_properties_add_text)(props, c"filters_info".as_ptr(), folder.as_ptr(), obs::OBS_TEXT_INFO);
 
         (api.obs_properties_add_int)(props, S_WIDTH.as_ptr(), c"Width".as_ptr(), 16, 8192, 1);
         (api.obs_properties_add_int)(props, S_HEIGHT.as_ptr(), c"Height".as_ptr(), 16, 8192, 1);
@@ -292,48 +378,57 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
     }
 }
 
-unsafe fn add_prop(group: Ptr, slot: usize, style: &str, index: usize, prop: &Prop) {
+/// One property of a script, under `key(name)`
+unsafe fn add_prop(group: Ptr, key: &dyn Fn(&str) -> CString, index: usize, prop: &Prop) {
     let api = obs::api();
     unsafe {
         match prop {
-            Prop::Slider { key, label, min, max, step } => {
-                (api.obs_properties_add_float_slider)(group, setting_key(slot, style, key).as_ptr(), cstring(label).as_ptr(), *min, *max, *step);
+            Prop::Slider { key: k, label, min, max, step } => {
+                (api.obs_properties_add_float_slider)(group, key(k).as_ptr(), cstring(label).as_ptr(), *min, *max, *step);
             }
-            Prop::IntSlider { key, label, min, max, step } => {
-                (api.obs_properties_add_int_slider)(group, setting_key(slot, style, key).as_ptr(), cstring(label).as_ptr(), *min as i32, *max as i32, *step as i32);
+            Prop::IntSlider { key: k, label, min, max, step } => {
+                (api.obs_properties_add_int_slider)(group, key(k).as_ptr(), cstring(label).as_ptr(), *min as i32, *max as i32, *step as i32);
             }
-            Prop::Toggle { key, label } => {
-                (api.obs_properties_add_bool)(group, setting_key(slot, style, key).as_ptr(), cstring(label).as_ptr());
+            Prop::Toggle { key: k, label } => {
+                (api.obs_properties_add_bool)(group, key(k).as_ptr(), cstring(label).as_ptr());
             }
-            Prop::Color { key, label } => {
-                (api.obs_properties_add_color_alpha)(group, setting_key(slot, style, key).as_ptr(), cstring(label).as_ptr());
+            Prop::Color { key: k, label } => {
+                (api.obs_properties_add_color_alpha)(group, key(k).as_ptr(), cstring(label).as_ptr());
             }
-            Prop::Choice { key, label, options } => {
-                let list = (api.obs_properties_add_list)(group, setting_key(slot, style, key).as_ptr(), cstring(label).as_ptr(), obs::OBS_COMBO_TYPE_LIST, obs::OBS_COMBO_FORMAT_STRING);
+            Prop::Choice { key: k, label, options } => {
+                let list = (api.obs_properties_add_list)(group, key(k).as_ptr(), cstring(label).as_ptr(), obs::OBS_COMBO_TYPE_LIST, obs::OBS_COMBO_FORMAT_STRING);
                 for (l, v) in options {
                     (api.obs_property_list_add_string)(list, cstring(l).as_ptr(), cstring(v).as_ptr());
                 }
             }
             Prop::Info { label } => {
-                (api.obs_properties_add_text)(group, setting_key(slot, style, &format!("info{index}")).as_ptr(), cstring(label).as_ptr(), obs::OBS_TEXT_INFO);
+                (api.obs_properties_add_text)(group, key(&format!("info{index}")).as_ptr(), cstring(label).as_ptr(), obs::OBS_TEXT_INFO);
             }
         }
     }
 }
 
-/// A Style list changed: each slot shows its own style's settings only
+/// A Style or Filter list changed: each slot shows its own script's settings only
 unsafe extern "C" fn style_changed(props: Ptr, _prop: Ptr, settings: Ptr) -> bool {
     let api = obs::api();
-    let all = styles::all();
+    let show = |group: CString, visible: bool| unsafe {
+        let g = (api.obs_properties_get)(props, group.as_ptr());
+        if !g.is_null() {
+            (api.obs_property_set_visible)(g, visible);
+        }
+    };
+    let styles = styles::all();
     for slot in 0..SLOTS {
         let current = get_string(settings, &slot_setting(slot));
-        for s in &all {
-            unsafe {
-                let g = (api.obs_properties_get)(props, group_name(slot, &s.id).as_ptr());
-                if !g.is_null() {
-                    (api.obs_property_set_visible)(g, s.id == current);
-                }
-            }
+        for s in &styles {
+            show(group_name(slot, &s.id), s.id == current);
+        }
+    }
+    let filters = filters::all();
+    for slot in 0..FILTER_SLOTS {
+        let current = get_string(settings, &filter_slot_setting(slot));
+        for f in &filters {
+            show(filter_group(slot, &f.id), f.id == current);
         }
     }
     true
@@ -359,6 +454,11 @@ unsafe extern "C" fn create(settings: Ptr, source: Ptr) -> Ptr {
         rig: Mutex::new(None),
         motion: Mutex::new(Motion::default()),
         shader: Mutex::new(None),
+        filter_slots: Mutex::new(Default::default()),
+        filter_settings: Mutex::new(HashMap::new()),
+        filters_read: AtomicU64::new(0),
+        running_filters: Mutex::new(Default::default()),
+        filter_effects: Mutex::new(Default::default()),
     });
     let data = Box::into_raw(puppet) as Ptr;
     unsafe { update(data, settings) };
@@ -371,7 +471,8 @@ unsafe extern "C" fn destroy(data: Ptr) {
     puppet.generation.fetch_add(1, Ordering::SeqCst);
     let gpu = puppet.gpu.lock().unwrap().take();
     let shader = puppet.shader.lock().unwrap().take();
-    if gpu.is_some() || shader.is_some() {
+    let effects: Vec<Ptr> = puppet.filter_effects.lock().unwrap().iter_mut().filter_map(|e| e.take().map(|(_, p, _)| p)).collect();
+    if gpu.is_some() || shader.is_some() || !effects.is_empty() {
         let api = obs::api();
         unsafe { (api.obs_enter_graphics)() };
         if let Some(g) = gpu {
@@ -379,6 +480,9 @@ unsafe extern "C" fn destroy(data: Ptr) {
         }
         if let Some((_, s)) = shader {
             s.destroy();
+        }
+        for e in effects {
+            crate::render::destroy_effect(e);
         }
         unsafe { (api.obs_leave_graphics)() };
     }
@@ -419,6 +523,9 @@ unsafe extern "C" fn update(data: Ptr, settings: Ptr) {
     *puppet.slots.lock().unwrap() = std::array::from_fn(|slot| get_string(settings, &slot_setting(slot)));
     puppet.styles_read.store(styles::generation(), Ordering::SeqCst);
     *puppet.style_settings.lock().unwrap() = read_style_settings(settings);
+    *puppet.filter_slots.lock().unwrap() = std::array::from_fn(|slot| get_string(settings, &filter_slot_setting(slot)));
+    puppet.filters_read.store(filters::generation(), Ordering::SeqCst);
+    *puppet.filter_settings.lock().unwrap() = read_filter_settings(settings);
 
     let file = get_string(settings, S_FILE);
     let mut current = puppet.file.lock().unwrap();
@@ -454,6 +561,81 @@ unsafe extern "C" fn update(data: Ptr, settings: Ptr) {
         .ok();
 }
 
+/// Runs each filter slot's tick: its shader's values this frame
+fn tick_filters(puppet: &Puppet, dt: f32) {
+    let slots = puppet.filter_slots.lock().unwrap().clone();
+    let all = filters::all();
+    let mut running = puppet.running_filters.lock().unwrap();
+    for (slot, id) in slots.iter().enumerate() {
+        let Some(filter) = all.iter().find(|f| !id.is_empty() && f.id == *id).cloned() else {
+            running[slot] = None;
+            continue;
+        };
+        // A new filter, or its file reloaded: a fresh `this`
+        if running[slot].as_ref().is_none_or(|r| !Arc::ptr_eq(&r.filter, &filter)) {
+            running[slot] = Some(RunningFilter { filter: filter.clone(), this: Dynamic::from_map(Map::new()), values: Vec::new(), failed: false });
+        }
+        let r = running[slot].as_mut().unwrap();
+        let settings = puppet.filter_settings.lock().unwrap().get(&(slot, filter.id.clone())).cloned().unwrap_or_default();
+        if let Some(mut this) = r.this.write_lock::<Map>() {
+            let time = this.get("time").and_then(|t| t.as_float().ok()).unwrap_or(0.0) + dt as f64;
+            this.insert("settings".into(), Dynamic::from_map(settings));
+            this.insert("time".into(), Dynamic::from_float(time));
+            this.insert("width".into(), Dynamic::from_int(puppet.width.load(Ordering::Relaxed) as i64));
+            this.insert("height".into(), Dynamic::from_int(puppet.height.load(Ordering::Relaxed) as i64));
+        }
+        match filter.tick(&mut r.this, dt) {
+            Ok(values) => {
+                r.values = values;
+                r.failed = false;
+            }
+            Err(e) => {
+                if !r.failed {
+                    crate::log(&format!("[Puppet] ⚠️ {e}"));
+                }
+                r.failed = true;
+            }
+        }
+    }
+}
+
+/// This frame's filter chain: each slot's effect (compiled when its filter
+/// or file changes; one that doesn't compile is left out) and values.
+/// Call on the graphics thread.
+fn filter_chain(puppet: &Puppet) -> Vec<FilterPass> {
+    let running = puppet.running_filters.lock().unwrap();
+    let mut effects = puppet.filter_effects.lock().unwrap();
+    let mut chain = Vec::new();
+    for slot in 0..FILTER_SLOTS {
+        let Some(r) = running[slot].as_ref() else {
+            if let Some((_, old, _)) = effects[slot].take() {
+                crate::render::destroy_effect(old);
+            }
+            continue;
+        };
+        let key = format!("{}#{}", r.filter.id, r.filter.version);
+        if effects[slot].as_ref().is_none_or(|(k, _, _)| *k != key) {
+            if let Some((_, old, _)) = effects[slot].take() {
+                crate::render::destroy_effect(old);
+            }
+            match crate::render::compile_filter(&r.filter.shader, &r.filter.id) {
+                Ok((effect, wants_gbuf)) => effects[slot] = Some((key, effect, wants_gbuf)),
+                Err(e) => {
+                    crate::log(&format!("[Puppet] ⚠️ Filter {}'s shader: {e}", r.filter.id));
+                    // Not tried again until the file changes
+                    effects[slot] = Some((key, std::ptr::null_mut(), false));
+                }
+            }
+        }
+        if let Some((_, effect, wants_gbuf)) = effects[slot] {
+            if !effect.is_null() {
+                chain.push(FilterPass { effect, values: r.values.clone(), premultiplied: r.filter.premultiplied, wants_gbuf });
+            }
+        }
+    }
+    chain
+}
+
 /// Runs each slot's tick: what it sets this frame
 unsafe extern "C" fn video_tick(data: Ptr, dt: f32) {
     let puppet = unsafe { &*(data as *const Puppet) };
@@ -464,18 +646,27 @@ unsafe extern "C" fn video_tick(data: Ptr, dt: f32) {
         motion.yaw = puppet.view.lock().unwrap().yaw;
         rig.step(dt, motion);
     }
-    // A style file changed: its settings' defaults may have too
+    // A style or filter file changed: its settings' defaults may have too
     let generation = styles::generation();
-    if puppet.styles_read.swap(generation, Ordering::SeqCst) != generation {
+    let filters_generation = filters::generation();
+    let styles_changed = puppet.styles_read.swap(generation, Ordering::SeqCst) != generation;
+    let filters_changed = puppet.filters_read.swap(filters_generation, Ordering::SeqCst) != filters_generation;
+    if styles_changed || filters_changed {
         let api = obs::api();
         unsafe {
             let settings = (api.obs_source_get_settings)(puppet.source);
             if !settings.is_null() {
-                *puppet.style_settings.lock().unwrap() = read_style_settings(settings);
+                if styles_changed {
+                    *puppet.style_settings.lock().unwrap() = read_style_settings(settings);
+                }
+                if filters_changed {
+                    *puppet.filter_settings.lock().unwrap() = read_filter_settings(settings);
+                }
                 (api.obs_data_release)(settings);
             }
         }
     }
+    tick_filters(puppet, dt);
     let slots = puppet.slots.lock().unwrap().clone();
     let all = styles::all();
     let mut running = puppet.running.lock().unwrap();
@@ -586,7 +777,8 @@ unsafe extern "C" fn video_render(data: Ptr, _effect: Ptr) {
     if let Some((_, s)) = shader.as_ref() {
         let view = *puppet.view.lock().unwrap();
         let (width, height) = (puppet.width.load(Ordering::Relaxed), puppet.height.load(Ordering::Relaxed));
-        g.draw(width, height, view, s, &frame);
+        let filters = filter_chain(puppet);
+        g.draw(width, height, view, s, &frame, &filters);
         // The body parts map, for Theater Scene
         if let Some(pixels) = g.parts(width, height, view, s) {
             let map = crate::parts::PartMap { pixels, width, height };

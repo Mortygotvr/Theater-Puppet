@@ -2,6 +2,7 @@
 //! (a GLB in the Theater convention: Mixamo bones, spring_ chains, ARKit
 //! shape keys, Color<N> slots). This first version draws it at rest.
 
+pub mod filters;
 pub mod model;
 pub mod motion;
 pub mod obs;

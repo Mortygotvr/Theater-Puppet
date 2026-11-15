@@ -38,6 +38,59 @@ fn create_effect(code: &str, name: &std::ffi::CStr) -> Result<Ptr, String> {
 
 const INK: &str = include_str!("ink.effect");
 
+/// Straight alpha from premultiplied: what a filter takes (OBS gives Theater
+/// Scene's filters their source that way)
+const UNPREMULTIPLY: &str = r#"
+uniform float4x4 ViewProj;
+uniform texture2d image;
+sampler_state point_clamp { Filter = Point; AddressU = Clamp; AddressV = Clamp; };
+struct VertData { float4 pos : POSITION; float2 uv : TEXCOORD0; };
+VertData VSDefault(VertData v) { VertData o; o.pos = mul(float4(v.pos.xyz, 1.0), ViewProj); o.uv = v.uv; return o; }
+float4 PSStraight(VertData v) : TARGET { float4 c = image.Sample(point_clamp, v.uv); return float4(c.rgb / max(c.a, 0.0001), c.a); }
+technique Draw { pass { vertex_shader = VSDefault(v); pixel_shader = PSStraight(v); } }
+"#;
+
+/// One filter this frame: its effect, its values, how its output's blended
+pub struct FilterPass {
+    pub effect: Ptr,
+    pub values: Vec<(String, Value)>,
+    pub premultiplied: bool,
+    /// Its shader declares `gbuf`: the avatar's normals and distances are drawn for it
+    pub wants_gbuf: bool,
+}
+
+/// A filter's shader, compiled. Call on the graphics thread.
+pub fn compile_filter(code: &str, id: &str) -> Result<(Ptr, bool), String> {
+    let name = CString::new(format!("{id}.effect")).unwrap_or_default();
+    let effect = create_effect(code, &name)?;
+    Ok((effect, !param(effect, "gbuf").is_null()))
+}
+
+pub fn destroy_effect(effect: Ptr) {
+    if !effect.is_null() {
+        unsafe { (obs::api().gs_effect_destroy)(effect) };
+    }
+}
+
+/// Values set by name (a missing one is skipped)
+fn set_values(effect: Ptr, values: &[(String, Value)]) {
+    let api = obs::api();
+    for (name, value) in values {
+        let p = param(effect, name);
+        if p.is_null() {
+            continue;
+        }
+        unsafe {
+            match value {
+                Value::Float(f) => (api.gs_effect_set_float)(p, *f),
+                Value::Vec(v) if v.len() == 2 => (api.gs_effect_set_vec2)(p, &[v[0], v[1]]),
+                Value::Vec(v) if v.len() == 3 => (api.gs_effect_set_vec3)(p, &[v[0], v[1], v[2], 0.0]),
+                Value::Vec(v) => (api.gs_effect_set_vec4)(p, &[v[0], v[1], v[2], v.get(3).copied().unwrap_or(1.0)]),
+            }
+        }
+    }
+}
+
 /// The ink pass's effect (ink.effect)
 struct Ink {
     effect: Ptr,
@@ -166,21 +219,7 @@ impl Shader {
 
     /// The style's own uniforms, from its tick
     unsafe fn set_uniforms(&self, frame: &Frame) {
-        let api = obs::api();
-        for (name, value) in &frame.uniforms {
-            let p = param(self.effect, name);
-            if p.is_null() {
-                continue;
-            }
-            unsafe {
-                match value {
-                    Value::Float(f) => (api.gs_effect_set_float)(p, *f),
-                    Value::Vec(v) if v.len() == 2 => (api.gs_effect_set_vec2)(p, &[v[0], v[1]]),
-                    Value::Vec(v) if v.len() == 3 => (api.gs_effect_set_vec3)(p, &[v[0], v[1], v[2], 0.0]),
-                    Value::Vec(v) => (api.gs_effect_set_vec4)(p, &[v[0], v[1], v[2], v.get(3).copied().unwrap_or(1.0)]),
-                }
-            }
-        }
+        set_values(self.effect, &frame.uniforms);
     }
 
     /// Once per shader and technique: the values never given (D3D11 then
@@ -233,6 +272,9 @@ pub struct Gpu {
     gbuf: Ptr,
     inked: Ptr,
     ink: Option<Ink>,
+    /// The filters' two textures, used in turn, and their straight-alpha step
+    chain: [Ptr; 2],
+    unpremultiply: Ptr,
     /// The parts map for Theater Scene: drawn small, copied back a frame later
     parts_rt: Ptr,
     parts_stage: std::sync::Mutex<PartsStage>,
@@ -345,6 +387,11 @@ impl Gpu {
         let gbuf = unsafe { (api.gs_texrender_create)(obs::GS_RGBA16F, obs::GS_Z24_S8) };
         let inked = unsafe { (api.gs_texrender_create)(obs::GS_RGBA, obs::GS_ZS_NONE) };
         let parts_rt = unsafe { (api.gs_texrender_create)(obs::GS_RGBA, obs::GS_Z24_S8) };
+        let chain = unsafe { [(api.gs_texrender_create)(obs::GS_RGBA, obs::GS_ZS_NONE), (api.gs_texrender_create)(obs::GS_RGBA, obs::GS_ZS_NONE)] };
+        let unpremultiply = create_effect(UNPREMULTIPLY, c"unpremultiply.effect").unwrap_or_else(|e| {
+            crate::log(&format!("[Puppet] ⚠️ The filters' straight-alpha step: {e}"));
+            std::ptr::null_mut()
+        });
         let ink = match create_effect(INK, c"ink.effect") {
             Ok(effect) => Some(Ink { effect }),
             Err(e) => {
@@ -360,6 +407,8 @@ impl Gpu {
             gbuf,
             inked,
             ink,
+            chain,
+            unpremultiply,
             parts_rt,
             parts_stage: Default::default(),
             min: model.min,
@@ -393,7 +442,7 @@ impl Gpu {
 
     /// Draws the avatar into the current target, `width` x `height`, with
     /// `shader` and the style's `frame`.
-    pub fn draw(&self, width: u32, height: u32, view: View, shader: &Shader, frame: &Frame) {
+    pub fn draw(&self, width: u32, height: u32, view: View, shader: &Shader, frame: &Frame, filters: &[FilterPass]) {
         let api = obs::api();
         let cam = self.camera(width, height, view);
         unsafe {
@@ -447,9 +496,33 @@ impl Gpu {
             if texture.is_null() {
                 return;
             }
-            if frame.lines.width > 0.0 {
-                if let Some(inked) = self.ink(texture, width, height, &cam, shader, frame) {
+            // The avatar's normals and distances: for the ink lines, and filters asking for them
+            let gbuf = if frame.lines.width > 0.0 || filters.iter().any(|f| f.wants_gbuf) {
+                self.gbuffer(width, height, &cam, shader, frame)
+            } else {
+                None
+            };
+            if let (true, Some(g)) = (frame.lines.width > 0.0, gbuf) {
+                if let Some(inked) = self.ink(texture, g, width, height, frame) {
                     texture = inked;
+                }
+            }
+            // The filters, on the whole picture in turn. Each gets it straight
+            // (as OBS gives Theater Scene's filters their source)
+            // (Two textures in turn: each step reads the one the last wrote)
+            let mut premultiplied = true;
+            let mut turn = 0;
+            for f in filters {
+                if premultiplied {
+                    if let Some(t) = self.run_effect(self.unpremultiply, &[], texture, None, width, height, turn % 2) {
+                        texture = t;
+                        turn += 1;
+                    }
+                }
+                if let Some(t) = self.run_effect(f.effect, &f.values, texture, gbuf, width, height, turn % 2) {
+                    texture = t;
+                    turn += 1;
+                    premultiplied = f.premultiplied;
                 }
             }
             if crate::snapshot::wanted() {
@@ -458,7 +531,11 @@ impl Gpu {
             let effect = (api.obs_get_base_effect)(obs::OBS_EFFECT_DEFAULT);
             (api.gs_blend_state_push)();
             (api.gs_enable_blending)(true);
-            (api.gs_blend_function)(obs::GS_BLEND_ONE, obs::GS_BLEND_INVSRCALPHA);
+            if premultiplied {
+                (api.gs_blend_function)(obs::GS_BLEND_ONE, obs::GS_BLEND_INVSRCALPHA);
+            } else {
+                (api.gs_blend_function)(obs::GS_BLEND_SRCALPHA, obs::GS_BLEND_INVSRCALPHA);
+            }
             (api.gs_effect_set_texture)(param(effect, "image"), texture);
             while (api.gs_effect_loop)(effect, c"Draw".as_ptr()) {
                 (api.gs_draw_sprite)(texture, 0, width, height);
@@ -568,12 +645,60 @@ impl Gpu {
         out
     }
 
-    /// Ink lines over `picture`: the avatar's normals and distances drawn
-    /// into gbuf, then lines where they change sharply (ink.effect), into
-    /// `inked`. Its texture, or None when it couldn't draw.
-    unsafe fn ink(&self, picture: Ptr, width: u32, height: u32, cam: &Camera, shader: &Shader, frame: &Frame) -> Option<Ptr> {
+    /// Draws `input` through `effect` (a whole-picture effect: ViewProj,
+    /// image, technique Draw) into chain texture `which`, with `values` (every
+    /// other number value 0) and `gbuf` when it asks. Its texture, or None.
+    unsafe fn run_effect(&self, effect: Ptr, values: &[(String, Value)], input: Ptr, gbuf: Option<Ptr>, width: u32, height: u32, which: usize) -> Option<Ptr> {
         let api = obs::api();
-        let ink = self.ink.as_ref()?;
+        let target = *self.chain.get(which)?;
+        if effect.is_null() || target.is_null() {
+            return None;
+        }
+        unsafe {
+            (api.gs_texrender_reset)(target);
+            if !(api.gs_texrender_begin)(target, width, height) {
+                return None;
+            }
+            (api.gs_clear)(obs::GS_CLEAR_COLOR, &[0.0; 4], 1.0, 0);
+            (api.gs_ortho)(0.0, width as f32, 0.0, height as f32, -100.0, 100.0);
+            (api.gs_blend_state_push)();
+            (api.gs_enable_blending)(false);
+            // Every number value given (Direct3D skips a draw missing one), then this frame's
+            let zeros = [0u8; 16];
+            for i in 0..(api.gs_effect_get_num_params)(effect) {
+                let p = (api.gs_effect_get_param_by_idx)(effect, i);
+                let mut info = obs::EffectParamInfo { name: std::ptr::null(), type_: 0 };
+                (api.gs_effect_get_param_info)(p, &mut info);
+                if let Some(size) = param_size(info.type_) {
+                    (api.gs_effect_set_val)(p, zeros.as_ptr() as *const _, size);
+                }
+            }
+            set_values(effect, values);
+            (api.gs_effect_set_texture)(param(effect, "image"), input);
+            if let Some(g) = gbuf {
+                let gp = param(effect, "gbuf");
+                if !gp.is_null() {
+                    (api.gs_effect_set_texture)(gp, g);
+                    let has = param(effect, "has_gbuf");
+                    if !has.is_null() {
+                        (api.gs_effect_set_float)(has, 1.0);
+                    }
+                }
+            }
+            while (api.gs_effect_loop)(effect, c"Draw".as_ptr()) {
+                (api.gs_draw_sprite)(input, 0, width, height);
+            }
+            (api.gs_blend_state_pop)();
+            (api.gs_texrender_end)(target);
+            let out = (api.gs_texrender_get_texture)(target);
+            (!out.is_null()).then_some(out)
+        }
+    }
+
+    /// The avatar's normals and distances, each pixel (for the ink lines and
+    /// filters that ask for them). Its texture, or None when it couldn't draw.
+    unsafe fn gbuffer(&self, width: u32, height: u32, cam: &Camera, shader: &Shader, frame: &Frame) -> Option<Ptr> {
+        let api = obs::api();
         let values = FrameValues {
             mvp: cam.mvp.transpose().to_cols_array(),
             light: [cam.light.x, cam.light.y, cam.light.z, 0.0],
@@ -602,10 +727,18 @@ impl Gpu {
             (api.gs_blend_state_pop)();
             (api.gs_texrender_end)(self.gbuf);
             let gbuf = (api.gs_texrender_get_texture)(self.gbuf);
-            if gbuf.is_null() {
-                return None;
-            }
+            (!gbuf.is_null()).then_some(gbuf)
+        }
+    }
 
+    /// Ink lines over `picture`: where the avatar's normals and distances
+    /// (`gbuf`) change sharply (ink.effect), into `inked`. Its texture, or
+    /// None when it couldn't draw.
+    unsafe fn ink(&self, picture: Ptr, gbuf: Ptr, width: u32, height: u32, frame: &Frame) -> Option<Ptr> {
+        let api = obs::api();
+        let ink = self.ink.as_ref()?;
+        let values = FrameValues { mvp: [0.0; 16], light: [0.0; 4], eye: [0.0; 4], time: seconds(), frame };
+        unsafe {
             (api.gs_texrender_reset)(self.inked);
             if !(api.gs_texrender_begin)(self.inked, width, height) {
                 return None;
@@ -697,6 +830,10 @@ impl Gpu {
             (api.gs_texrender_destroy)(self.target);
             (api.gs_texrender_destroy)(self.gbuf);
             (api.gs_texrender_destroy)(self.inked);
+            for t in self.chain {
+                (api.gs_texrender_destroy)(t);
+            }
+            destroy_effect(self.unpremultiply);
             (api.gs_texrender_destroy)(self.parts_rt);
             if let Some((surface, _, _)) = self.parts_stage.into_inner().ok().and_then(|s| s.surface) {
                 (api.gs_stagesurface_destroy)(surface);
