@@ -228,6 +228,25 @@ mod tests {
         assert!(values.iter().any(|(k, _)| k == "texel"));
     }
 
+    #[test]
+    fn the_watercolour_filter_compiles_and_ticks() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("filters").join("watercolour_filter.rhai");
+        let f = compile(&path, 1).unwrap();
+        assert_eq!(f.id, "theater_watercolour_filter");
+        assert!(f.premultiplied && f.shader.contains("PSWatercolour"));
+        let mut this = Dynamic::from_map(Map::new());
+        if let Some(mut m) = this.write_lock::<Map>() {
+            m.insert("settings".into(), Dynamic::from_map(f.defaults.clone()));
+            m.insert("width".into(), Dynamic::from_int(1080));
+            m.insert("height".into(), Dynamic::from_int(1080));
+            m.insert("time".into(), Dynamic::from_float(1.5));
+        }
+        let values = f.tick(&mut this, 1.0 / 60.0).unwrap();
+        for key in ["texel", "wash", "pooling", "pencil_color", "time"] {
+            assert!(values.iter().any(|(k, _)| k == key), "no {key}");
+        }
+    }
+
     /// Theater Scene's own filter (its repo next to this one) loads here too
     #[test]
     fn a_scene_filter_loads() {
