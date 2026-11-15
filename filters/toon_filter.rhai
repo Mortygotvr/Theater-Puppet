@@ -1,6 +1,6 @@
 // Toon (whole avatar): a filter on the finished picture, in Theater Scene's
 // Rhai filter format, so it works in both. Light and shade in flat bands,
-// the shadow being the colour it falls on (darker, richer, tinted: never
+// the shadow being the colour it falls on, darker (never one tint, never
 // black), and lines drawn around the whole avatar at once:
 // its silhouette, where colours change, and, in Theater Puppet, where its
 // shape folds or overlaps (gbuf: each pixel's normal and distance).
@@ -103,8 +103,9 @@ float4 PSToon(VertData v) : TARGET
 	float x = saturate((t - threshold) / max(1.0 - threshold, 0.001) * 0.5 + 0.5) * n;
 	float q = saturate((floor(x) + smoothstep(0.5 - softness, 0.5 + softness, frac(x))) / n);
 
-	// The shadow is the colour it falls on: darker, richer, a little tinted
-	// (dark things stay dark, blue hair gets a deeper blue)
+	// The shadow is the colour it falls on, darker: the same hue and
+	// saturation, whatever is under it (richness and tint are extras, off
+	// by default)
 	float3 shade = c0.rgb * (1.0 - shadow_amount);
 	float sg = lum(shade);
 	shade = lerp(float3(sg, sg, sg), shade, 1.0 + shadow_saturation);
@@ -135,7 +136,7 @@ fn defaults() {
         threshold: 0.5,
         softness: 0.05,
         shadow_amount: 0.35,
-        shadow_saturation: 0.7,
+        shadow_saturation: 0.0,
         shadow_tint: 0xFFFFFFFF,
         light_x: -0.4,
         light_y: 0.6,
@@ -152,9 +153,9 @@ fn properties() {
         int_slider("bands", "Bands (1 = light and shade)", 1, 6, 1),
         slider("threshold", "Light / shade split", 0.0, 1.0, 0.01),
         slider("softness", "Edge softness", 0.0, 0.5, 0.01),
-        slider("shadow_amount", "Shadow darkness", 0.0, 1.0, 0.01),
-        slider("shadow_saturation", "Shadow richness", 0.0, 1.5, 0.01),
-        color("shadow_tint", "Shadow tint"),
+        slider("shadow_amount", "Shadow darkness (the colour under it, darker)", 0.0, 1.0, 0.01),
+        slider("shadow_saturation", "Extra: shadow richness (0 = same colour)", 0.0, 1.5, 0.01),
+        color("shadow_tint", "Extra: shadow tint (white = none)"),
         slider("light_x", "Light from (left / right)", -1.5, 1.5, 0.05),
         slider("light_y", "Light from (below / above)", -1.5, 1.5, 0.05),
         slider("saturation", "Saturation", 0.0, 2.0, 0.01),
