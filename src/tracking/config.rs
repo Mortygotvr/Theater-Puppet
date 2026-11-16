@@ -74,7 +74,8 @@ pub struct Config {
     pub mediapipe: bool,
     /// MediaPipe's camera: its device id, as OBS's Video Capture Device lists it
     pub camera: String,
-    /// The Python that has mediapipe and opencv (empty: the one on the PATH)
+    /// A Python of your own that has mediapipe and opencv (only in the file;
+    /// empty: Puppet's own, which it installs by itself the first time)
     pub python: String,
     pub assign: Assign,
     /// As in a mirror: your left moves the avatar's right

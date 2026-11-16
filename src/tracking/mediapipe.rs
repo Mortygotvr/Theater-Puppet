@@ -2,7 +2,8 @@
 //! and hands (fingers).
 //!
 //! MediaPipe itself runs in a helper beside OBS (data/mediapipe/
-//! puppet_mediapipe.py, in a Python that has mediapipe and opencv), which
+//! puppet_mediapipe.py, in a Python of Puppet's own, which it installs by
+//! itself the first time: plugin_config/theater-puppet/python), which
 //! opens the camera and writes what it sees, one JSON line per frame; this
 //! starts it, stops it, and turns its lines into the avatar's space.
 //!
@@ -212,6 +213,85 @@ fn stop(child: &mut std::process::Child) {
     let _ = child.wait();
 }
 
+/// Runs `command` without a window, to its end (Err: it failed, with the
+/// end of what it said; Err(""): tracking was turned off meanwhile)
+fn run(mut command: Command, alive: &dyn Fn() -> bool) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
+    let log = crate::config_dir().join("python").join("install.log");
+    let out = std::fs::OpenOptions::new().create(true).append(true).open(&log).map_err(|e| e.to_string())?;
+    let err = out.try_clone().map_err(|e| e.to_string())?;
+    let mut child = command.stdin(Stdio::null()).stdout(out).stderr(err).spawn().map_err(|e| e.to_string())?;
+    loop {
+        if !alive() {
+            stop(&mut child);
+            return Err(String::new());
+        }
+        match child.try_wait() {
+            Ok(Some(code)) if code.success() => return Ok(()),
+            Ok(Some(_)) => {
+                let said = std::fs::read_to_string(&log).unwrap_or_default();
+                let last = said.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("it failed").trim().to_string();
+                return Err(last.chars().take(160).collect());
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(200)),
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+}
+
+/// Puppet's own Python with mediapipe and opencv, in plugin_config/
+/// theater-puppet/python: installed the first time (uv, from its makers,
+/// fetches Python and the packages; about 500 MB, a few minutes), nothing
+/// outside that folder touched.
+fn own_python(alive: &dyn Fn() -> bool) -> Result<std::path::PathBuf, String> {
+    let home = crate::config_dir().join("python");
+    let python = home.join("env").join("Scripts").join("python.exe");
+    let ready = home.join("ready");
+    if python.is_file() && ready.is_file() {
+        return Ok(python);
+    }
+    let status = |text: &str| super::set_status(Source::MediaPipe, format!("installing itself, the first time only: {text}"));
+    std::fs::create_dir_all(&home).map_err(|e| e.to_string())?;
+    crate::log("[Puppet] 📷 MediaPipe: installing its own Python (the first time only)");
+    let uv = home.join("uv.exe");
+    if !uv.is_file() {
+        status("fetching the installer");
+        let zip = home.join("uv.zip");
+        let mut fetch = Command::new("curl.exe");
+        fetch.args(["-L", "--fail", "--silent", "--show-error", "-o"]).arg(&zip).arg("https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip");
+        run(fetch, alive)?;
+        let mut unpack = Command::new("tar.exe");
+        unpack.arg("-xf").arg(&zip).arg("-C").arg(&home);
+        run(unpack, alive)?;
+        let _ = std::fs::remove_file(&zip);
+        if !uv.is_file() {
+            return Err("the installer didn't unpack".into());
+        }
+    }
+    let tool = || {
+        let mut c = Command::new(&uv);
+        // Everything it fetches stays in Puppet's folder
+        c.env("UV_PYTHON_INSTALL_DIR", home.join("pythons")).env("UV_CACHE_DIR", home.join("cache")).env("UV_NO_PROGRESS", "1").env_remove("VIRTUAL_ENV");
+        c
+    };
+    status("fetching Python");
+    let mut venv = tool();
+    venv.args(["venv", "--python", "3.12", "--managed-python", "--allow-existing"]).arg(home.join("env"));
+    run(venv, alive)?;
+    status("fetching MediaPipe (a few minutes)");
+    let mut install = tool();
+    install.args(["pip", "install", "--python"]).arg(&python).args(["mediapipe", "opencv-python"]);
+    run(install, alive)?;
+    let _ = std::fs::remove_dir_all(home.join("cache"));
+    std::fs::write(&ready, "").map_err(|e| e.to_string())?;
+    crate::log("[Puppet] 📷 MediaPipe: its Python is installed");
+    Ok(python)
+}
+
 /// Whether `pick` lets MediaPipe drive a part
 fn may(pick: Pick) -> bool {
     matches!(pick, Pick::Auto | Pick::Only(Source::MediaPipe))
@@ -267,7 +347,18 @@ pub fn restart(config: &Config) {
             crate::log("[Puppet] ⚠️ MediaPipe: its helper (data/mediapipe/puppet_mediapipe.py) is missing");
             return status("its helper is missing: reinstall Theater Puppet".into());
         };
-        let python = if config.python.trim().is_empty() { "python".to_string() } else { config.python.trim().to_string() };
+        let python = if config.python.trim().is_empty() {
+            match own_python(&alive) {
+                Ok(p) => p.to_string_lossy().into_owned(),
+                Err(why) if why.is_empty() => return,
+                Err(why) => {
+                    crate::log(&format!("[Puppet] ⚠️ MediaPipe: couldn't install itself: {why}"));
+                    return status(format!("couldn't install itself ({why}); turn it off and on to try again"));
+                }
+            }
+        } else {
+            config.python.trim().to_string()
+        };
         let a = &config.assign;
         let face = may(a.expressions) || may(a.head_turn) || may(a.head_position);
         let pose = may(a.arms) || may(a.lower_body);
@@ -295,7 +386,7 @@ pub fn restart(config: &Config) {
                 Ok(c) => c,
                 Err(e) => {
                     crate::log(&format!("[Puppet] ⚠️ MediaPipe: can't start \"{python}\": {e}"));
-                    return status(format!("can't start Python (\"{python}\"): set its path below"));
+                    return status(format!("can't start its Python (\"{python}\")"));
                 }
             };
             crate::log(&format!("[Puppet] 📷 MediaPipe: started on camera {index} (\"{name}\") with {python}"));

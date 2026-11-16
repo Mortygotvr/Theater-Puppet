@@ -93,7 +93,6 @@ fn to_data(config: &Config, data: Ptr) {
     double(c"leap_height", config.leap_height);
     boolean(c"mediapipe", config.mediapipe);
     string(c"camera", &config.camera);
-    string(c"python", &config.python);
     boolean(c"mirror", config.mirror);
     double(c"head_strength", config.head_strength);
     double(c"smoothing", config.smoothing);
@@ -124,7 +123,6 @@ fn from_data(data: Ptr) -> Config {
     c.leap_height = double(c"leap_height");
     c.mediapipe = boolean(c"mediapipe");
     c.camera = get_string(data, c"camera");
-    c.python = get_string(data, c"python").trim().trim_matches('"').to_string();
     c.mirror = boolean(c"mirror");
     c.head_strength = double(c"head_strength");
     c.smoothing = double(c"smoothing");
@@ -199,8 +197,6 @@ unsafe extern "C" fn get_properties(_: Ptr) -> Ptr {
         for (name, id) in cameras() {
             (api.obs_property_list_add_string)(list, key(&name).as_ptr(), key(&id).as_ptr());
         }
-
-        (api.obs_properties_add_text)(props, c"python".as_ptr(), c"MediaPipe: python.exe with mediapipe and opencv installed (empty: the one on the PATH)".as_ptr(), 0);
 
         info(c"i_assign", "What tracks what: for each part of the avatar, the input that drives it. Auto takes whichever of its inputs sent last.");
         for part in Part::ALL {
