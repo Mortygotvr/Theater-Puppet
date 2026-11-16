@@ -5,7 +5,8 @@
 //! The chains are Theater Rig's: bones named spring_<kind>_<n>_<i>, the
 //! settings on each chain's root (_0) as extras: spring_stiffness,
 //! spring_gravity, spring_drag, spring_radius. Colliders aren't in the file:
-//! capsules along the Mixamo bones (head, neck, spine, arms, legs), each as
+//! capsules along the Mixamo bones (head, neck, spine, shoulders, arms, hands,
+//! legs), each as
 //! thick as the mesh those bones move.
 
 use glam::{Quat, Vec3};
@@ -123,6 +124,10 @@ const COLLIDER_BONES: &[(&str, &[&str])] = &[
     ("Spine1", &["Spine2"]),
     ("Spine2", &["Neck"]),
     ("Hips", &["Spine"]),
+    ("LeftShoulder", &["LeftArm"]),
+    ("RightShoulder", &["RightArm"]),
+    ("LeftHand", &["LeftHandMiddle1"]),
+    ("RightHand", &["RightHandMiddle1"]),
     ("LeftArm", &["LeftForeArm"]),
     ("LeftForeArm", &["LeftHand"]),
     ("RightArm", &["RightForeArm"]),
