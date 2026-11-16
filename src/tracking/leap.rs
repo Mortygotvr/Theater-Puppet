@@ -140,7 +140,12 @@ fn turned(v: LeapVector, on_head: bool) -> Vec3 {
 /// Where the device is and how it's turned, for a user `height` tall
 /// standing at the avatar's place: on a desk in front of the chest, or on
 /// the headset (`head`: the headset as SteamVR tracks it, when it does)
-fn device(height: f32, on_head: bool, head: Option<Target>) -> (Vec3, glam::Quat) {
+fn device(height: f32, on_head: bool, head: Option<Target>, raised: f32) -> (Vec3, glam::Quat) {
+    let (at, facing) = device_at(height, on_head, head);
+    (at + Vec3::Y * raised, facing)
+}
+
+fn device_at(height: f32, on_head: bool, head: Option<Target>) -> (Vec3, glam::Quat) {
     if on_head {
         match head {
             Some(h) => (h.position + h.rotation * Vec3::new(0.0, 0.0, 0.08), h.rotation),
@@ -175,7 +180,7 @@ pub fn restart(config: &Config) {
     if !config.leap {
         return;
     }
-    let (on_head, height) = (config.leap_on_head, config.user_height.clamp(0.5, 2.5));
+    let (on_head, height, raised) = (config.leap_on_head, config.user_height.clamp(0.5, 2.5), config.leap_height.clamp(-1.0, 1.0));
     let _ = std::thread::Builder::new().name("theater-puppet-leap".into()).spawn(move || {
         let alive = || GENERATION.load(Ordering::SeqCst) == generation;
         let Some((lib, path)) = Library::first(&candidates()) else {
@@ -220,7 +225,7 @@ pub fn restart(config: &Config) {
             let frame = unsafe { std::ptr::read_unaligned(event as *const LeapTrackingEvent) };
             let (count, first) = (frame.hands as usize, frame.hand);
             let head = if on_head { super::head_from(Source::SteamVr) } else { None };
-            let (origin, facing) = device(height, on_head, head);
+            let (origin, facing) = device(height, on_head, head, raised);
             let (mut body, mut hands) = (Body::default(), Hands::default());
             for i in 0..count.min(4) {
                 if first.is_null() {
@@ -291,7 +296,7 @@ mod tests {
 
     #[test]
     fn a_desk_hand_lands_in_front_of_the_avatar() {
-        let (origin, facing) = device(1.7, false, None);
+        let (origin, facing) = device(1.7, false, None, 0.0);
         let (left, target, fingers) = hand(&flat_left(), false, origin, facing);
         assert!(left);
         // Your left is the avatar's left (+X); in front of it (+Z), below the shoulders
@@ -310,7 +315,7 @@ mod tests {
         // Seen from a headset: 30 cm ahead (device Y), 10 cm below (device Z)
         let mut h = flat_left();
         h.arm.next_joint = v(100.0, 300.0, 100.0);
-        let (origin, facing) = device(1.7, true, None);
+        let (origin, facing) = device(1.7, true, None, 0.0);
         let (_, target, _) = hand(&h, true, origin, facing);
         assert!(target.position.x > 0.05 && target.position.z > 0.3 && target.position.y < 1.7 * 0.93 - 0.05, "{:?}", target.position);
     }

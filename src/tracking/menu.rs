@@ -90,6 +90,7 @@ fn to_data(config: &Config, data: Ptr) {
     boolean(c"steamvr", config.steamvr);
     boolean(c"leap", config.leap);
     boolean(c"leap_on_head", config.leap_on_head);
+    double(c"leap_height", config.leap_height);
     boolean(c"mediapipe", config.mediapipe);
     string(c"camera", &config.camera);
     string(c"python", &config.python);
@@ -120,6 +121,7 @@ fn from_data(data: Ptr) -> Config {
     c.steamvr = boolean(c"steamvr");
     c.leap = boolean(c"leap");
     c.leap_on_head = boolean(c"leap_on_head");
+    c.leap_height = double(c"leap_height");
     c.mediapipe = boolean(c"mediapipe");
     c.camera = get_string(data, c"camera");
     c.python = get_string(data, c"python").trim().trim_matches('"').to_string();
@@ -188,6 +190,7 @@ unsafe extern "C" fn get_properties(_: Ptr) -> Ptr {
         (api.obs_properties_add_bool)(props, c"steamvr".as_ptr(), key(&format!("SteamVR (headset, controllers, trackers): {}", status(Source::SteamVr))).as_ptr());
         (api.obs_properties_add_bool)(props, c"leap".as_ptr(), key(&format!("Leap Motion (hands): {}", status(Source::Leap))).as_ptr());
         (api.obs_properties_add_bool)(props, c"leap_on_head".as_ptr(), c"The Leap is on the headset, not on the desk".as_ptr());
+        (api.obs_properties_add_float_slider)(props, c"leap_height".as_ptr(), c"Leap: hands higher (+) or lower (-), metres".as_ptr(), -0.6, 0.6, 0.01);
         (api.obs_properties_add_bool)(props, c"mediapipe".as_ptr(), key(&format!("MediaPipe (webcam: body and face): {}", status(Source::MediaPipe))).as_ptr());
 
         // MediaPipe tracks from a camera: any on the PC (its helper opens it)

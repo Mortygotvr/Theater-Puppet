@@ -69,6 +69,8 @@ pub struct Config {
     pub leap: bool,
     /// The Leap is on the headset (looking where you look), not on the desk
     pub leap_on_head: bool,
+    /// The Leap's hands raised (+) or lowered (-) on the avatar, metres
+    pub leap_height: f32,
     pub mediapipe: bool,
     /// MediaPipe's camera: its device id, as OBS's Video Capture Device lists it
     pub camera: String,
@@ -93,6 +95,7 @@ impl Default for Config {
             steamvr: false,
             leap: false,
             leap_on_head: false,
+            leap_height: 0.0,
             mediapipe: false,
             camera: String::new(),
             python: String::new(),
