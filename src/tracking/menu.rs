@@ -91,6 +91,7 @@ fn to_data(config: &Config, data: Ptr) {
     boolean(c"leap", config.leap);
     boolean(c"leap_on_head", config.leap_on_head);
     boolean(c"mediapipe", config.mediapipe);
+    string(c"camera", &config.camera);
     boolean(c"mirror", config.mirror);
     double(c"head_strength", config.head_strength);
     double(c"smoothing", config.smoothing);
@@ -119,6 +120,7 @@ fn from_data(data: Ptr) -> Config {
     c.leap = boolean(c"leap");
     c.leap_on_head = boolean(c"leap_on_head");
     c.mediapipe = boolean(c"mediapipe");
+    c.camera = get_string(data, c"camera");
     c.mirror = boolean(c"mirror");
     c.head_strength = double(c"head_strength");
     c.smoothing = double(c"smoothing");
@@ -186,6 +188,14 @@ unsafe extern "C" fn get_properties(_: Ptr) -> Ptr {
         (api.obs_properties_add_bool)(props, c"leap_on_head".as_ptr(), c"The Leap is on the headset, not on the desk".as_ptr());
         (api.obs_properties_add_bool)(props, c"mediapipe".as_ptr(), key(&format!("MediaPipe (webcam: body and face): {}", status(Source::MediaPipe))).as_ptr());
 
+        // MediaPipe tracks from a camera: one of OBS's own webcam sources
+        // (read there, not opened a second time)
+        let cameras = (api.obs_properties_add_list)(props, c"camera".as_ptr(), c"MediaPipe: camera (a Video Capture Device source in OBS)".as_ptr(), obs::OBS_COMBO_TYPE_LIST, obs::OBS_COMBO_FORMAT_STRING);
+        (api.obs_property_list_add_string)(cameras, c"(none)".as_ptr(), c"".as_ptr());
+        for name in camera_sources() {
+            (api.obs_property_list_add_string)(cameras, key(&name).as_ptr(), key(&name).as_ptr());
+        }
+
         info(c"i_assign", "What tracks what: for each part of the avatar, the input that drives it. Auto takes whichever of its inputs sent last.");
         for part in Part::ALL {
             let list = (api.obs_properties_add_list)(props, part_key(part).as_ptr(), key(part.name()).as_ptr(), obs::OBS_COMBO_TYPE_LIST, obs::OBS_COMBO_FORMAT_STRING);
@@ -204,6 +214,31 @@ unsafe extern "C" fn get_properties(_: Ptr) -> Ptr {
         info(c"i_avatar", "Each Theater Puppet source follows this while its \"Follow tracking\" is on.");
         props
     }
+}
+
+/// OBS's webcam sources (Video Capture Devices), by name
+fn camera_sources() -> Vec<String> {
+    type EnumCb = unsafe extern "C" fn(*mut c_void, Ptr) -> bool;
+    type EnumSources = unsafe extern "C" fn(EnumCb, *mut c_void);
+    type GetId = unsafe extern "C" fn(Ptr) -> *const c_char;
+    unsafe extern "C" fn each(param: *mut c_void, source: Ptr) -> bool {
+        let names = unsafe { &mut *(param as *mut Vec<String>) };
+        let Some(get_id) = function::<GetId>("obs.dll", c"obs_source_get_id") else { return false };
+        let id = unsafe { get_id(source) };
+        if !id.is_null() && unsafe { CStr::from_ptr(id) }.to_bytes().starts_with(b"dshow_input") {
+            let name = unsafe { (obs::api().obs_source_get_name)(source) };
+            if !name.is_null() {
+                names.push(unsafe { CStr::from_ptr(name) }.to_string_lossy().into_owned());
+            }
+        }
+        true
+    }
+    let mut names: Vec<String> = Vec::new();
+    if let Some(enum_sources) = function::<EnumSources>("obs.dll", c"obs_enum_sources") {
+        unsafe { enum_sources(each, &mut names as *mut _ as *mut c_void) };
+    }
+    names.sort();
+    names
 }
 
 /// The dialog's source type. Call from obs_module_load.
