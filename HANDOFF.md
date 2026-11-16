@@ -114,6 +114,11 @@ MediaPipe notes:
 - Several GLBs in one picture under one filter chain.
 - Colour slot pickers (`Color<N>` materials already carry the slot).
 - Puppet reacting to hits (Scene already emits `theater_scene_impact`).
+- "vrtounity": the owner's own tracking, wanted as another input for
+  themselves. Never specified here: ask what it sends and how before
+  building it. A new input is one file in `src/tracking/` that calls
+  `set_face` / `set_body` / `set_hands`, plus an entry in `Source` and in
+  each `Part::inputs()` it can drive.
 - Moving MediaPipe's detection into Rust, which would also drop OpenCV and
   take frames from OBS's own camera source. Days of work.
 
