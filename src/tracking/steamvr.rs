@@ -1,5 +1,340 @@
-//! SteamVR: the headset, controllers and trackers (filled in below).
+//! SteamVR: the headset, the controllers and the trackers, through
+//! SteamVR's own library (openvr_api.dll, in SteamVR's folder), as a
+//! background program: it follows SteamVR when it runs, and never starts it.
+//!
+//! SteamVR's room: metres, Y up, the floor at 0, facing wherever you were
+//! told to. Where you stand and face when tracking starts becomes the
+//! avatar's place and its forward (turn SteamVR off and on in the Tracking
+//! window to set it again).
 
-use super::config::Config;
+use std::ffi::{CStr, c_char, c_void};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
-pub fn restart(_config: &Config) {}
+use glam::{Mat3, Quat, Vec3};
+
+use super::dll::Library;
+use super::{Body, Source, Target, config::Config};
+
+/// vr::TrackedDevicePose_t
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct DevicePose {
+    /// Device to room: 3 rows of 4
+    matrix: [[f32; 4]; 3],
+    velocity: [f32; 3],
+    angular_velocity: [f32; 3],
+    result: i32,
+    valid: bool,
+    connected: bool,
+}
+
+const MAX_DEVICES: usize = 64;
+const APPLICATION_BACKGROUND: i32 = 3;
+const ORIGIN_STANDING: i32 = 1;
+const CLASS_TRACKER: i32 = 3;
+const ROLE_LEFT_HAND: i32 = 1;
+const ROLE_RIGHT_HAND: i32 = 2;
+const PROP_CONTROLLER_TYPE: i32 = 7000;
+const EVENT_QUIT: u32 = 700;
+const NO_DEVICE: u32 = 0xFFFF_FFFF;
+
+// IVRSystem_023's function table: the places of the ones used
+const GET_POSES: usize = 11;
+const INDEX_FOR_ROLE: usize = 17;
+const DEVICE_CLASS: usize = 19;
+const STRING_PROPERTY: usize = 27;
+const POLL_EVENT: usize = 29;
+const ACKNOWLEDGE_QUIT: usize = 44;
+const TABLE_LENGTH: usize = 47;
+
+type Init = unsafe extern "system" fn(*mut i32, i32) -> u32;
+type Shutdown = unsafe extern "system" fn();
+type Interface = unsafe extern "system" fn(*const c_char, *mut i32) -> *const c_void;
+type GetPoses = unsafe extern "system" fn(i32, f32, *mut DevicePose, u32);
+type IndexForRole = unsafe extern "system" fn(i32) -> u32;
+type DeviceClass = unsafe extern "system" fn(u32) -> i32;
+type StringProperty = unsafe extern "system" fn(u32, i32, *mut c_char, u32, *mut i32) -> u32;
+type PollEvent = unsafe extern "system" fn(*mut [u8; 64], u32) -> bool;
+type AcknowledgeQuit = unsafe extern "system" fn();
+
+/// Where SteamVR keeps its library: the runtime named in openvrpaths.vrpath
+fn candidates() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Some(bin) = crate::data_dir().and_then(|d| Some(d.parent()?.join("bin").join("64bit"))) {
+        out.push(bin.join("openvr_api.dll"));
+    }
+    let paths = std::env::var("LOCALAPPDATA").map(|l| PathBuf::from(l).join("openvr").join("openvrpaths.vrpath"));
+    let json = paths.ok().and_then(|p| std::fs::read_to_string(p).ok()).and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+    for runtime in json.as_ref().and_then(|j| j.get("runtime")).and_then(|r| r.as_array()).into_iter().flatten() {
+        if let Some(dir) = runtime.as_str() {
+            out.push(PathBuf::from(dir).join("bin").join("win64").join("openvr_api.dll"));
+        }
+    }
+    out
+}
+
+fn rotation(m: &[[f32; 4]; 3]) -> Quat {
+    Quat::from_mat3(&Mat3::from_cols(Vec3::new(m[0][0], m[1][0], m[2][0]), Vec3::new(m[0][1], m[1][1], m[2][1]), Vec3::new(m[0][2], m[1][2], m[2][2]))).normalize()
+}
+
+fn position(m: &[[f32; 4]; 3]) -> Vec3 {
+    Vec3::new(m[0][3], m[1][3], m[2][3])
+}
+
+/// From SteamVR's room to the avatar's space: where the user stood and
+/// faced when tracking started is the avatar's place, facing +Z
+#[derive(Clone, Copy, Debug)]
+struct Room {
+    turn: Quat,
+    /// Where the user stood (the floor under the headset), in the room
+    origin: Vec3,
+}
+
+impl Room {
+    /// From the headset's pose: it looks along its own -Z
+    fn from_headset(m: &[[f32; 4]; 3]) -> Room {
+        let forward = rotation(m) * Vec3::NEG_Z;
+        // Turned about Y so that forward becomes +Z
+        let turn = Quat::from_rotation_y(-forward.x.atan2(forward.z));
+        let p = position(m);
+        Room { turn, origin: Vec3::new(p.x, 0.0, p.z) }
+    }
+
+    fn place(&self, p: Vec3) -> Vec3 {
+        self.turn * (p - self.origin)
+    }
+
+    /// The head: its turn is from looking straight ahead (a headset looks
+    /// along -Z, the avatar along +Z: half a turn between them)
+    fn head(&self, m: &[[f32; 4]; 3]) -> Target {
+        Target { position: self.place(position(m)), rotation: (self.turn * rotation(m) * Quat::from_rotation_y(std::f32::consts::PI)).normalize() }
+    }
+
+    /// A hand holding a controller: fingers along it (its -Z), the palm
+    /// against its side (facing inward), the wrist a little behind
+    fn hand(&self, m: &[[f32; 4]; 3], left: bool) -> Target {
+        let r = self.turn * rotation(m);
+        let palm = if left { Vec3::X } else { Vec3::NEG_X };
+        Target { position: self.place(position(m)) + r * Vec3::new(0.0, 0.0, 0.07), rotation: crate::ik::hand_turn(left, r * Vec3::NEG_Z, r * palm) }
+    }
+}
+
+/// A tracker strapped on: its turn is from how it was when tracking started
+#[derive(Clone, Copy)]
+struct Strapped {
+    device: u32,
+    at_start: Quat,
+}
+
+impl Strapped {
+    fn target(&self, room: &Room, m: &[[f32; 4]; 3]) -> Target {
+        Target { position: room.place(position(m)), rotation: (room.turn * rotation(m) * self.at_start.inverse() * room.turn.inverse()).normalize() }
+    }
+}
+
+static GENERATION: AtomicU64 = AtomicU64::new(0);
+
+pub fn restart(config: &Config) {
+    let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    if !config.steamvr {
+        return;
+    }
+    let _ = std::thread::Builder::new().name("theater-puppet-steamvr".into()).spawn(move || {
+        let alive = || GENERATION.load(Ordering::SeqCst) == generation;
+        let wait = |seconds: u64| {
+            for _ in 0..seconds * 4 {
+                if !alive() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(250));
+            }
+        };
+        let Some((lib, path)) = Library::first(&candidates()) else {
+            super::set_status(Source::SteamVr, "SteamVR isn't installed (no openvr_api.dll)");
+            return crate::log("[Puppet] ⚠️ SteamVR: no openvr_api.dll found: SteamVR isn't installed where openvrpaths.vrpath says");
+        };
+        let (Some(init), Some(shutdown), Some(interface)) =
+            (lib.function::<Init>(c"VR_InitInternal"), lib.function::<Shutdown>(c"VR_ShutdownInternal"), lib.function::<Interface>(c"VR_GetGenericInterface"))
+        else {
+            super::set_status(Source::SteamVr, "SteamVR's library isn't one Puppet knows");
+            return crate::log(&format!("[Puppet] ⚠️ SteamVR: {} hasn't OpenVR's functions", path.display()));
+        };
+        crate::log(&format!("[Puppet] 🥽 SteamVR: using {}", path.display()));
+        let mut told = false;
+        while alive() {
+            // Follows SteamVR once it runs (a background program doesn't start it)
+            let mut error = 0;
+            unsafe { init(&mut error, APPLICATION_BACKGROUND) };
+            if error != 0 {
+                super::set_status(Source::SteamVr, "SteamVR isn't running");
+                if !told {
+                    told = true;
+                    crate::log(&format!("[Puppet] 🥽 SteamVR: not running (error {error}); waiting for it"));
+                }
+                wait(3);
+                continue;
+            }
+            let table = unsafe { interface(c"FnTable:IVRSystem_023".as_ptr(), &mut error) } as *const [*const c_void; TABLE_LENGTH];
+            if table.is_null() || error != 0 {
+                unsafe { shutdown() };
+                super::set_status(Source::SteamVr, "this SteamVR is too old for Puppet: update it");
+                return crate::log(&format!("[Puppet] ⚠️ SteamVR: no IVRSystem_023 (error {error})"));
+            }
+            let f = unsafe { &*table };
+            let (get_poses, index_for_role, device_class, string_property, poll_event, acknowledge_quit): (GetPoses, IndexForRole, DeviceClass, StringProperty, PollEvent, AcknowledgeQuit) = unsafe {
+                (
+                    std::mem::transmute(f[GET_POSES]),
+                    std::mem::transmute(f[INDEX_FOR_ROLE]),
+                    std::mem::transmute(f[DEVICE_CLASS]),
+                    std::mem::transmute(f[STRING_PROPERTY]),
+                    std::mem::transmute(f[POLL_EVENT]),
+                    std::mem::transmute(f[ACKNOWLEDGE_QUIT]),
+                )
+            };
+            crate::log("[Puppet] 🥽 SteamVR: connected");
+            super::set_status(Source::SteamVr, "connected, waiting for the headset");
+            told = false;
+            let mut room: Option<Room> = None;
+            // The trackers by what they're strapped to: hips, left foot, right foot
+            let mut strapped: [Option<Strapped>; 3] = [None; 3];
+            let mut looked = std::time::Instant::now() - Duration::from_secs(10);
+            let mut poses = [DevicePose { matrix: [[0.0; 4]; 3], velocity: [0.0; 3], angular_velocity: [0.0; 3], result: 0, valid: false, connected: false }; MAX_DEVICES];
+            'tracking: while alive() {
+                // SteamVR closing: let go of it, and wait for the next one
+                let mut event = [0u8; 64];
+                while unsafe { poll_event(&mut event, 64) } {
+                    if u32::from_le_bytes([event[0], event[1], event[2], event[3]]) == EVENT_QUIT {
+                        unsafe { acknowledge_quit() };
+                        crate::log("[Puppet] 🥽 SteamVR: closed");
+                        break 'tracking;
+                    }
+                }
+                unsafe { get_poses(ORIGIN_STANDING, 0.0, poses.as_mut_ptr(), MAX_DEVICES as u32) };
+                let pose = |device: u32| poses.get(device as usize).filter(|p| p.valid && p.connected).map(|p| p.matrix);
+                // Device 0 is the headset
+                let Some(headset) = pose(0) else {
+                    super::set_status(Source::SteamVr, "connected, the headset isn't tracked");
+                    std::thread::sleep(Duration::from_millis(50));
+                    continue;
+                };
+                let room = *room.get_or_insert_with(|| Room::from_headset(&headset));
+                // Which tracker is where: looked up now and then (they come and go)
+                if looked.elapsed() > Duration::from_secs(2) {
+                    looked = std::time::Instant::now();
+                    for device in 1..MAX_DEVICES as u32 {
+                        if unsafe { device_class(device) } != CLASS_TRACKER {
+                            continue;
+                        }
+                        let mut name = [0 as c_char; 128];
+                        let mut error = 0;
+                        unsafe { string_property(device, PROP_CONTROLLER_TYPE, name.as_mut_ptr(), name.len() as u32, &mut error) };
+                        let name = unsafe { CStr::from_ptr(name.as_ptr()) }.to_string_lossy().to_lowercase();
+                        let slot = if name.contains("waist") || name.contains("hip") {
+                            0
+                        } else if name.contains("left_foot") {
+                            1
+                        } else if name.contains("right_foot") {
+                            2
+                        } else {
+                            continue;
+                        };
+                        if strapped[slot].is_none_or(|s| s.device != device) {
+                            if let Some(m) = pose(device) {
+                                strapped[slot] = Some(Strapped { device, at_start: rotation(&m) });
+                                crate::log(&format!("[Puppet] 🥽 SteamVR: tracker {device} is the {}", ["hips", "left foot", "right foot"][slot]));
+                            }
+                        }
+                    }
+                }
+                let hand = |role: i32, left: bool| {
+                    let device = unsafe { index_for_role(role) };
+                    if device == NO_DEVICE { None } else { pose(device).map(|m| room.hand(&m, left)) }
+                };
+                let tracker = |slot: usize| strapped[slot].and_then(|s| pose(s.device).map(|m| s.target(&room, &m)));
+                let body = Body {
+                    head: Some(room.head(&headset)),
+                    left_hand: hand(ROLE_LEFT_HAND, true),
+                    right_hand: hand(ROLE_RIGHT_HAND, false),
+                    hips: tracker(0),
+                    left_foot: tracker(1),
+                    right_foot: tracker(2),
+                    left_elbow: None,
+                    right_elbow: None,
+                };
+                let hands = body.left_hand.is_some() as u32 + body.right_hand.is_some() as u32;
+                let trackers = strapped.iter().flatten().count();
+                super::set_status(Source::SteamVr, format!("receiving the headset, {hands} controller(s), {trackers} tracker(s)"));
+                super::set_body(Source::SteamVr, body);
+                // As often as a headset shows a picture
+                std::thread::sleep(Duration::from_millis(11));
+            }
+            unsafe { shutdown() };
+            wait(3);
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A device at `p`, turned `yaw` degrees about Y from looking along -Z
+    fn device(p: Vec3, yaw: f32) -> [[f32; 4]; 3] {
+        let m = Mat3::from_quat(Quat::from_rotation_y(yaw.to_radians()));
+        let c = m.to_cols_array_2d();
+        [[c[0][0], c[1][0], c[2][0], p.x], [c[0][1], c[1][1], c[2][1], p.y], [c[0][2], c[1][2], c[2][2], p.z]]
+    }
+
+    #[test]
+    fn the_structure_is_openvrs_size() {
+        assert_eq!(std::mem::size_of::<DevicePose>(), 80);
+    }
+
+    #[test]
+    fn where_you_stand_is_the_avatars_place() {
+        // Standing at (2, 0, 1) in the room, the eyes at 1.6 m, facing 50 degrees off
+        let start = device(Vec3::new(2.0, 1.6, 1.0), 50.0);
+        let room = Room::from_headset(&start);
+        let head = room.head(&start);
+        assert!((head.position - Vec3::new(0.0, 1.6, 0.0)).length() < 1e-4, "{:?}", head.position);
+        assert!(head.rotation.angle_between(Quat::IDENTITY) < 1e-3);
+
+        // A step forward (the way the headset looks) is +Z for the avatar
+        let forward = Quat::from_rotation_y(50f32.to_radians()) * Vec3::NEG_Z;
+        let ahead = room.head(&device(Vec3::new(2.0, 1.6, 1.0) + forward * 0.5, 50.0));
+        assert!((ahead.position - Vec3::new(0.0, 1.6, 0.5)).length() < 1e-4, "{:?}", ahead.position);
+
+        // Looking 30 degrees to your left turns the avatar's head to its left (+X)
+        let looking = room.head(&device(Vec3::new(2.0, 1.6, 1.0), 80.0));
+        let nose = looking.rotation * Vec3::Z;
+        assert!(nose.x > 0.45 && nose.z > 0.8, "{nose:?}");
+    }
+
+    #[test]
+    fn a_controller_is_a_hand() {
+        let start = device(Vec3::new(0.0, 1.6, 0.0), 0.0);
+        let room = Room::from_headset(&start);
+        // The left controller: to your left (-X in a room you face along -Z), pointing ahead
+        let hand = room.hand(&device(Vec3::new(-0.3, 1.2, -0.4), 0.0), true);
+        assert!(hand.position.x > 0.25 && hand.position.z > 0.3 && hand.position.z < 0.4, "{:?}", hand.position);
+        let (fingers, palm) = (hand.rotation * Vec3::X, hand.rotation * Vec3::NEG_Y);
+        // Fingers ahead, the palm facing the avatar's right (inward)
+        assert!(fingers.z > 0.99 && palm.x < -0.99, "{fingers:?} {palm:?}");
+    }
+
+    #[test]
+    fn a_tracker_turns_from_how_it_started() {
+        let start = device(Vec3::new(0.0, 1.6, 0.0), 0.0);
+        let room = Room::from_headset(&start);
+        // Strapped on any way round
+        let strapped = Strapped { device: 3, at_start: rotation(&device(Vec3::ZERO, 137.0)) };
+        let still = strapped.target(&room, &device(Vec3::new(0.0, 1.0, 0.0), 137.0));
+        assert!(still.rotation.angle_between(Quat::IDENTITY) < 1e-3);
+        // The hips turned 20 degrees to the left
+        let turned = strapped.target(&room, &device(Vec3::new(0.0, 1.0, 0.0), 157.0));
+        let front = turned.rotation * Vec3::Z;
+        assert!(front.x > 0.3 && front.z > 0.9, "{front:?}");
+    }
+}

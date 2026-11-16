@@ -72,6 +72,8 @@ pub struct Config {
     pub mediapipe: bool,
     /// MediaPipe's camera: its device id, as OBS's Video Capture Device lists it
     pub camera: String,
+    /// The Python that has mediapipe and opencv (empty: the one on the PATH)
+    pub python: String,
     pub assign: Assign,
     /// As in a mirror: your left moves the avatar's right
     pub mirror: bool,
@@ -93,6 +95,7 @@ impl Default for Config {
             leap_on_head: false,
             mediapipe: false,
             camera: String::new(),
+            python: String::new(),
             assign: Assign::default(),
             mirror: false,
             head_strength: 1.0,

@@ -92,6 +92,7 @@ fn to_data(config: &Config, data: Ptr) {
     boolean(c"leap_on_head", config.leap_on_head);
     boolean(c"mediapipe", config.mediapipe);
     string(c"camera", &config.camera);
+    string(c"python", &config.python);
     boolean(c"mirror", config.mirror);
     double(c"head_strength", config.head_strength);
     double(c"smoothing", config.smoothing);
@@ -121,6 +122,7 @@ fn from_data(data: Ptr) -> Config {
     c.leap_on_head = boolean(c"leap_on_head");
     c.mediapipe = boolean(c"mediapipe");
     c.camera = get_string(data, c"camera");
+    c.python = get_string(data, c"python").trim().trim_matches('"').to_string();
     c.mirror = boolean(c"mirror");
     c.head_strength = double(c"head_strength");
     c.smoothing = double(c"smoothing");
@@ -188,12 +190,14 @@ unsafe extern "C" fn get_properties(_: Ptr) -> Ptr {
         (api.obs_properties_add_bool)(props, c"leap_on_head".as_ptr(), c"The Leap is on the headset, not on the desk".as_ptr());
         (api.obs_properties_add_bool)(props, c"mediapipe".as_ptr(), key(&format!("MediaPipe (webcam: body and face): {}", status(Source::MediaPipe))).as_ptr());
 
-        // MediaPipe tracks from a camera: any on the PC (opened through OBS)
+        // MediaPipe tracks from a camera: any on the PC (its helper opens it)
         let list = (api.obs_properties_add_list)(props, c"camera".as_ptr(), c"MediaPipe: camera".as_ptr(), obs::OBS_COMBO_TYPE_LIST, obs::OBS_COMBO_FORMAT_STRING);
         (api.obs_property_list_add_string)(list, c"(none)".as_ptr(), c"".as_ptr());
         for (name, id) in cameras() {
             (api.obs_property_list_add_string)(list, key(&name).as_ptr(), key(&id).as_ptr());
         }
+
+        (api.obs_properties_add_text)(props, c"python".as_ptr(), c"MediaPipe: python.exe with mediapipe and opencv installed (empty: the one on the PATH)".as_ptr(), 0);
 
         info(c"i_assign", "What tracks what: for each part of the avatar, the input that drives it. Auto takes whichever of its inputs sent last.");
         for part in Part::ALL {
@@ -217,7 +221,7 @@ unsafe extern "C" fn get_properties(_: Ptr) -> Ptr {
 
 /// Every camera on the PC, as OBS's own Video Capture Device source lists
 /// them: (name, device id)
-fn cameras() -> Vec<(String, String)> {
+pub(super) fn cameras() -> Vec<(String, String)> {
     type GetProps = unsafe extern "C" fn(*const c_char) -> Ptr;
     type Count = unsafe extern "C" fn(Ptr) -> usize;
     type Item = unsafe extern "C" fn(Ptr, usize) -> *const c_char;

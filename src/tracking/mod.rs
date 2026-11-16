@@ -14,8 +14,11 @@
 //! from the Leap… Auto takes whichever capable input sent last.
 
 pub mod config;
+mod dll;
+mod fingers;
 pub mod ifacialmocap;
 pub mod leap;
+pub mod mediapipe;
 pub mod menu;
 pub mod steamvr;
 pub mod vts;
@@ -166,6 +169,11 @@ pub fn set_body(source: Source, body: Body) {
 
 pub fn set_hands(source: Source, hands: Hands) {
     with(|s| put(&mut s.hands, source, hands));
+}
+
+/// The head an input tracks now (the Leap on a headset goes by SteamVR's)
+pub fn head_from(source: Source) -> Option<Target> {
+    with(|s| s.body.iter().find(|b| b.source == source && b.at.elapsed() < FRESH).and_then(|b| b.value.head))
 }
 
 /// An input's line in the Tracking window ("receiving", "no device"…)
@@ -354,6 +362,7 @@ pub fn start() {
     vts::restart(&cfg);
     steamvr::restart(&cfg);
     leap::restart(&cfg);
+    mediapipe::restart(&cfg);
 }
 
 #[cfg(test)]
