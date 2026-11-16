@@ -48,6 +48,16 @@ pub struct Primitive {
     pub binding: Binding,
     /// Each vertex's node that moves it most (colliders are fitted to them)
     pub dominant: Vec<usize>,
+    /// Its shape keys (glTF morph targets), each with the vertices it moves
+    pub morphs: Vec<Morph>,
+}
+
+/// A shape key of one primitive: what it adds to the (unposed) positions at
+/// full weight, for the vertices it moves only
+pub struct Morph {
+    /// Its name's place in Model::morph_names
+    pub name: usize,
+    pub deltas: Vec<(u32, [f32; 3])>,
 }
 
 /// How a primitive follows a pose
@@ -134,9 +144,16 @@ pub struct Model {
     /// Node indices, every parent before its children
     pub order: Vec<usize>,
     pub skins: Vec<Skin>,
+    /// Every shape key's name, once (a face's ARKit keys, mostly)
+    pub morph_names: Vec<String>,
 }
 
 impl Model {
+    /// The shape key called `name` (any case), as its place in morph_names
+    pub fn morph(&self, name: &str) -> Option<usize> {
+        self.morph_names.iter().position(|n| n.eq_ignore_ascii_case(name))
+    }
+
     /// The node called `name`
     pub fn node(&self, name: &str) -> Option<usize> {
         self.nodes.iter().position(|n| n.name == name || n.name.strip_prefix("mixamorig:") == Some(name))
@@ -229,6 +246,7 @@ pub fn load(path: &Path) -> Result<Model, String> {
     materials.push(Material { name: "default".into(), color: [1.0; 4], shade: [0.7; 3], image: None, alpha: Alpha::Opaque, color_slot: None });
 
     let parts_of = node_parts(&doc);
+    let mut morph_names: Vec<String> = Vec::new();
     let mut primitives = Vec::new();
     let (mut min, mut max) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
     for node in doc.nodes() {
@@ -247,6 +265,12 @@ pub fn load(path: &Path) -> Result<Model, String> {
                 .map(|(i, j)| world[j.index()] * inverse.get(i).copied().unwrap_or(Mat4::IDENTITY))
                 .collect()
         });
+        let target_names: Vec<String> = mesh
+            .extras()
+            .as_ref()
+            .and_then(|e| serde_json::from_str::<serde_json::Value>(e.get()).ok())
+            .and_then(|v| Some(v.get("targetNames")?.as_array()?.iter().map(|n| n.as_str().unwrap_or("").to_string()).collect()))
+            .unwrap_or_default();
         for prim in mesh.primitives() {
             if prim.mode() != gltf::mesh::Mode::Triangles {
                 continue;
@@ -306,6 +330,21 @@ pub fn load(path: &Path) -> Result<Model, String> {
                 out_p.push(p.to_array());
                 out_n.push(nn.to_array());
             }
+            // Its shape keys, named by the mesh's extras.targetNames (Blender's exporter)
+            let morphs: Vec<Morph> = reader
+                .read_morph_targets()
+                .enumerate()
+                .filter_map(|(t, (deltas, _, _))| {
+                    let name = target_names.get(t).cloned().unwrap_or_else(|| format!("target_{t}"));
+                    let deltas: Vec<(u32, [f32; 3])> =
+                        deltas?.enumerate().filter(|(_, d)| d.iter().any(|x| x.abs() > 1e-7)).map(|(i, d)| (i as u32, d)).collect();
+                    let name = morph_names.iter().position(|n| *n == name).unwrap_or_else(|| {
+                        morph_names.push(name);
+                        morph_names.len() - 1
+                    });
+                    Some(Morph { name, deltas })
+                })
+                .collect();
             let binding = match (node.skin(), skin) {
                 (Some(s), Some((js, ws))) => Binding::Skin { skin: s.index(), positions, normals, joints: js, weights: ws },
                 _ => Binding::Node { node: node.index(), positions, normals },
@@ -319,6 +358,7 @@ pub fn load(path: &Path) -> Result<Model, String> {
                 material: prim.material().index().unwrap_or(default_material),
                 binding,
                 dominant,
+                morphs,
             });
         }
     }
@@ -331,7 +371,7 @@ pub fn load(path: &Path) -> Result<Model, String> {
             m.image = None;
         }
     }
-    Ok(Model { primitives, materials, images: images.into_iter().map(rgba).collect(), min, max, nodes, order, skins })
+    Ok(Model { primitives, materials, images: images.into_iter().map(rgba).collect(), min, max, nodes, order, skins, morph_names })
 }
 
 fn material(m: gltf::Material) -> Material {

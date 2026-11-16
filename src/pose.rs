@@ -77,7 +77,7 @@ impl Pose {
 
 /// Every primitive's vertices skinned to `pose` (its world matrices must be
 /// current), as the GPU takes them: [x, y, z, 0]
-pub fn skin(model: &Model, pose: &Pose, points: &mut [Vec<[f32; 4]>], normals: &mut [Vec<[f32; 4]>]) {
+pub fn skin(model: &Model, pose: &Pose, morph: &[f32], points: &mut [Vec<[f32; 4]>], normals: &mut [Vec<[f32; 4]>]) {
     // Each skin's joint matrices
     let joint_matrices: Vec<Vec<Mat4>> = model
         .skins
@@ -86,6 +86,20 @@ pub fn skin(model: &Model, pose: &Pose, points: &mut [Vec<[f32; 4]>], normals: &
         .collect();
     for (k, prim) in model.primitives.iter().enumerate() {
         let (out_p, out_n) = (&mut points[k], &mut normals[k]);
+        // Its shape keys at work: what they add to its unposed positions
+        let shaped: Option<Vec<Vec3>> = prim.morphs.iter().any(|m| morph.get(m.name).is_some_and(|w| w.abs() > 1e-4)).then(|| {
+            let mut add = vec![Vec3::ZERO; prim.positions.len()];
+            for m in &prim.morphs {
+                let w = morph.get(m.name).copied().unwrap_or(0.0);
+                if w.abs() > 1e-4 {
+                    for (i, d) in &m.deltas {
+                        add[*i as usize] += Vec3::from(*d) * w;
+                    }
+                }
+            }
+            add
+        });
+        let shape = |i: usize| shaped.as_ref().map(|a| a[i]).unwrap_or(Vec3::ZERO);
         match &prim.binding {
             Binding::Skin { skin, positions, normals, joints, weights } => {
                 let jm = &joint_matrices[*skin];
@@ -99,7 +113,7 @@ pub fn skin(model: &Model, pose: &Pose, points: &mut [Vec<[f32; 4]>], normals: &
                             }
                         }
                     }
-                    let p = m.transform_point3(Vec3::from(positions[i]));
+                    let p = m.transform_point3(Vec3::from(positions[i]) + shape(i));
                     let n = m.transform_vector3(Vec3::from(normals[i])).normalize_or(Vec3::Y);
                     out_p[i] = [p.x, p.y, p.z, 0.0];
                     out_n[i] = [n.x, n.y, n.z, 0.0];
@@ -108,7 +122,7 @@ pub fn skin(model: &Model, pose: &Pose, points: &mut [Vec<[f32; 4]>], normals: &
             Binding::Node { node, positions, normals } => {
                 let m = pose.world[*node];
                 for i in 0..positions.len() {
-                    let p = m.transform_point3(Vec3::from(positions[i]));
+                    let p = m.transform_point3(Vec3::from(positions[i]) + shape(i));
                     let n = m.transform_vector3(Vec3::from(normals[i])).normalize_or(Vec3::Y);
                     out_p[i] = [p.x, p.y, p.z, 0.0];
                     out_n[i] = [n.x, n.y, n.z, 0.0];
@@ -131,7 +145,7 @@ mod tests {
         let mut points: Vec<Vec<[f32; 4]>> = model.primitives.iter().map(|p| vec![[0.0; 4]; p.positions.len()]).collect();
         let mut normals = points.clone();
         let started = std::time::Instant::now();
-        skin(&model, &pose, &mut points, &mut normals);
+        skin(&model, &pose, &[], &mut points, &mut normals);
         println!("skinned in {:?}", started.elapsed());
         let mut worst = 0f32;
         for (prim, pts) in model.primitives.iter().zip(&points) {

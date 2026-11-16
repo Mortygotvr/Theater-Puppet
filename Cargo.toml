@@ -14,6 +14,7 @@ crate-type = ["cdylib", "rlib"]
 # The avatar: glTF binary, its textures decoded (PNG, JPEG), material extras
 gltf = { version = "1.4", features = ["extras", "names", "utils", "import", "image"] }
 glam = "0.29"
+serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 # Snapshots (snapshot.rs): a frame saved as PNG
 image = { version = "0.25", default-features = false, features = ["png"] }

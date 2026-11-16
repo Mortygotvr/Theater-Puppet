@@ -32,6 +32,7 @@ const S_YAW: &CStr = c"yaw";
 const S_ARMS: &CStr = c"arms_down";
 const S_IDLE: &CStr = c"idle";
 const S_SPRINGS: &CStr = c"springs";
+const S_TRACKED: &CStr = c"tracked";
 
 /// Style slots, applied in order
 const SLOTS: usize = 4;
@@ -169,6 +170,7 @@ unsafe extern "C" fn get_defaults(settings: Ptr) {
         (api.obs_data_set_default_double)(settings, S_ARMS.as_ptr(), m.arms_down as f64);
         (api.obs_data_set_default_double)(settings, S_IDLE.as_ptr(), m.idle as f64);
         (api.obs_data_set_default_bool)(settings, S_SPRINGS.as_ptr(), m.springs);
+        (api.obs_data_set_default_bool)(settings, S_TRACKED.as_ptr(), m.tracked);
         for kind in 0..KINDS.len() {
             for what in TUNING {
                 (api.obs_data_set_default_double)(settings, tune_key(kind, what).as_ptr(), 1.0);
@@ -350,6 +352,7 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
         (api.obs_properties_add_float_slider)(props, S_ARMS.as_ptr(), c"Arms down (degrees from the T-pose)".as_ptr(), 0.0, 85.0, 1.0);
         (api.obs_properties_add_float_slider)(props, S_IDLE.as_ptr(), c"Idle motion".as_ptr(), 0.0, 1.0, 0.01);
         (api.obs_properties_add_bool)(props, S_SPRINGS.as_ptr(), c"Spring bones (hair, skirt…)".as_ptr());
+        (api.obs_properties_add_bool)(props, S_TRACKED.as_ptr(), c"Follow tracking (Theater menu > Tracking)".as_ptr());
 
         // The springs' tuning: the avatar's own kinds (all, before it's loaded)
         let kinds: Vec<usize> = if data.is_null() {
@@ -518,6 +521,7 @@ unsafe extern "C" fn update(data: Ptr, settings: Ptr) {
             yaw: 0.0,
             springs: (api.obs_data_get_bool)(settings, S_SPRINGS.as_ptr()),
             adjust: read_adjust(settings),
+            tracked: (api.obs_data_get_bool)(settings, S_TRACKED.as_ptr()),
         };
     }
     *puppet.slots.lock().unwrap() = std::array::from_fn(|slot| get_string(settings, &slot_setting(slot)));

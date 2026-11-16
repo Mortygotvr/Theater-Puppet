@@ -3,6 +3,7 @@
 //! shape keys, Color<N> slots). This first version draws it at rest.
 
 pub mod filters;
+pub mod ik;
 pub mod model;
 pub mod motion;
 pub mod obs;
@@ -13,6 +14,7 @@ pub mod snapshot;
 pub mod source;
 pub mod springs;
 pub mod styles;
+pub mod tracking;
 
 use std::path::PathBuf;
 
@@ -118,6 +120,10 @@ pub extern "C" fn obs_module_load() -> bool {
     }
     source::register();
     parts::register_procs();
+    // Tracking: its settings window's source, its inputs, its menu item
+    tracking::menu::register();
+    tracking::start();
+    tracking::menu::setup();
     log("[Puppet] 🚀 Theater Puppet loaded");
     true
 }
@@ -125,4 +131,29 @@ pub extern "C" fn obs_module_load() -> bool {
 #[unsafe(no_mangle)]
 pub extern "C" fn obs_module_unload() {
     log("[Puppet] 🛑 Theater Puppet unloaded");
+}
+
+/// Keeps the DLL loaded until OBS exits: its menu item and the tracking
+/// inputs' threads call into it, and may outlive obs_module_unload.
+#[cfg(target_os = "windows")]
+fn pin_module() {
+    unsafe extern "system" {
+        fn GetModuleHandleExW(flags: u32, module_name: *const u16, module: *mut *mut std::ffi::c_void) -> i32;
+    }
+    const PIN: u32 = 0x1;
+    const FROM_ADDRESS: u32 = 0x4;
+    let mut module: *mut std::ffi::c_void = std::ptr::null_mut();
+    unsafe {
+        GetModuleHandleExW(FROM_ADDRESS | PIN, pin_module as *const u16, &mut module);
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[unsafe(no_mangle)]
+pub extern "system" fn DllMain(_module: *mut std::ffi::c_void, reason: u32, _reserved: *mut std::ffi::c_void) -> i32 {
+    const DLL_PROCESS_ATTACH: u32 = 1;
+    if reason == DLL_PROCESS_ATTACH {
+        pin_module();
+    }
+    1
 }
