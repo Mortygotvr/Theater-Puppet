@@ -63,12 +63,22 @@ pub fn restart(config: &Config) {
         return;
     }
     let _ = std::thread::Builder::new().name("theater-puppet-meowface".into()).spawn(move || {
-        let socket = match UdpSocket::bind(("0.0.0.0", LISTEN_PORT)) {
-            Ok(s) => s,
-            Err(e) => {
-                super::set_status(Source::MeowFace, format!("can't listen on port {LISTEN_PORT}: {e}"));
-                crate::log(&format!("[Puppet] ⚠️ MeowFace: can't listen on UDP {LISTEN_PORT}: {e}"));
-                return;
+        // Another program on the port: tried again every second
+        let mut told = false;
+        let socket = loop {
+            match UdpSocket::bind(("0.0.0.0", LISTEN_PORT)) {
+                Ok(s) => break s,
+                Err(e) => {
+                    super::set_status(Source::MeowFace, format!("port {LISTEN_PORT} is in use by another program: close it"));
+                    if !told {
+                        told = true;
+                        crate::log(&format!("[Puppet] ⚠️ MeowFace: can't listen on UDP {LISTEN_PORT} ({e}): another program has it; trying again every second"));
+                    }
+                    std::thread::sleep(Duration::from_secs(1));
+                    if GENERATION.load(Ordering::SeqCst) != generation {
+                        return;
+                    }
+                }
             }
         };
         let _ = socket.set_read_timeout(Some(Duration::from_millis(250)));

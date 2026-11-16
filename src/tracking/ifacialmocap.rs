@@ -80,12 +80,23 @@ pub fn restart(config: &Config) {
     }
     let _ = std::thread::Builder::new().name("theater-puppet-ifacialmocap".into()).spawn(move || {
         let port = if phone.port == 0 { 49983 } else { phone.port };
-        let socket = match UdpSocket::bind(("0.0.0.0", port)) {
-            Ok(s) => s,
-            Err(e) => {
-                super::set_status(Source::IFacialMocap, format!("can't listen on port {port}: {e}"));
-                crate::log(&format!("[Puppet] ⚠️ iFacialMocap: can't listen on UDP {port}: {e}"));
-                return;
+        // Another program on the port (only one can listen): tried again
+        // every second, so it starts as soon as that one closes
+        let mut told = false;
+        let socket = loop {
+            match UdpSocket::bind(("0.0.0.0", port)) {
+                Ok(s) => break s,
+                Err(e) => {
+                    super::set_status(Source::IFacialMocap, format!("port {port} is in use by another program: close it"));
+                    if !told {
+                        told = true;
+                        crate::log(&format!("[Puppet] ⚠️ iFacialMocap: can't listen on UDP {port} ({e}): another program has it; trying again every second"));
+                    }
+                    std::thread::sleep(Duration::from_secs(1));
+                    if GENERATION.load(Ordering::SeqCst) != generation {
+                        return;
+                    }
+                }
             }
         };
         let _ = socket.set_read_timeout(Some(Duration::from_millis(250)));
