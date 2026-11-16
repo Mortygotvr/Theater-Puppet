@@ -79,6 +79,8 @@ impl Default for Adjust {
 #[derive(Clone, Copy, Debug)]
 pub struct Collider {
     pub from: usize,
+    /// The capsule's near end, in the bone's own space (0: at the bone)
+    pub base: Vec3,
     /// The capsule's far end, in the bone's own space
     pub tip: Vec3,
     pub radius: f32,
@@ -86,8 +88,8 @@ pub struct Collider {
 
 impl Collider {
     fn ends(&self, pose: &Pose) -> (Vec3, Vec3) {
-        let a = pose.position(self.from);
-        (a, a + pose.world_rotation(self.from) * self.tip)
+        let (at, turn) = (pose.position(self.from), pose.world_rotation(self.from));
+        (at + turn * self.base, at + turn * self.tip)
     }
 }
 
@@ -206,9 +208,24 @@ impl Springs {
             };
             let mut distances: Vec<f32> = moved.iter().map(|&v| (v - closest_on_segment(v, a, b)).length()).collect();
             distances.sort_by(f32::total_cmp);
-            let radius = distances[distances.len() / 2] * 0.85;
+            // Most of what it moves is inside: the skin, not the eyes and
+            // teeth, nor the half of a limb's ring that's nearer than the rest
+            let radius = distances[distances.len() * 3 / 4];
             let tip = pose.world_rotation(from).inverse() * (b - a);
-            colliders.push(Collider { from, tip, radius });
+            colliders.push(Collider { from, base: Vec3::ZERO, tip, radius });
+        }
+        // A body is wider than deep: the spine's capsules leave the chest's
+        // sides open, so one more goes across it, from arm to arm
+        if let (Some(chest), Some(left), Some(right)) = (model.node("Spine2").or_else(|| model.node("Spine1")), model.node("LeftArm"), model.node("RightArm")) {
+            let thick = colliders.iter().find(|c| c.from == chest).map(|c| c.radius);
+            if let Some(radius) = thick {
+                let (at, turn) = (pose.position(chest), pose.world_rotation(chest).inverse());
+                // (a little in from the arms' joints, and under them: the chest, not the shoulders' tops)
+                let (l, r) = (pose.position(left), pose.position(right));
+                let down = Vec3::NEG_Y * radius * 0.5;
+                let (l, r) = (l.lerp(r, 0.12) + down, r.lerp(l, 0.12) + down);
+                colliders.push(Collider { from: chest, base: turn * (l - at), tip: turn * (r - at), radius: radius * 0.85 });
+            }
         }
         Springs { joints, colliders, chains }
     }

@@ -33,8 +33,80 @@ pub struct Seen {
     pub fps: Option<f32>,
 }
 
+/// A number followed smoothly: steady when it's still (a camera's guesses
+/// shake), quick when it moves (the "one euro" filter)
+#[derive(Clone, Copy, Default)]
+struct Steady {
+    value: Option<f32>,
+    speed: f32,
+}
+
+/// How much of the way to a new value in `dt` seconds, for a filter that
+/// lets through what's slower than `cutoff` (a second)
+fn share(dt: f32, cutoff: f32) -> f32 {
+    let tau = 1.0 / (std::f32::consts::TAU * cutoff.max(1e-3));
+    1.0 / (1.0 + tau / dt)
+}
+
+impl Steady {
+    /// `still`: what gets through at rest (a second); `quick`: how much more per unit of speed
+    fn step(&mut self, x: f32, dt: f32, still: f32, quick: f32) -> f32 {
+        let Some(old) = self.value else {
+            self.value = Some(x);
+            return x;
+        };
+        self.speed += ((x - old) / dt - self.speed) * share(dt, 1.0);
+        let now = old + (x - old) * share(dt, still + quick * self.speed.abs());
+        self.value = Some(now);
+        now
+    }
+}
+
+/// One arm's hand and fingers, steadied
+#[derive(Clone, Copy, Default)]
+struct SteadyHand {
+    place: [Steady; 3],
+    elbow: [Steady; 3],
+    turn: Option<Quat>,
+    fingers: [Steady; 20],
+}
+
+impl SteadyHand {
+    fn point(filters: &mut [Steady; 3], p: Vec3, dt: f32) -> Vec3 {
+        // A metre: still under a hertz and a half, all let through by a quick move
+        Vec3::from(std::array::from_fn(|i| filters[i].step(p[i], dt, 1.5, 12.0)))
+    }
+
+    fn target(&mut self, t: Target, dt: f32) -> Target {
+        let position = Self::point(&mut self.place, t.position, dt);
+        let rotation = match self.turn {
+            Some(old) => {
+                let old = if old.dot(t.rotation) < 0.0 { -old } else { old };
+                old.slerp(t.rotation, share(dt, 1.5 + 2.0 * old.angle_between(t.rotation) / dt)).normalize()
+            }
+            None => t.rotation,
+        };
+        self.turn = Some(rotation);
+        Target { position, rotation }
+    }
+
+    fn hand(&mut self, mut h: Hand, dt: f32) -> Hand {
+        for f in 0..5 {
+            for j in 0..3 {
+                h.bend[f][j] = self.fingers[f * 4 + j].step(h.bend[f][j], dt, 2.0, 1.5);
+            }
+            h.spread[f] = self.fingers[f * 4 + 3].step(h.spread[f], dt, 1.5, 1.5);
+        }
+        h
+    }
+}
+
 /// From the camera's lines to the avatar's space, for a user `height` tall
 pub struct Mapper {
+    /// Left, right
+    steady: [SteadyHand; 2],
+    /// When each arm (0, 1) and each hand's fingers (2, 3) were last seen
+    last: [Option<std::time::Instant>; 4],
     height: f32,
     /// Where the face was when it was first seen (cm, the camera's space):
     /// the avatar's head at rest
@@ -60,7 +132,7 @@ fn landmark(v: &Value) -> Option<Vec3> {
 
 impl Mapper {
     pub fn new(height: f32) -> Mapper {
-        Mapper { height: height.clamp(0.5, 2.5), neutral: None, shift: Vec3::ZERO }
+        Mapper { height: height.clamp(0.5, 2.5), neutral: None, shift: Vec3::ZERO, steady: Default::default(), last: [None; 4] }
     }
 
     pub fn line(&mut self, text: &str) -> Seen {
@@ -127,6 +199,35 @@ impl Mapper {
                 if let Some(t) = &mut body.right_hand {
                     t.rotation = turn;
                 }
+            }
+        }
+        // Steadied: a camera's hands shake, and come only some 20 times a second
+        let now = std::time::Instant::now();
+        for side in 0..2 {
+            // Seconds since this was last seen (None: not lately; it starts afresh)
+            let mut since = |slot: usize| {
+                let dt = self.last[slot].map(|t| now.duration_since(t).as_secs_f32()).filter(|dt| *dt < 0.5);
+                self.last[slot] = Some(now);
+                dt.map(|dt| dt.max(1.0 / 120.0))
+            };
+            let (target, elbow) = if side == 0 { (&mut body.left_hand, &mut body.left_elbow) } else { (&mut body.right_hand, &mut body.right_elbow) };
+            if let Some(t) = target {
+                let dt = since(side).unwrap_or_else(|| {
+                    self.steady[side] = SteadyHand { fingers: self.steady[side].fingers, ..Default::default() };
+                    1.0 / 30.0
+                });
+                *t = self.steady[side].target(*t, dt);
+                if let Some(e) = elbow {
+                    *e = SteadyHand::point(&mut self.steady[side].elbow, *e, dt);
+                }
+            }
+            let hand = if side == 0 { &mut fingers.left } else { &mut fingers.right };
+            if let Some(h) = hand {
+                let dt = since(2 + side).unwrap_or_else(|| {
+                    self.steady[side].fingers = Default::default();
+                    1.0 / 30.0
+                });
+                *h = self.steady[side].hand(*h, dt);
             }
         }
         if fingers != Hands::default() {
@@ -558,6 +659,26 @@ mod tests {
         let alone = format!(r#"{{"hands":[{{"world":[{}],"wrist":[0.71,0.41],"label":"Left"}}]}}"#, rows.join(","));
         let seen = Mapper::new(1.7).line(&alone);
         assert!(seen.hands.unwrap().right.is_some() && seen.body.is_none());
+    }
+
+    #[test]
+    fn a_shaking_number_is_steadied_and_a_moving_one_followed() {
+        // Still but shaking by a centimetre, 20 times a second: most of it goes
+        let mut steady = Steady::default();
+        let mut widest = 0.0f32;
+        for i in 0..60 {
+            let out = steady.step(if i % 2 == 0 { 0.01 } else { -0.01 }, 0.05, 1.5, 12.0);
+            if i > 10 {
+                widest = widest.max(out.abs());
+            }
+        }
+        assert!(widest < 0.006, "still shakes by {widest}");
+        // A quick move of half a metre is there within a quarter second
+        let mut out = 0.0;
+        for i in 0..5 {
+            out = steady.step(0.1 * (i + 1) as f32, 0.05, 1.5, 12.0);
+        }
+        assert!(out > 0.4, "lags at {out}");
     }
 
     #[test]
