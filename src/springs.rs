@@ -7,7 +7,8 @@
 //! spring_gravity, spring_drag, spring_radius. Colliders aren't in the file:
 //! capsules along the Mixamo bones (head, neck, spine, shoulders, arms, hands,
 //! legs), each as
-//! thick as the mesh those bones move.
+//! thick as the body's own mesh there (the materials called skin; not the
+//! hair or the clothes over it).
 
 use glam::{Quat, Vec3};
 
@@ -190,13 +191,27 @@ impl Springs {
         let mut colliders = Vec::new();
         for (bone, ends) in COLLIDER_BONES {
             let Some(from) = model.node(bone) else { continue };
-            let moved: Vec<Vec3> = model
-                .primitives
-                .iter()
-                .flat_map(|p| p.positions.iter().zip(&p.dominant))
-                .filter(|(_, d)| **d == from)
-                .map(|(v, _)| Vec3::from(*v))
-                .collect();
+            // The body's own mesh where the names say which it is (a
+            // material called skin): not the hair lying on it, nor the
+            // clothes over it. Else all but the hair; else everything.
+            let of = |want: &dyn Fn(&str) -> bool| -> Vec<Vec3> {
+                model
+                    .primitives
+                    .iter()
+                    .filter(|p| want(&model.materials[p.material].name.to_ascii_lowercase()))
+                    .flat_map(|p| p.positions.iter().zip(&p.dominant))
+                    .filter(|(_, d)| **d == from)
+                    .map(|(v, _)| Vec3::from(*v))
+                    .collect()
+            };
+            let mut moved = of(&|name| name.contains("skin"));
+            let skin = moved.len() >= 8;
+            if !skin {
+                moved = of(&|name| !name.contains("hair"));
+            }
+            if moved.len() < 8 {
+                moved = of(&|_| true);
+            }
             if moved.len() < 8 {
                 continue;
             }
@@ -208,9 +223,9 @@ impl Springs {
             };
             let mut distances: Vec<f32> = moved.iter().map(|&v| (v - closest_on_segment(v, a, b)).length()).collect();
             distances.sort_by(f32::total_cmp);
-            // Most of what it moves is inside: the skin, not the eyes and
-            // teeth, nor the half of a limb's ring that's nearer than the rest
-            let radius = distances[distances.len() * 3 / 4];
+            // Skin is the surface itself: the middle of it. Anything else
+            // has insides (and clothes stand off the body): a little under.
+            let radius = distances[distances.len() / 2] * if skin { 1.0 } else { 0.85 };
             let tip = pose.world_rotation(from).inverse() * (b - a);
             colliders.push(Collider { from, base: Vec3::ZERO, tip, radius });
         }
