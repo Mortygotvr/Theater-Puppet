@@ -188,12 +188,11 @@ unsafe extern "C" fn get_properties(_: Ptr) -> Ptr {
         (api.obs_properties_add_bool)(props, c"leap_on_head".as_ptr(), c"The Leap is on the headset, not on the desk".as_ptr());
         (api.obs_properties_add_bool)(props, c"mediapipe".as_ptr(), key(&format!("MediaPipe (webcam: body and face): {}", status(Source::MediaPipe))).as_ptr());
 
-        // MediaPipe tracks from a camera: one of OBS's own webcam sources
-        // (read there, not opened a second time)
-        let cameras = (api.obs_properties_add_list)(props, c"camera".as_ptr(), c"MediaPipe: camera (a Video Capture Device source in OBS)".as_ptr(), obs::OBS_COMBO_TYPE_LIST, obs::OBS_COMBO_FORMAT_STRING);
-        (api.obs_property_list_add_string)(cameras, c"(none)".as_ptr(), c"".as_ptr());
-        for name in camera_sources() {
-            (api.obs_property_list_add_string)(cameras, key(&name).as_ptr(), key(&name).as_ptr());
+        // MediaPipe tracks from a camera: any on the PC (opened through OBS)
+        let list = (api.obs_properties_add_list)(props, c"camera".as_ptr(), c"MediaPipe: camera".as_ptr(), obs::OBS_COMBO_TYPE_LIST, obs::OBS_COMBO_FORMAT_STRING);
+        (api.obs_property_list_add_string)(list, c"(none)".as_ptr(), c"".as_ptr());
+        for (name, id) in cameras() {
+            (api.obs_property_list_add_string)(list, key(&name).as_ptr(), key(&id).as_ptr());
         }
 
         info(c"i_assign", "What tracks what: for each part of the avatar, the input that drives it. Auto takes whichever of its inputs sent last.");
@@ -216,29 +215,41 @@ unsafe extern "C" fn get_properties(_: Ptr) -> Ptr {
     }
 }
 
-/// OBS's webcam sources (Video Capture Devices), by name
-fn camera_sources() -> Vec<String> {
-    type EnumCb = unsafe extern "C" fn(*mut c_void, Ptr) -> bool;
-    type EnumSources = unsafe extern "C" fn(EnumCb, *mut c_void);
-    type GetId = unsafe extern "C" fn(Ptr) -> *const c_char;
-    unsafe extern "C" fn each(param: *mut c_void, source: Ptr) -> bool {
-        let names = unsafe { &mut *(param as *mut Vec<String>) };
-        let Some(get_id) = function::<GetId>("obs.dll", c"obs_source_get_id") else { return false };
-        let id = unsafe { get_id(source) };
-        if !id.is_null() && unsafe { CStr::from_ptr(id) }.to_bytes().starts_with(b"dshow_input") {
-            let name = unsafe { (obs::api().obs_source_get_name)(source) };
-            if !name.is_null() {
-                names.push(unsafe { CStr::from_ptr(name) }.to_string_lossy().into_owned());
+/// Every camera on the PC, as OBS's own Video Capture Device source lists
+/// them: (name, device id)
+fn cameras() -> Vec<(String, String)> {
+    type GetProps = unsafe extern "C" fn(*const c_char) -> Ptr;
+    type Count = unsafe extern "C" fn(Ptr) -> usize;
+    type Item = unsafe extern "C" fn(Ptr, usize) -> *const c_char;
+    type Destroy = unsafe extern "C" fn(Ptr);
+    let (Some(get_props), Some(count), Some(item_name), Some(item_string), Some(destroy)) = (
+        function::<GetProps>("obs.dll", c"obs_get_source_properties"),
+        function::<Count>("obs.dll", c"obs_property_list_item_count"),
+        function::<Item>("obs.dll", c"obs_property_list_item_name"),
+        function::<Item>("obs.dll", c"obs_property_list_item_string"),
+        function::<Destroy>("obs.dll", c"obs_properties_destroy"),
+    ) else {
+        return Vec::new();
+    };
+    let text = |p: *const c_char| if p.is_null() { String::new() } else { unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned() };
+    let mut out = Vec::new();
+    unsafe {
+        let props = get_props(c"dshow_input".as_ptr());
+        if props.is_null() {
+            return out;
+        }
+        let devices = (obs::api().obs_properties_get)(props, c"video_device_id".as_ptr());
+        if !devices.is_null() {
+            for i in 0..count(devices) {
+                let (name, id) = (text(item_name(devices, i)), text(item_string(devices, i)));
+                if !id.is_empty() {
+                    out.push((name, id));
+                }
             }
         }
-        true
+        destroy(props);
     }
-    let mut names: Vec<String> = Vec::new();
-    if let Some(enum_sources) = function::<EnumSources>("obs.dll", c"obs_enum_sources") {
-        unsafe { enum_sources(each, &mut names as *mut _ as *mut c_void) };
-    }
-    names.sort();
-    names
+    out
 }
 
 /// The dialog's source type. Call from obs_module_load.

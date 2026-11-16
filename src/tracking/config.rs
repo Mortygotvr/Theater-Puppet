@@ -70,7 +70,7 @@ pub struct Config {
     /// The Leap is on the headset (looking where you look), not on the desk
     pub leap_on_head: bool,
     pub mediapipe: bool,
-    /// MediaPipe's camera: the name of a Video Capture Device source in OBS
+    /// MediaPipe's camera: its device id, as OBS's Video Capture Device lists it
     pub camera: String,
     pub assign: Assign,
     /// As in a mirror: your left moves the avatar's right
