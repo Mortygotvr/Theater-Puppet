@@ -646,9 +646,11 @@ unsafe extern "C" fn video_tick(data: Ptr, dt: f32) {
     crate::snapshot::poll();
     // The avatar's pose and springs, skinned (the render uploads them)
     if let Some(rig) = puppet.rig.lock().unwrap().as_mut() {
+        let started = std::time::Instant::now();
         let mut motion = *puppet.motion.lock().unwrap();
         motion.yaw = puppet.view.lock().unwrap().yaw;
         rig.step(dt, motion);
+        crate::timing::tick(started.elapsed());
     }
     // A style or filter file changed: its settings' defaults may have too
     let generation = styles::generation();
@@ -754,6 +756,7 @@ unsafe extern "C" fn video_render(data: Ptr, _effect: Ptr) {
         }
     }
     let Some(g) = gpu.as_ref() else { return };
+    let timing = crate::timing::begin_render();
     // This frame's pose
     if let Some(rig) = puppet.rig.lock().unwrap().as_mut() {
         if rig.dirty {
@@ -792,4 +795,5 @@ unsafe extern "C" fn video_render(data: Ptr, _effect: Ptr) {
             *puppet.parts.lock().unwrap() = Some(map);
         }
     }
+    crate::timing::end_render(timing);
 }
