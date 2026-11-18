@@ -263,6 +263,14 @@ struct Mesh {
     vertices: usize,
     /// Its model: 0 the avatar, then the GLBs drawn with it (set_extras)
     layer: usize,
+    /// Its material in its own model, and its UVs as made (a tile moves them: set_uvs)
+    local_material: usize,
+    uvs: Vec<[f32; 2]>,
+}
+
+/// UVs placed by `st` (scale x, y, offset x, y): uv * scale + offset
+fn placed_uvs(uvs: &[[f32; 2]], st: [f32; 4]) -> Vec<[f32; 2]> {
+    uvs.iter().map(|[u, v]| [u * st[0] + st[2], v * st[1] + st[3]]).collect()
 }
 
 /// A model's meshes, textures and materials on the GPU, as layer `layer`
@@ -295,7 +303,8 @@ fn upload_meshes(model: &Model, layer: usize, materials: usize, textures: usize)
             // from torso (0) to leg (6) it would pass through 1–5
             (*data).num_tex = 4;
             let tv = obs_copy(&[obs::TVertArray { width: 2, array: std::ptr::null_mut() }, obs::TVertArray { width: 4, array: std::ptr::null_mut() }, obs::TVertArray { width: 4, array: std::ptr::null_mut() }, obs::TVertArray { width: 4, array: std::ptr::null_mut() }]);
-            (*tv).array = obs_copy(&p.uvs) as *mut _;
+            // Where its material's texture placement puts them
+            (*tv).array = obs_copy(&placed_uvs(&p.uvs, model.materials[p.material].uv)) as *mut _;
             for group in 0..3 {
                 let channels: Vec<[f32; 4]> = p.parts.iter().map(|&k| std::array::from_fn(|c| if k as usize == group * 4 + c { 1.0 } else { 0.0 })).collect();
                 (*tv.add(1 + group)).array = obs_copy(&channels) as *mut _;
@@ -308,7 +317,7 @@ fn upload_meshes(model: &Model, layer: usize, materials: usize, textures: usize)
         if vb.is_null() || ib.is_null() {
             continue;
         }
-        meshes.push(Mesh { vb, ib, count: p.indices.len() as u32, material: p.material + materials, prim, vertices: n, layer });
+        meshes.push(Mesh { vb, ib, count: p.indices.len() as u32, material: p.material + materials, prim, vertices: n, layer, local_material: p.material, uvs: p.uvs.clone() });
     }
     (meshes, new_textures, new_materials)
 }
@@ -325,6 +334,8 @@ pub struct Gpu {
     pub colors: std::sync::Mutex<std::collections::HashMap<u32, [f32; 3]>>,
     /// Layers not drawn (by layer; missing: drawn)
     pub hidden: std::sync::Mutex<Vec<bool>>,
+    /// Each mesh's texture placement now (set_uvs)
+    uv_now: std::sync::Mutex<Vec<[f32; 4]>>,
     target: Ptr,
     /// The ink pass: normals and distances, then the picture with its lines
     gbuf: Ptr,
@@ -426,6 +437,7 @@ impl Gpu {
             main_textures: textures.len(),
             colors: Default::default(),
             hidden: Default::default(),
+            uv_now: Default::default(),
             textures,
             materials,
             target,
@@ -591,6 +603,33 @@ impl Gpu {
             self.meshes.extend(meshes);
             self.textures.extend(textures);
             self.materials.extend(materials);
+        }
+        // Each mesh as uploaded: its material's own placement
+        *self.uv_now.lock().unwrap() = self.meshes.iter().map(|m| self.materials[m.material].uv).collect();
+    }
+
+    /// Each mesh's texture placement: `tile(layer, its material in its model)`
+    /// when a tile moves it, else its material's own. Rewritten only when it
+    /// changes. Call on the graphics thread.
+    pub fn set_uvs(&self, tile: impl Fn(usize, usize) -> Option<[f32; 4]>) {
+        let api = obs::api();
+        let mut now = self.uv_now.lock().unwrap();
+        now.resize(self.meshes.len(), crate::model::UV_IDENTITY);
+        for (i, mesh) in self.meshes.iter().enumerate() {
+            let st = tile(mesh.layer, mesh.local_material).unwrap_or(self.materials[mesh.material].uv);
+            if now[i] == st || mesh.uvs.len() != mesh.vertices {
+                continue;
+            }
+            unsafe {
+                let data = (api.gs_vertexbuffer_get_data)(mesh.vb);
+                if data.is_null() || (*data).num != mesh.vertices || (*data).tvarray.is_null() || (*(*data).tvarray).array.is_null() {
+                    continue;
+                }
+                let placed = placed_uvs(&mesh.uvs, st);
+                std::ptr::copy_nonoverlapping(placed.as_ptr(), (*(*data).tvarray).array as *mut [f32; 2], mesh.vertices);
+                (api.gs_vertexbuffer_flush)(mesh.vb);
+            }
+            now[i] = st;
         }
     }
 

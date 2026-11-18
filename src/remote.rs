@@ -21,6 +21,11 @@
 //!   group hides the others);
 //! - `group` {group, glb: a GLB of it | "next" | "none"}: shows that one of
 //!   the group (the others hidden), the next one, or none;
+//! - `tile` {glb, state: "on" | "off" | "toggle", value (0–1)} and either
+//!   `name` (a tile the GLB has: a VRM expression moving textures, kept by
+//!   Theater Rig) or `material` + `columns` + `rows` + `cell` (a number, 0 the
+//!   top left, across then down; "next"; "random"): its texture shows that
+//!   tile of a grid of any size. One tile per material at a time;
 //! - `color` {slot, color: "#rrggbb" | "reset"}: that colour slot on every
 //!   GLB of the Puppet (saved in the source's settings).
 //!
@@ -93,6 +98,48 @@ impl Override {
 pub struct GlbInfo {
     pub name: String,
     pub keys: Vec<String>,
+    /// Its materials' names, and its tiles
+    pub materials: Vec<String>,
+    pub tiles: Vec<crate::model::Tile>,
+}
+
+/// A tile showing on one GLB
+#[derive(Clone, Debug, PartialEq)]
+pub struct ActiveTile {
+    pub layer: usize,
+    /// Its name ("" for one of a grid)
+    pub name: String,
+    /// Each material it moves (in its GLB) and where to
+    pub binds: Vec<(usize, [f32; 4])>,
+    pub weight: f32,
+    /// A grid's columns, rows and cell
+    pub grid: Option<(u32, u32, u32)>,
+}
+
+/// Where cell `cell` of a `columns` x `rows` grid is (scale x, y, offset x, y),
+/// cell 0 the top left, across then down
+pub fn grid_cell(columns: u32, rows: u32, cell: u32) -> [f32; 4] {
+    let (c, r) = (columns.max(1), rows.max(1));
+    let cell = cell % (c * r);
+    [1.0 / c as f32, 1.0 / r as f32, (cell % c) as f32 / c as f32, (cell / c) as f32 / r as f32]
+}
+
+/// A material's texture placement with the tiles on it: its own, moved
+/// toward each one by its weight
+pub fn tiled(base: [f32; 4], tiles: &[ActiveTile], layer: usize, material: usize) -> Option<[f32; 4]> {
+    let mut st = base;
+    let mut any = false;
+    for t in tiles.iter().filter(|t| t.layer == layer) {
+        for (m, target) in &t.binds {
+            if *m == material {
+                any = true;
+                for k in 0..4 {
+                    st[k] += (target[k] - base[k]) * t.weight;
+                }
+            }
+        }
+    }
+    any.then_some(st)
 }
 
 /// GLB slots of a source: 0 the avatar, 1–3 its "Also draw" ones
@@ -142,6 +189,8 @@ pub struct Remote {
     pub glbs: Vec<GlbInfo>,
     /// Its colour slots
     pub slots: Vec<u32>,
+    /// Tiles showing (not saved)
+    pub tiles: Vec<ActiveTile>,
 }
 
 impl Remote {
@@ -353,6 +402,44 @@ fn ask(args: &Value, source: Ptr, remote: &Shared, shown: &mut Option<[bool; SLO
             *shown = Some(showing(r.shown, &r.groups, r.slot(layer), on));
         }
         "group" => *shown = Some(r.in_group(&text("group"), args.get("glb"))?),
+        "tile" => {
+            let layer = r.layer(args.get("glb"))?;
+            let state = text("state");
+            let weight = number(args, "value", 1.0, 0.0, 1.0);
+            let glb = r.glbs.get(layer).cloned().unwrap_or_default();
+            let name = text("name");
+            let mut tile = if !name.is_empty() {
+                let t = glb.tiles.iter().find(|t| t.name.eq_ignore_ascii_case(&name)).ok_or_else(|| format!("GLB {layer} has no tile \"{name}\""))?;
+                ActiveTile { layer, name: t.name.clone(), binds: t.binds.clone(), weight, grid: None }
+            } else {
+                let mat_name = text("material");
+                let material = glb.materials.iter().position(|m| m.eq_ignore_ascii_case(&mat_name)).ok_or_else(|| format!("GLB {layer} has no material \"{mat_name}\""))?;
+                let whole = |k: &str, d: u32| number(args, k, d as f32, 1.0, 1024.0).round() as u32;
+                let (columns, rows) = (whole("columns", 1), whole("rows", 1));
+                // The grid tile on that material now: "next" goes on from it
+                let now = r.tiles.iter().find(|t| t.layer == layer && t.binds.iter().any(|(m, _)| *m == material)).and_then(|t| t.grid).map(|g| g.2);
+                let cell = match text("cell").to_ascii_lowercase().as_str() {
+                    "next" => now.map_or(0, |c| c + 1),
+                    "random" => (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0) / 7) % (columns * rows),
+                    _ => number(args, "cell", 0.0, 0.0, 1_000_000.0).round() as u32,
+                } % (columns * rows);
+                ActiveTile { layer, name: String::new(), binds: vec![(material, grid_cell(columns, rows, cell))], weight, grid: Some((columns, rows, cell)) }
+            };
+            let materials: Vec<usize> = tile.binds.iter().map(|(m, _)| *m).collect();
+            // Already showing: the same named tile, or the same cell of a grid
+            let showing = r.tiles.iter().any(|t| t.layer == layer && if tile.name.is_empty() { t.name.is_empty() && t.binds == tile.binds } else { t.name == tile.name });
+            let on = match state.as_str() {
+                "off" => false,
+                "toggle" => !showing,
+                _ => true,
+            };
+            // One tile per material: what was on those materials goes
+            r.tiles.retain(|t| !(t.layer == layer && t.binds.iter().any(|(m, _)| materials.contains(m))));
+            if on {
+                tile.weight = weight;
+                r.tiles.push(tile);
+            }
+        }
         "color" => {
             let slot = args.get("slot").and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))).ok_or("no slot")? as u32;
             let color = text("color");
@@ -401,7 +488,9 @@ pub fn answer(args: &str) -> String {
                 groups.dedup();
                 json!({
                     "source": name,
-                    "glbs": r.glbs.iter().enumerate().map(|(i, g)| json!({ "index": i, "name": g.name, "keys": g.keys, "visible": !r.is_hidden(i), "group": r.groups[r.slot(i)] })).collect::<Vec<_>>(),
+                    "glbs": r.glbs.iter().enumerate().map(|(i, g)| json!({ "index": i, "name": g.name, "keys": g.keys, "visible": !r.is_hidden(i), "group": r.groups[r.slot(i)],
+                        "materials": g.materials, "tiles": g.tiles.iter().map(|t| t.name.clone()).collect::<Vec<_>>(),
+                        "tiles_on": r.tiles.iter().filter(|t| t.layer == i).map(|t| if t.name.is_empty() { t.grid.map(|(c, rr, cell)| format!("{}x{} cell {cell}", c, rr)).unwrap_or_default() } else { t.name.clone() }).collect::<Vec<_>>() })).collect::<Vec<_>>(),
                     "groups": groups,
                     "animations": r.animation.clips,
                     "looping": r.animation.loop_clip,
@@ -440,7 +529,7 @@ mod tests {
 
     #[test]
     fn glbs_are_found_by_number_or_name() {
-        let r = Remote { glbs: vec![GlbInfo { name: "Armature".into(), keys: vec![] }, GlbInfo { name: "Hat".into(), keys: vec![] }], ..Default::default() };
+        let r = Remote { glbs: vec![GlbInfo { name: "Armature".into(), ..Default::default() }, GlbInfo { name: "Hat".into(), ..Default::default() }], ..Default::default() };
         assert_eq!(r.layer(None), Ok(0));
         assert_eq!(r.layer(Some(&json!(1))), Ok(1));
         assert_eq!(r.layer(Some(&json!("hat"))), Ok(1));
@@ -465,7 +554,7 @@ mod tests {
     #[test]
     fn a_group_shows_a_name_the_next_one_or_none() {
         // The avatar, then hats in Also draw 1 and 3 (2 didn't load)
-        let glb = |n: &str| GlbInfo { name: n.into(), keys: vec![] };
+        let glb = |n: &str| GlbInfo { name: n.into(), ..Default::default() };
         let mut r = Remote {
             glbs: vec![glb("Armature"), glb("Cap"), glb("Crown")],
             layer_slot: vec![0, 1, 3],
@@ -484,6 +573,19 @@ mod tests {
         // From the crown, next wraps to the cap
         r.shown = [true, false, true, true];
         assert_eq!(r.in_group("HATS", None), Ok([true, true, true, false]));
+    }
+
+    #[test]
+    fn tiles_of_any_grid() {
+        // 4 x 2: cell 5 is the second row, second column
+        assert_eq!(grid_cell(4, 2, 5), [0.25, 0.5, 0.25, 0.5]);
+        assert_eq!(grid_cell(3, 3, 9), grid_cell(3, 3, 0));
+        let base = crate::model::UV_IDENTITY;
+        let t = |weight| ActiveTile { layer: 0, name: "x".into(), binds: vec![(2, [0.5, 0.5, 0.5, 0.0])], weight, grid: None };
+        assert_eq!(tiled(base, &[t(1.0)], 0, 2), Some([0.5, 0.5, 0.5, 0.0]));
+        assert_eq!(tiled(base, &[t(0.5)], 0, 2), Some([0.75, 0.75, 0.25, 0.0]));
+        assert_eq!(tiled(base, &[t(1.0)], 0, 1), None);
+        assert_eq!(tiled(base, &[t(1.0)], 1, 2), None);
     }
 
     #[test]

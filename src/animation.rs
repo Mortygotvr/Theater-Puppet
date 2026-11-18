@@ -305,6 +305,7 @@ mod tests {
     fn model_with(clips: Vec<Clip>) -> Model {
         Model {
             name: "test".into(),
+            tiles: Vec::new(),
             primitives: Vec::new(),
             materials: Vec::new(),
             images: Vec::new(),

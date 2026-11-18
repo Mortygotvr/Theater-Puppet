@@ -12,7 +12,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 # The avatar: glTF binary, its textures decoded (PNG, JPEG), material extras
-gltf = { version = "1.4", features = ["extras", "names", "utils", "import", "image"] }
+gltf = { version = "1.4", features = ["extras", "names", "utils", "import", "image", "KHR_texture_transform"] }
 glam = "0.29"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

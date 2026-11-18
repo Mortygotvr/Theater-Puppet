@@ -845,7 +845,17 @@ fn sync_remote(puppet: &Puppet, rig: &mut Rig) -> Option<[bool; crate::remote::S
     // Its GLBs (the avatar first) and colour slots, when they changed
     let models: Vec<&Model> = std::iter::once(&*rig.model).chain(rig.followers.iter().map(|f| &*f.model)).collect();
     if r.glbs.len() != models.len() || r.glbs.iter().zip(&models).any(|(g, m)| g.name != m.name) {
-        r.glbs = models.iter().map(|m| crate::remote::GlbInfo { name: m.name.clone(), keys: m.morph_names.clone() }).collect();
+        r.glbs = models
+            .iter()
+            .map(|m| crate::remote::GlbInfo {
+                name: m.name.clone(),
+                keys: m.morph_names.clone(),
+                materials: m.materials.iter().map(|x| x.name.clone()).collect(),
+                tiles: m.tiles.clone(),
+            })
+            .collect();
+        // A new avatar: the tiles of the old one go
+        r.tiles.clear();
         r.slots = color_slots(&models).into_iter().map(|(s, _)| s).collect();
     }
     shown
@@ -1067,6 +1077,13 @@ unsafe extern "C" fn video_render(data: Ptr, _effect: Ptr) {
                 f.dirty = false;
             }
         }
+        // The tiles showing: each material's texture placement
+        let tiles = puppet.remote.lock().unwrap().tiles.clone();
+        let models: Vec<Arc<Model>> = std::iter::once(rig.model.clone()).chain(rig.followers.iter().map(|f| f.model.clone())).collect();
+        g.set_uvs(|layer, material| {
+            let base = models.get(layer)?.materials.get(material)?.uv;
+            crate::remote::tiled(base, &tiles, layer, material)
+        });
     }
 
     let (key, code, frame) = stack(&puppet.running.lock().unwrap());

@@ -123,6 +123,18 @@ MediaPipe notes:
   (`remote::effective` / `remote::showing`). Saved in the source's settings,
   so they survive a restart. A layer's slot is kept apart (`layer_slot`): an
   Also draw whose file doesn't load has no layer.
+- **Tile textures**: a texture holding a grid of tiles (eyes, mouths,
+  faces), a material showing one of them. Theater Rig's Export copies the
+  VRM expressions that move textures (VRM 0.x `_MainTex_ST` material values,
+  VRM 1.0 texture transform binds) onto the armature as `theater_tiles`,
+  in glTF's texture coordinates (v down; VRM 0.x's offset y becomes
+  1 - scale y - offset y). Puppet reads them (`model::read_tiles`) and each
+  material's own `KHR_texture_transform`, and shows a tile by rewriting the
+  UVs of that material's meshes on the GPU (`Gpu::set_uvs`), so styles,
+  filters and the parts map all see it. The `tile` command picks a named
+  tile, or any cell of a grid of any size (the owner: the number of tiles
+  is never fixed). One tile per material at a time. Test avatar:
+  `Documents\VRM\HavocFFT.vrm`.
 - Colour slots: the source's "Colours" properties (Recolour slot N + its
   colour), on every GLB; a slot's shade is its colour as much darker as the
   material's own (`shade_ratio`).
@@ -137,6 +149,7 @@ MediaPipe notes:
   ping-pong, per GLB), `shape_anim` (range, up / down / ping-pong, duration,
   show the GLB at the start, hide it at the end), `glb` (show / hide /
   toggle; saved), `group` (show one GLB of a group, `next`, or `none`),
+  `tile` (a named tile, or a cell of a grid: on / off / toggle; not saved),
   `color` (a slot on every GLB, saved in the source's settings).
   The module comment lists every field. Shape keys driven this way go over
   tracking and animations.

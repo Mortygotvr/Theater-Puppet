@@ -3,6 +3,19 @@
 What's built but not yet tried live, newest first. Tick it (or tell Claude
 what went wrong) and it comes off the list.
 
+## Tile textures
+- [ ] Theater Rig: export HavocFFT.vrm (or WendigoFFT / Wendussy) with
+      Export GLB; the report says "8 tile texture expression(s) kept".
+- [ ] Puppet with that GLB: Control Panel "Puppet: Tile Texture" with name
+      `Gigashad` (or a Scene Puppet redeem, action "🧩 Tile texture"): the skin
+      and eyes switch to that tile; `off` brings them back.
+- [ ] A grid tile: material `Wolf3D_Eye`, 2 × 2, cell `next` cycles the eyes.
+- [ ] Any grid size works (try 4 × 2 on `Wolf3D_Skin`).
+- [ ] A GLB exported with an animation from Blender keeps it now (Theater
+      Rig's export used to drop animations).
+- [ ] On Linux: Blender → Preferences → Get Extensions → Install from Disk →
+      `Documents\theater_rig-0.1.0.zip` (rebuilt with the tiles).
+
 ## GLB groups
 - [ ] Puppet properties: under each "Also draw", **Show** and **Group**. Two
       GLBs with the same group name: ticking Show on one hides the other.

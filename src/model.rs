@@ -36,6 +36,56 @@ pub struct Material {
     /// How much darker its shade is than its colour (brightness, 0–1): a
     /// slot given a new colour gets it this much darker as its shade
     pub shade_ratio: f32,
+    /// Its texture's placement (KHR_texture_transform): scale x, y, offset
+    /// x, y; uv' = uv * scale + offset. A tile (tiles.rs) moves it
+    pub uv: [f32; 4],
+}
+
+/// No texture placement: the texture as it is
+pub const UV_IDENTITY: [f32; 4] = [1.0, 1.0, 0.0, 0.0];
+
+/// A tile texture: a VRM expression moving textures to another tile (Theater
+/// Rig keeps them as the armature's `theater_tiles`), each material's
+/// placement when it shows
+#[derive(Clone, Debug, PartialEq)]
+pub struct Tile {
+    pub name: String,
+    pub binds: Vec<(usize, [f32; 4])>,
+}
+
+/// The tiles in Theater Rig's `theater_tiles` (JSON, in a node's extras),
+/// their materials found by name
+pub fn read_tiles(extras: &serde_json::Value, materials: &[Material]) -> Vec<Tile> {
+    let data = match extras.get("theater_tiles") {
+        Some(serde_json::Value::String(s)) => serde_json::from_str(s).unwrap_or_default(),
+        Some(v) => v.clone(),
+        None => return Vec::new(),
+    };
+    let Some(map) = data.as_object() else { return Vec::new() };
+    let pair = |v: Option<&serde_json::Value>, d: f32| -> [f32; 2] {
+        let a = v.and_then(|v| v.as_array());
+        [0, 1].map(|i| a.and_then(|a| a.get(i)).and_then(|x| x.as_f64()).map(|x| x as f32).unwrap_or(d))
+    };
+    let mut out: Vec<Tile> = map
+        .iter()
+        .map(|(name, binds)| Tile {
+            name: name.clone(),
+            binds: binds
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|b| {
+                    let mat = b.get("material")?.as_str()?;
+                    let i = materials.iter().position(|m| m.name == mat)?;
+                    let (s, o) = (pair(b.get("scale"), 1.0), pair(b.get("offset"), 0.0));
+                    Some((i, [s[0], s[1], o[0], o[1]]))
+                })
+                .collect(),
+        })
+        .filter(|t| !t.binds.is_empty())
+        .collect();
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
 }
 
 pub struct Primitive {
@@ -153,6 +203,8 @@ pub struct Model {
     pub morph_names: Vec<String>,
     /// Its animations, made in Blender (animation.rs)
     pub clips: Vec<crate::animation::Clip>,
+    /// Its tile textures (VRM expressions moving textures)
+    pub tiles: Vec<Tile>,
 }
 
 impl Model {
@@ -250,7 +302,7 @@ pub fn load(path: &Path) -> Result<Model, String> {
 
     let mut materials: Vec<Material> = doc.materials().map(material).collect();
     let default_material = materials.len();
-    materials.push(Material { name: "default".into(), color: [1.0; 4], shade: [0.7; 3], image: None, alpha: Alpha::Opaque, color_slot: None, shade_ratio: 0.7 });
+    materials.push(Material { name: "default".into(), color: [1.0; 4], shade: [0.7; 3], image: None, alpha: Alpha::Opaque, color_slot: None, shade_ratio: 0.7, uv: UV_IDENTITY });
 
     let parts_of = node_parts(&doc);
     let mut morph_names: Vec<String> = Vec::new();
@@ -380,7 +432,9 @@ pub fn load(path: &Path) -> Result<Model, String> {
     }
     let clips = crate::animation::load(&doc, &buffers, &morph_names);
     let name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-    Ok(Model { name, primitives, materials, images: images.into_iter().map(rgba).collect(), min, max, nodes, order, skins, morph_names, clips })
+    // Theater Rig keeps them on the armature's node
+    let tiles = nodes.iter().map(|n| read_tiles(&n.extras, &materials)).find(|t| !t.is_empty()).unwrap_or_default();
+    Ok(Model { name, tiles, primitives, materials, images: images.into_iter().map(rgba).collect(), min, max, nodes, order, skins, morph_names, clips })
 }
 
 fn material(m: gltf::Material) -> Material {
@@ -416,6 +470,11 @@ fn material(m: gltf::Material) -> Material {
     };
     let brightness = |c: &[f32]| 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
     let shade_ratio = (brightness(&shade) / brightness(&color[..3]).max(1e-4)).clamp(0.0, 1.0);
+    let uv = pbr
+        .base_color_texture()
+        .and_then(|t| t.texture_transform())
+        .map(|t| [t.scale()[0], t.scale()[1], t.offset()[0], t.offset()[1]])
+        .unwrap_or(UV_IDENTITY);
     Material {
         name,
         color,
@@ -424,6 +483,7 @@ fn material(m: gltf::Material) -> Material {
         alpha,
         color_slot,
         shade_ratio,
+        uv,
     }
 }
 
@@ -469,8 +529,22 @@ mod tests {
     }
 
     #[test]
+    fn tiles_kept_by_theater_rig_are_read() {
+        // THEATER_PUPPET_TILED_GLB: HavocFFT.vrm through Theater Rig's Export
+        let Ok(path) = std::env::var("THEATER_PUPPET_TILED_GLB") else { return };
+        let m = load(Path::new(&path)).unwrap();
+        let names: Vec<&str> = m.tiles.iter().map(|t| t.name.as_str()).collect();
+        println!("tiles: {names:?}");
+        assert_eq!(m.tiles.len(), 8);
+        let giga = m.tiles.iter().find(|t| t.name == "Gigashad").unwrap();
+        let skin = m.materials.iter().position(|x| x.name == "Wolf3D_Skin").unwrap();
+        assert!(giga.binds.contains(&(skin, [0.25, 0.5, 0.75, 0.0])), "{:?}", giga.binds);
+        assert_eq!(m.materials[skin].uv, UV_IDENTITY);
+    }
+
+    #[test]
     fn a_new_colour_keeps_its_shadow_the_same_colour_darker() {
-        let m = Material { name: "Hair_Color2".into(), color: [0.8, 0.6, 0.4, 1.0], shade: [0.4, 0.3, 0.2], image: None, alpha: Alpha::Opaque, color_slot: Some(2), shade_ratio: 0.5 };
+        let m = Material { name: "Hair_Color2".into(), color: [0.8, 0.6, 0.4, 1.0], shade: [0.4, 0.3, 0.2], image: None, alpha: Alpha::Opaque, color_slot: Some(2), shade_ratio: 0.5, uv: UV_IDENTITY };
         let r = recoloured(&m, [0.2, 0.4, 1.0]);
         assert_eq!(r.color, [0.2, 0.4, 1.0, 1.0]);
         assert_eq!(r.shade, [0.1, 0.2, 0.5]);
