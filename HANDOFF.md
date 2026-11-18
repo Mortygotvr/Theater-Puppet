@@ -74,7 +74,8 @@ appear there a moment later.
 | iFacialMocap | UDP 49983 | Yes |
 | MeowFace | VTube Studio phone protocol, asks phone:21412, listens on 50506 | **No** (no Android phone); only the packet reading is tested |
 | Leap Motion | `LeapC.dll` from the Leap software | Yes |
-| SteamVR | `openvr_api.dll` from SteamVR, background app, `IVRSystem_023` | **No**; it loads and waits, SteamVR had not been run with a headset |
+| SteamVR | `openvr_api.dll` from SteamVR, background then overlay app, `IVRSystem_023`; fingers from `IVRInput_010` skeletons | **No**: the owner's Steam Frame can't stream to this PC (SteamVR's vrlink refuses Intel Arc GPUs, vendor 0x8086) |
+| VR telemetry | The headset's own telemetry server, as the owner's Unity app AvatarStreaming reads it: poses UDP 7500 (roles 1 head … 7 chest), finger skeletons 7501; T-pose calibration and a reach scale in the dock | Yes (headset, controllers, calibration, scale); fingers not yet confirmed |
 | MediaPipe | Python helper `mediapipe/puppet_mediapipe.py`, started by `tracking/mediapipe.rs` | Yes |
 
 Not verified by anyone: whether head turns, hand positions and finger curls
