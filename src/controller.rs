@@ -49,6 +49,8 @@ pub struct Prop {
     hand_offset: [f32; 2],
     /// The hands turned about their forearm (degrees; mirrored left / right)
     pub hand_roll: f32,
+    /// The hands moved along it: toward its far edge (+) or the holder (-), metres
+    pub hand_forward: f32,
 }
 
 impl Prop {
@@ -88,6 +90,7 @@ impl Prop {
             size: 1.0,
             hand_offset: [0.0, 0.0],
             hand_roll: 0.0,
+            hand_forward: 0.0,
             model,
         }
     }
@@ -121,7 +124,7 @@ impl Prop {
             let left = side == 0;
             let s = if left { 1.0 } else { -1.0 };
             let marker = self.parts.hands[side].map(|i| self.rest.position(i)).unwrap_or(Vec3::new(0.072 * s, -0.02, -0.075));
-            let marker = marker + Vec3::new(self.hand_offset[1] * s, self.hand_offset[0], 0.0);
+            let marker = marker + Vec3::new(self.hand_offset[1] * s, self.hand_offset[0], self.hand_forward);
             let fingers = self.turn * Vec3::new(-0.3 * s, -0.15, 1.0);
             let palm = self.turn * Vec3::new(-0.45 * s, -1.0, 0.1);
             // The rotation slider: about the forearm, the same way on both sides

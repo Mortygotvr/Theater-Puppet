@@ -39,11 +39,13 @@ pub struct Motion {
     pub hand_offset: [f32; 2],
     /// The hands on it turned about their forearm (degrees)
     pub hand_roll: f32,
+    /// The hands on it moved forward (+) or back (-) along it (metres)
+    pub hand_forward: f32,
 }
 
 impl Default for Motion {
     fn default() -> Self {
-        Motion { arms_down: 65.0, idle: 0.5, yaw: 0.0, springs: true, adjust: Adjust::default(), tracked: true, controller_offset: [0.0, 0.0], hand_offset: [0.0, 0.03], hand_roll: 0.0 }
+        Motion { arms_down: 65.0, idle: 0.5, yaw: 0.0, springs: true, adjust: Adjust::default(), tracked: true, controller_offset: [0.0, 0.0], hand_offset: [0.0, 0.03], hand_roll: 0.0, hand_forward: 0.0 }
     }
 }
 
@@ -398,6 +400,7 @@ impl Rig {
             let rest_head = self.skeleton.rest_head();
             let (chest, chest_turn) = self.chest_last.unwrap_or_else(|| (chest_bone.map(|c| turn * self.rest.position(c)).unwrap_or(rest_head * 0.8), turn));
             prop.hand_roll = motion.hand_roll;
+            prop.hand_forward = motion.hand_forward;
             prop.place(chest, chest_turn, rest_head.y / 1.5, motion.controller_offset, motion.hand_offset, &self.pad.unwrap_or_default());
         }
 

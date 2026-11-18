@@ -75,6 +75,7 @@ const S_CONTROLLER_FORWARD: &CStr = c"controller_forward";
 const S_HAND_UP: &CStr = c"controller_hand_up";
 const S_HAND_APART: &CStr = c"controller_hand_apart";
 const S_HAND_ROLL: &CStr = c"controller_hand_roll";
+const S_HAND_FORWARD: &CStr = c"controller_hand_forward";
 
 /// Colour slots (Theater Rig's Color<N>) a source can set
 const COLOR_SLOTS: u32 = 100;
@@ -488,6 +489,7 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
             (api.obs_properties_add_float_slider)(props, S_HAND_UP.as_ptr(), c"Controller: hands lower (-) or higher (+), metres".as_ptr(), -0.1, 0.15, 0.005);
             (api.obs_properties_add_float_slider)(props, S_HAND_APART.as_ptr(), c"Controller: hands closer (-) or wider (+), metres each".as_ptr(), -0.05, 0.15, 0.005);
             (api.obs_properties_add_float_slider)(props, S_HAND_ROLL.as_ptr(), c"Controller: hands rotation (degrees)".as_ptr(), -90.0, 90.0, 1.0);
+            (api.obs_properties_add_float_slider)(props, S_HAND_FORWARD.as_ptr(), c"Controller: hands back (-) or forward (+), metres".as_ptr(), -0.1, 0.1, 0.005);
             (api.obs_properties_add_path)(props, S_CONTROLLER_MODEL.as_ptr(), c"Controller it holds (when Arms are on the Controller input; empty: the built-in one)".as_ptr(), obs::OBS_PATH_FILE, c"glTF (*.glb *.gltf)".as_ptr(), std::ptr::null());
         }
         // Colour slots (Theater Rig's Color<N>): the avatar's and its extras'
@@ -791,6 +793,7 @@ unsafe extern "C" fn update(data: Ptr, settings: Ptr) {
             controller_offset: [(api.obs_data_get_double)(settings, S_CONTROLLER_UP.as_ptr()).max(0.0) as f32, (api.obs_data_get_double)(settings, S_CONTROLLER_FORWARD.as_ptr()) as f32],
             hand_offset: [(api.obs_data_get_double)(settings, S_HAND_UP.as_ptr()) as f32, (api.obs_data_get_double)(settings, S_HAND_APART.as_ptr()) as f32],
             hand_roll: (api.obs_data_get_double)(settings, S_HAND_ROLL.as_ptr()) as f32,
+            hand_forward: (api.obs_data_get_double)(settings, S_HAND_FORWARD.as_ptr()) as f32,
         };
     }
     puppet.remote.lock().unwrap().animation.loop_clip = get_string(settings, S_ANIMATION);
