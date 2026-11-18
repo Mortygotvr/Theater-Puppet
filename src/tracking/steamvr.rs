@@ -1,4 +1,5 @@
-//! SteamVR: the headset, the controllers and the trackers, through
+//! SteamVR: the headset, the controllers (and the fingers on them) and the
+//! trackers, through
 //! SteamVR's own library (openvr_api.dll, in SteamVR's folder), as a
 //! background program: it follows SteamVR when it runs, and never starts it.
 //!
@@ -15,7 +16,7 @@ use std::time::Duration;
 use glam::{Mat3, Quat, Vec3};
 
 use super::dll::Library;
-use super::{Body, Source, Target, config::Config};
+use super::{Body, Hand, Hands, Source, Target, config::Config};
 
 /// vr::TrackedDevicePose_t
 #[repr(C)]
@@ -31,6 +32,7 @@ struct DevicePose {
 }
 
 const MAX_DEVICES: usize = 64;
+const APPLICATION_OVERLAY: i32 = 2;
 const APPLICATION_BACKGROUND: i32 = 3;
 const ORIGIN_STANDING: i32 = 1;
 const CLASS_TRACKER: i32 = 3;
@@ -58,6 +60,190 @@ type DeviceClass = unsafe extern "system" fn(u32) -> i32;
 type StringProperty = unsafe extern "system" fn(u32, i32, *mut c_char, u32, *mut i32) -> u32;
 type PollEvent = unsafe extern "system" fn(*mut [u8; 64], u32) -> bool;
 type AcknowledgeQuit = unsafe extern "system" fn();
+
+// IVRInput_010's function table: the fingers (SteamVR's hand skeletons)
+const SET_MANIFEST: usize = 0;
+const ACTION_SET: usize = 1;
+const ACTION: usize = 2;
+const UPDATE_ACTIONS: usize = 4;
+const SKELETAL_DATA: usize = 9;
+const SKELETAL_SUMMARY: usize = 18;
+const INPUT_TABLE_LENGTH: usize = 32;
+/// An overlay's action set at this priority gets input whatever app has focus
+const PRIORITY_OVERLAY_GLOBAL: i32 = 0x0100_0000;
+/// The fingers as the hand's animation has them (works for every controller)
+const SUMMARY_FROM_ANIMATION: i32 = 0;
+
+type SetManifest = unsafe extern "system" fn(*const c_char) -> i32;
+type Handle = unsafe extern "system" fn(*const c_char, *mut u64) -> i32;
+type UpdateActions = unsafe extern "system" fn(*mut ActiveActionSet, u32, u32) -> i32;
+type SkeletalData = unsafe extern "system" fn(u64, *mut SkeletalActionData, u32) -> i32;
+type SkeletalSummary = unsafe extern "system" fn(u64, i32, *mut SkeletalSummaryData) -> i32;
+
+/// vr::VRActiveActionSet_t
+#[repr(C)]
+struct ActiveActionSet {
+    set: u64,
+    restricted_to_device: u64,
+    secondary: u64,
+    padding: u32,
+    priority: i32,
+}
+
+/// vr::InputSkeletalActionData_t
+#[repr(C)]
+#[derive(Default)]
+struct SkeletalActionData {
+    active: bool,
+    origin: u64,
+}
+
+/// vr::VRSkeletalSummaryData_t: each finger's curl (thumb first), 0 straight
+/// to 1 closed; the splay between neighbours
+#[repr(C)]
+#[derive(Default, Clone, Copy)]
+struct SkeletalSummaryData {
+    curl: [f32; 5],
+    splay: [f32; 4],
+}
+
+/// The controller types Puppet binds the hand skeletons for (SteamVR's own
+/// names, from its drivers' input profiles)
+const CONTROLLERS: [&str; 10] = [
+    "knuckles",
+    "knuckles_ev1",
+    "frame_controller",
+    "oculus_touch",
+    "vive_controller",
+    "vive_cosmos_controller",
+    "vive_focus3_controller",
+    "holographic_controller",
+    "hpmotioncontroller",
+    "pico_controller",
+];
+
+/// Writes the action manifest the fingers need (plugin_config/
+/// theater-puppet/steamvr): two skeleton actions, bound for every
+/// controller in CONTROLLERS
+fn write_manifest() -> Option<PathBuf> {
+    let dir = crate::config_dir().join("steamvr");
+    std::fs::create_dir_all(&dir).ok()?;
+    let binding = serde_json::json!({
+        "bindings": { "/actions/puppet": {
+            "skeleton": [
+                { "output": "/actions/puppet/in/left_hand", "path": "/user/hand/left/input/skeleton/left" },
+                { "output": "/actions/puppet/in/right_hand", "path": "/user/hand/right/input/skeleton/right" }
+            ],
+            "sources": [], "poses": [], "haptics": []
+        } }
+    });
+    let mut defaults = Vec::new();
+    for controller in CONTROLLERS {
+        let mut b = binding.clone();
+        b["controller_type"] = controller.into();
+        let file = format!("bindings_{controller}.json");
+        std::fs::write(dir.join(&file), serde_json::to_string_pretty(&b).ok()?).ok()?;
+        defaults.push(serde_json::json!({ "controller_type": controller, "binding_url": file }));
+    }
+    let manifest = serde_json::json!({
+        "default_bindings": defaults,
+        "actions": [
+            { "name": "/actions/puppet/in/left_hand", "type": "skeleton", "skeleton": "/skeleton/hand/left" },
+            { "name": "/actions/puppet/in/right_hand", "type": "skeleton", "skeleton": "/skeleton/hand/right" }
+        ],
+        "action_sets": [{ "name": "/actions/puppet", "usage": "leftright" }],
+        "localization": [{
+            "language_tag": "en_US",
+            "/actions/puppet": "Theater Puppet",
+            "/actions/puppet/in/left_hand": "Left hand (fingers)",
+            "/actions/puppet/in/right_hand": "Right hand (fingers)"
+        }]
+    });
+    let path = dir.join("actions.json");
+    std::fs::write(&path, serde_json::to_string_pretty(&manifest).ok()?).ok()?;
+    Some(path)
+}
+
+/// A hand's fingers from SteamVR's summary of them: each joint bent its
+/// share of the finger's curl, the thumb less; the splay as spread
+fn fingers(s: &SkeletalSummaryData) -> Hand {
+    let mut hand = Hand::default();
+    // A closed fist, radians at each joint: thumb, then the four fingers
+    const THUMB: [f32; 3] = [0.6, 0.7, 0.8];
+    const FINGER: [f32; 3] = [1.5, 1.7, 1.1];
+    for f in 0..5 {
+        let curl = s.curl[f].clamp(0.0, 1.0);
+        let full = if f == 0 { THUMB } else { FINGER };
+        hand.bend[f] = full.map(|b| b * curl);
+    }
+    // Splay: 0 together, 1 wide apart (about 0.2 at rest). Each finger moves
+    // away from the middle one by half the gaps on its side opening up
+    let open = s.splay.map(|v| (v.clamp(0.0, 1.0) - 0.2) * 0.35);
+    hand.spread[1] = -open[1];
+    hand.spread[3] = open[2] * 0.5;
+    hand.spread[4] = open[2] * 0.5 + open[3];
+    hand
+}
+
+/// The fingers' actions in SteamVR, once their manifest is in
+struct Fingers {
+    update: UpdateActions,
+    data: SkeletalData,
+    summary: SkeletalSummary,
+    set: u64,
+    hands: [u64; 2],
+}
+
+impl Fingers {
+    /// Sets up the fingers' actions in a SteamVR session (None: SteamVR
+    /// refused; the controllers still work)
+    fn new(input: &[*const c_void; INPUT_TABLE_LENGTH]) -> Option<Fingers> {
+        let manifest = write_manifest()?;
+        let (set_manifest, handle_of): (SetManifest, Handle) = unsafe { (std::mem::transmute(input[SET_MANIFEST]), std::mem::transmute(input[ACTION])) };
+        let set_handle: Handle = unsafe { std::mem::transmute(input[ACTION_SET]) };
+        let path = std::ffi::CString::new(manifest.to_string_lossy().into_owned()).ok()?;
+        let error = unsafe { set_manifest(path.as_ptr()) };
+        if error != 0 {
+            crate::log(&format!("[Puppet] ⚠️ SteamVR: the fingers' action manifest was refused (error {error})"));
+            return None;
+        }
+        let mut set = 0u64;
+        let mut hands = [0u64; 2];
+        unsafe {
+            set_handle(c"/actions/puppet".as_ptr(), &mut set);
+            handle_of(c"/actions/puppet/in/left_hand".as_ptr(), &mut hands[0]);
+            handle_of(c"/actions/puppet/in/right_hand".as_ptr(), &mut hands[1]);
+        }
+        if set == 0 || hands.contains(&0) {
+            return None;
+        }
+        unsafe {
+            Some(Fingers {
+                update: std::mem::transmute(input[UPDATE_ACTIONS]),
+                data: std::mem::transmute(input[SKELETAL_DATA]),
+                summary: std::mem::transmute(input[SKELETAL_SUMMARY]),
+                set,
+                hands,
+            })
+        }
+    }
+
+    /// Both hands' fingers now (None for a hand whose controller has none)
+    fn read(&self) -> Hands {
+        let mut active = ActiveActionSet { set: self.set, restricted_to_device: 0, secondary: 0, padding: 0, priority: PRIORITY_OVERLAY_GLOBAL };
+        unsafe { (self.update)(&mut active, std::mem::size_of::<ActiveActionSet>() as u32, 1) };
+        let hand = |action: u64| {
+            let mut data = SkeletalActionData::default();
+            let ok = unsafe { (self.data)(action, &mut data, std::mem::size_of::<SkeletalActionData>() as u32) } == 0;
+            if !ok || !data.active {
+                return None;
+            }
+            let mut summary = SkeletalSummaryData::default();
+            (unsafe { (self.summary)(action, SUMMARY_FROM_ANIMATION, &mut summary) } == 0).then(|| fingers(&summary))
+        };
+        Hands { left: hand(self.hands[0]), right: hand(self.hands[1]) }
+    }
+}
 
 /// Where SteamVR keeps its library: the runtime named in openvrpaths.vrpath
 fn candidates() -> Vec<PathBuf> {
@@ -179,6 +365,17 @@ pub fn restart(config: &Config) {
             // Follows SteamVR once it runs (a background program doesn't start it)
             let mut error = 0;
             unsafe { init(&mut error, APPLICATION_BACKGROUND) };
+            // Running: again as an overlay, which may read the controllers'
+            // fingers whatever app has focus (a background program can't)
+            let mut overlay = false;
+            if error == 0 {
+                unsafe { shutdown() };
+                unsafe { init(&mut error, APPLICATION_OVERLAY) };
+                overlay = error == 0;
+                if !overlay {
+                    unsafe { init(&mut error, APPLICATION_BACKGROUND) };
+                }
+            }
             if error != 0 {
                 let why = init_error(error);
                 super::set_status(Source::SteamVr, why);
@@ -206,7 +403,9 @@ pub fn restart(config: &Config) {
                     std::mem::transmute(f[ACKNOWLEDGE_QUIT]),
                 )
             };
-            crate::log("[Puppet] 🥽 SteamVR: connected");
+            let input = unsafe { interface(c"FnTable:IVRInput_010".as_ptr(), &mut error) } as *const [*const c_void; INPUT_TABLE_LENGTH];
+            let fingers = if overlay && !input.is_null() && error == 0 { Fingers::new(unsafe { &*input }) } else { None };
+            crate::log(&format!("[Puppet] 🥽 SteamVR: connected{}", if fingers.is_some() { ", with the fingers" } else { " (no fingers: SteamVR wouldn't give them)" }));
             super::set_status(Source::SteamVr, "connected, waiting for the headset");
             told = false;
             let mut room: Option<Room> = None;
@@ -278,8 +477,13 @@ pub fn restart(config: &Config) {
                 };
                 let hands = body.left_hand.is_some() as u32 + body.right_hand.is_some() as u32;
                 let trackers = strapped.iter().flatten().count();
-                super::set_status(Source::SteamVr, format!("receiving the headset, {hands} controller(s), {trackers} tracker(s)"));
+                let curled = fingers.as_ref().map(|f| f.read()).unwrap_or_default();
+                let with_fingers = curled.left.is_some() as u32 + curled.right.is_some() as u32;
+                super::set_status(Source::SteamVr, format!("receiving the headset, {hands} controller(s) ({with_fingers} with fingers), {trackers} tracker(s)"));
                 super::set_body(Source::SteamVr, body);
+                if with_fingers > 0 {
+                    super::set_hands(Source::SteamVr, curled);
+                }
                 // As often as a headset shows a picture
                 std::thread::sleep(Duration::from_millis(11));
             }
@@ -303,6 +507,22 @@ mod tests {
     #[test]
     fn the_structure_is_openvrs_size() {
         assert_eq!(std::mem::size_of::<DevicePose>(), 80);
+        assert_eq!(std::mem::size_of::<ActiveActionSet>(), 32);
+        assert_eq!(std::mem::size_of::<SkeletalActionData>(), 16);
+        assert_eq!(std::mem::size_of::<SkeletalSummaryData>(), 36);
+    }
+
+    #[test]
+    fn curls_bend_the_fingers() {
+        let open = fingers(&SkeletalSummaryData { curl: [0.0; 5], splay: [0.2; 4] });
+        assert!(open.bend.iter().flatten().all(|b| *b == 0.0) && open.spread.iter().all(|s| s.abs() < 1e-6));
+        // A point: the index straight, the others closed
+        let point = fingers(&SkeletalSummaryData { curl: [1.0, 0.0, 1.0, 1.0, 1.0], splay: [0.2; 4] });
+        assert!(point.bend[1].iter().all(|b| *b == 0.0));
+        assert!(point.bend[2][0] > 1.4 && point.bend[4][1] > 1.6 && point.bend[0][2] > 0.7);
+        // Wide apart: the index and the little finger go out
+        let wide = fingers(&SkeletalSummaryData { curl: [0.0; 5], splay: [1.0; 4] });
+        assert!(wide.spread[1] < -0.2 && wide.spread[4] > 0.3);
     }
 
     #[test]

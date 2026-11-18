@@ -224,7 +224,7 @@ impl Part {
             Part::HeadTurn => &[Source::IFacialMocap, Source::MeowFace, Source::MediaPipe, Source::SteamVr],
             Part::HeadPosition => &[Source::SteamVr, Source::MediaPipe],
             Part::Arms => &[Source::SteamVr, Source::Leap, Source::MediaPipe],
-            Part::Fingers => &[Source::Leap, Source::MediaPipe],
+            Part::Fingers => &[Source::Leap, Source::MediaPipe, Source::SteamVr],
             Part::LowerBody => &[Source::SteamVr, Source::MediaPipe],
         }
     }
