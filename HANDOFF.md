@@ -110,14 +110,15 @@ MediaPipe notes:
   the key's name, the stronger of clip and tracking wins); a face-only clip
   leaves the idle body motion on. With Blender's "NLA tracks" export, a
   clip is named after its NLA track, not its action.
-- **Also draw 1–3** (source settings): extra GLBs drawn in the same picture,
+- **Also draw 1, 2…** (source settings, as many as added with the "Add a
+  GLB" button, up to 64; each has Remove): extra GLBs drawn in the same picture,
   so the filters cover them too. Each copies the avatar's pose by bone name
   and its shape keys by name (`Follower` in `motion.rs`), keeping its own
   bone lengths and running its own springs. Nothing more (the owner wants
   it simple: a full GLB that mimics the main model). On the GPU they are
-  mesh layers 1–3 (`Gpu::set_extras`). Test file: a skeleton with a box in
+  mesh layers 1, 2… (`Gpu::set_extras`). Test file: a skeleton with a box in
   the right hand, `THEATER_PUPPET_EXTRA_GLB`.
-- **Show and groups**: each GLB slot (0 the avatar, 1–3 Also draw) has a
+- **Show and groups**: each GLB slot (0 the avatar, 1, 2… Also draw) has a
   Show setting, each Also draw a Group name. Of a group, only one shows:
   showing one hides the others; with several set, the first wins
   (`remote::effective` / `remote::showing`). Saved in the source's settings,

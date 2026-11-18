@@ -43,6 +43,8 @@ pub const OBS_GROUP_NORMAL: u32 = 1;
 
 /// A property's "modified" callback: true redraws the properties
 pub type ModifiedCallback = unsafe extern "C" fn(Ptr, Ptr, Ptr) -> bool;
+/// A button's click (properties, the button, the value given with it): true redraws the properties
+pub type ButtonCallback = unsafe extern "C" fn(Ptr, Ptr, Ptr) -> bool;
 pub const OBS_EFFECT_DEFAULT: u32 = 0;
 
 /// libobs's gs_vb_data (vec3 is 16 bytes: an SSE register)
@@ -140,6 +142,10 @@ api! {
     obs_data_set_double: fn(Ptr, *const c_char, f64);
     obs_data_set_string: fn(Ptr, *const c_char, *const c_char);
     obs_data_set_bool: fn(Ptr, *const c_char, bool);
+    obs_data_erase: fn(Ptr, *const c_char);
+    obs_properties_add_button2: fn(Ptr, *const c_char, *const c_char, ButtonCallback, Ptr) -> Ptr;
+    obs_properties_set_param: fn(Ptr, Ptr, Ptr);
+    obs_properties_get_param: fn(Ptr) -> Ptr;
     obs_data_set_int: fn(Ptr, *const c_char, i64);
     obs_source_update: fn(Ptr, Ptr);
     obs_source_enabled: fn(Ptr) -> bool;

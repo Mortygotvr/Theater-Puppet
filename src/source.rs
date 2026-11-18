@@ -24,12 +24,34 @@ const ID: &CStr = c"theater_puppet";
 const NAME: &CStr = c"\u{1F3AD} Theater Puppet";
 
 const S_FILE: &CStr = c"file";
-/// GLBs drawn with the avatar in its picture, copying its pose
-const S_EXTRAS: [&CStr; 3] = [c"extra1", c"extra2", c"extra3"];
-/// Each GLB slot shown (0 the avatar, 1–3 its extras), and the extras' groups
-/// (of a group, only one shows: remote.rs)
-const S_SHOWN: [&CStr; 4] = [c"shown", c"extra1.shown", c"extra2.shown", c"extra3.shown"];
-const S_GROUP: [&CStr; 3] = [c"extra1.group", c"extra2.group", c"extra3.group"];
+/// GLBs drawn with the avatar in its picture, copying its pose ("Also
+/// draw" 1, 2…: as many as added): how many, and each one's file, Show and
+/// group (of a group, only one shows: remote.rs). Slot 0 is the avatar.
+const S_EXTRA_COUNT: &CStr = c"extras";
+/// The most there can be
+const MAX_EXTRAS: usize = 64;
+
+fn extra_key(n: usize) -> CString {
+    cstring(&format!("extra{n}"))
+}
+
+/// Slot `slot`'s Show (0: the avatar's)
+fn shown_key(slot: usize) -> CString {
+    if slot == 0 { cstring("shown") } else { cstring(&format!("extra{slot}.shown")) }
+}
+
+fn group_key(n: usize) -> CString {
+    cstring(&format!("extra{n}.group"))
+}
+
+/// How many Also draw GLBs a source has: its count, or (a source from
+/// before the Add button) its last of extra1–3 with a file
+fn extra_count(settings: Ptr) -> usize {
+    let api = obs::api();
+    let count = unsafe { (api.obs_data_get_int)(settings, S_EXTRA_COUNT.as_ptr()) }.clamp(0, MAX_EXTRAS as i64) as usize;
+    let old = (1..=3).rev().find(|&n| !get_string(settings, &extra_key(n)).is_empty()).unwrap_or(0);
+    count.max(old)
+}
 const S_WIDTH: &CStr = c"width";
 const S_HEIGHT: &CStr = c"height";
 const S_ZOOM: &CStr = c"zoom";
@@ -181,7 +203,7 @@ struct Puppet {
     extra_files: Mutex<Vec<(usize, String)>>,
     extra_generation: Arc<AtomicU64>,
     extra_loaded: Arc<Mutex<Option<(u64, Vec<(usize, Arc<Model>)>)>>>,
-    /// Each loaded extra with its slot (1–3)
+    /// Each loaded extra with its slot (1, 2…)
     extras: Mutex<Vec<(usize, Arc<Model>)>>,
     gpu: Mutex<Option<Gpu>>,
     /// Its skeleton, springs and posed vertices (motion.rs)
@@ -244,8 +266,8 @@ unsafe extern "C" fn get_defaults(settings: Ptr) {
         (api.obs_data_set_default_double)(settings, S_ZOOM.as_ptr(), 1.0);
         (api.obs_data_set_default_double)(settings, S_CENTRE.as_ptr(), 0.0);
         (api.obs_data_set_default_double)(settings, S_YAW.as_ptr(), 0.0);
-        for key in S_SHOWN {
-            (api.obs_data_set_default_bool)(settings, key.as_ptr(), true);
+        for slot in 0..=MAX_EXTRAS {
+            (api.obs_data_set_default_bool)(settings, shown_key(slot).as_ptr(), true);
         }
         for key in S_POSITION {
             (api.obs_data_set_default_double)(settings, key.as_ptr(), 0.0);
@@ -356,6 +378,61 @@ fn read_props(settings: Ptr, props: &[Prop], defaults: &Map, key: impl Fn(&str) 
     map
 }
 
+/// The source a properties window is of (set_param in get_properties)
+unsafe fn properties_source(props: Ptr) -> Ptr {
+    unsafe { (obs::api().obs_properties_get_param)(props) }
+}
+
+/// "Add a GLB": one more Also draw (shown, no group)
+unsafe extern "C" fn add_extra(props: Ptr, _button: Ptr, _data: Ptr) -> bool {
+    let api = obs::api();
+    unsafe {
+        let source = properties_source(props);
+        let settings = if source.is_null() { std::ptr::null_mut() } else { (api.obs_source_get_settings)(source) };
+        if settings.is_null() {
+            return false;
+        }
+        let count = extra_count(settings);
+        if count < MAX_EXTRAS {
+            (api.obs_data_set_int)(settings, S_EXTRA_COUNT.as_ptr(), (count + 1) as i64);
+            (api.obs_data_set_bool)(settings, shown_key(count + 1).as_ptr(), true);
+        }
+        (api.obs_data_release)(settings);
+        (api.obs_source_update)(source, std::ptr::null_mut());
+    }
+    true
+}
+
+/// "Remove" on Also draw `n` (the button's value): the ones after it move up one
+unsafe extern "C" fn remove_extra(props: Ptr, _button: Ptr, data: Ptr) -> bool {
+    let api = obs::api();
+    let n = data as usize;
+    unsafe {
+        let source = properties_source(props);
+        let settings = if source.is_null() { std::ptr::null_mut() } else { (api.obs_source_get_settings)(source) };
+        if settings.is_null() {
+            return false;
+        }
+        let count = extra_count(settings);
+        if (1..=count).contains(&n) {
+            for m in n..count {
+                let file = get_string(settings, &extra_key(m + 1));
+                let group = get_string(settings, &group_key(m + 1));
+                (api.obs_data_set_string)(settings, extra_key(m).as_ptr(), cstring(&file).as_ptr());
+                (api.obs_data_set_string)(settings, group_key(m).as_ptr(), cstring(&group).as_ptr());
+                (api.obs_data_set_bool)(settings, shown_key(m).as_ptr(), (api.obs_data_get_bool)(settings, shown_key(m + 1).as_ptr()));
+            }
+            for key in [extra_key(count), group_key(count), shown_key(count)] {
+                (api.obs_data_erase)(settings, key.as_ptr());
+            }
+            (api.obs_data_set_int)(settings, S_EXTRA_COUNT.as_ptr(), (count - 1) as i64);
+        }
+        (api.obs_data_release)(settings);
+        (api.obs_source_update)(source, std::ptr::null_mut());
+    }
+    true
+}
+
 unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
     let api = obs::api();
     let current: [String; SLOTS] = if data.is_null() {
@@ -367,11 +444,28 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
     unsafe {
         let props = (api.obs_properties_create)();
         (api.obs_properties_add_path)(props, S_FILE.as_ptr(), c"Avatar (GLB from Theater Rig)".as_ptr(), obs::OBS_PATH_FILE, c"glTF avatar (*.glb *.gltf)".as_ptr(), std::ptr::null());
-        for (i, key) in S_EXTRAS.iter().enumerate() {
-            let label = cstring(&format!("Also draw {} (a GLB copying the avatar's pose)", i + 1));
-            (api.obs_properties_add_path)(props, key.as_ptr(), label.as_ptr(), obs::OBS_PATH_FILE, c"glTF (*.glb *.gltf)".as_ptr(), std::ptr::null());
-            (api.obs_properties_add_bool)(props, S_SHOWN[i + 1].as_ptr(), cstring(&format!("Show {}", i + 1)).as_ptr());
-            (api.obs_properties_add_text)(props, S_GROUP[i].as_ptr(), cstring(&format!("Group of {} (only one GLB of a group shows; empty: none)", i + 1)).as_ptr(), obs::OBS_TEXT_DEFAULT);
+        (api.obs_properties_add_bool)(props, shown_key(0).as_ptr(), c"Show the avatar".as_ptr());
+        // The Also draw GLBs: each one's file, Show, group, and a button to remove it
+        if !data.is_null() {
+            let puppet = &*(data as *const Puppet);
+            // The buttons find the source through the properties
+            (api.obs_properties_set_param)(props, puppet.source, std::ptr::null_mut());
+            let settings = (api.obs_source_get_settings)(puppet.source);
+            let count = if settings.is_null() { 0 } else { extra_count(settings) };
+            if !settings.is_null() {
+                (api.obs_data_release)(settings);
+            }
+            for n in 1..=count {
+                let group = (api.obs_properties_create)();
+                (api.obs_properties_add_path)(group, extra_key(n).as_ptr(), c"GLB (copies the avatar's pose)".as_ptr(), obs::OBS_PATH_FILE, c"glTF (*.glb *.gltf)".as_ptr(), std::ptr::null());
+                (api.obs_properties_add_bool)(group, shown_key(n).as_ptr(), c"Show".as_ptr());
+                (api.obs_properties_add_text)(group, group_key(n).as_ptr(), c"Group (only one GLB of a group shows; empty: none)".as_ptr(), obs::OBS_TEXT_DEFAULT);
+                (api.obs_properties_add_button2)(group, cstring(&format!("extra{n}.remove")).as_ptr(), c"Remove".as_ptr(), remove_extra, n as Ptr);
+                (api.obs_properties_add_group)(props, cstring(&format!("extra{n}.group_box")).as_ptr(), cstring(&format!("Also draw {n}")).as_ptr(), obs::OBS_GROUP_NORMAL, group);
+            }
+            if count < MAX_EXTRAS {
+                (api.obs_properties_add_button2)(props, c"extra.add".as_ptr(), c"\u{2795} Add a GLB".as_ptr(), add_extra, std::ptr::null_mut());
+            }
         }
         // Colour slots (Theater Rig's Color<N>): the avatar's and its extras'
         if !data.is_null() {
@@ -684,13 +778,14 @@ unsafe extern "C" fn update(data: Ptr, settings: Ptr) {
     // Which GLBs show, and the extras' groups
     {
         let mut r = puppet.remote.lock().unwrap();
-        r.shown = S_SHOWN.map(|k| unsafe { (api.obs_data_get_bool)(settings, k.as_ptr()) });
-        r.groups = std::array::from_fn(|s| if s == 0 { String::new() } else { get_string(settings, S_GROUP[s - 1]).trim().to_string() });
+        let count = extra_count(settings);
+        r.shown = (0..=count).map(|s| unsafe { (api.obs_data_get_bool)(settings, shown_key(s).as_ptr()) }).collect();
+        r.groups = (0..=count).map(|s| if s == 0 { String::new() } else { get_string(settings, &group_key(s)).trim().to_string() }).collect();
         r.update_hidden();
     }
 
     // The GLBs drawn with it: loaded again when their list changes
-    let extra_files: Vec<(usize, String)> = S_EXTRAS.iter().enumerate().map(|(i, k)| (i + 1, get_string(settings, k))).filter(|(_, f)| !f.is_empty()).collect();
+    let extra_files: Vec<(usize, String)> = (1..=extra_count(settings)).map(|n| (n, get_string(settings, &extra_key(n)))).filter(|(_, f)| !f.is_empty()).collect();
     let mut current_extras = puppet.extra_files.lock().unwrap();
     if *current_extras != extra_files {
         *current_extras = extra_files.clone();
@@ -833,15 +928,15 @@ fn filter_chain(puppet: &Puppet) -> Vec<FilterPass> {
 /// Hands what Control Panel and Scene asked (remote.rs) to the rig, and
 /// tells them what the Puppet has. The Show settings to write (a shape-key
 /// animation ended hiding its GLB), once the locks are let go
-fn sync_remote(puppet: &Puppet, rig: &mut Rig) -> Option<[bool; crate::remote::SLOTS]> {
+fn sync_remote(puppet: &Puppet, rig: &mut Rig) -> Option<Vec<bool>> {
     let mut r = puppet.remote.lock().unwrap();
     let model = rig.model.clone();
     rig.player.sync(&model, &mut r.animation);
     rig.drive_shapes(std::mem::take(&mut r.shapes));
     let mut shown = None;
     for (layer, fade) in std::mem::take(&mut rig.hide) {
-        let now = shown.unwrap_or(r.shown);
-        shown = Some(crate::remote::showing(now, &r.groups, r.slot(layer), false));
+        let now = shown.unwrap_or_else(|| r.shown.clone());
+        shown = Some(crate::remote::showing(&now, &r.groups, r.slot(layer), false));
         r.pending_fade = r.pending_fade.max(fade);
     }
     // Its GLBs (the avatar first) and colour slots, when they changed
@@ -864,15 +959,15 @@ fn sync_remote(puppet: &Puppet, rig: &mut Rig) -> Option<[bool; crate::remote::S
 }
 
 /// Writes the GLB slots' Show settings of a Puppet source
-pub(crate) fn set_shown(source: Ptr, shown: [bool; crate::remote::SLOTS]) {
+pub(crate) fn set_shown(source: Ptr, shown: Vec<bool>) {
     let api = obs::api();
     unsafe {
         let data = (api.obs_data_create)();
         if data.is_null() {
             return;
         }
-        for (key, on) in S_SHOWN.iter().zip(shown) {
-            (api.obs_data_set_bool)(data, key.as_ptr(), on);
+        for (slot, on) in shown.into_iter().enumerate() {
+            (api.obs_data_set_bool)(data, shown_key(slot).as_ptr(), on);
         }
         (api.obs_source_update)(source, data);
         (api.obs_data_release)(data);

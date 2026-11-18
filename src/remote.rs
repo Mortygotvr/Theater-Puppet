@@ -4,7 +4,7 @@
 //!
 //! `theater_puppet_command(in string args, out string json)`, `args` being
 //! JSON with an `action`. `source` names a Puppet ("" or none: every one);
-//! `glb` is which of its GLBs: 0 the avatar, 1–3 its "Also draw" ones, or a
+//! `glb` is which of its GLBs: 0 the avatar, 1, 2… its "Also draw" ones, or a
 //! file's name (without .glb).
 //!
 //! - `list`: every Puppet, its GLBs (name, shape keys, shown), animations,
@@ -145,16 +145,20 @@ pub fn tiled(base: [f32; 4], tiles: &[ActiveTile], layer: usize, material: usize
     any.then_some(st)
 }
 
-/// GLB slots of a source: 0 the avatar, 1–3 its "Also draw" ones
-pub const SLOTS: usize = 4;
+// GLB slots of a source: 0 the avatar, 1, 2… its "Also draw" ones (as many
+// as added). A slot missing from `shown` shows; one missing from `groups` has none.
+
+fn group_of(groups: &[String], s: usize) -> &str {
+    groups.get(s).map(|g| g.trim()).unwrap_or("")
+}
 
 /// Which slots show, the setting `shown` read with the group rule: of a
 /// group's slots set to show, the first does
-pub fn effective(shown: [bool; SLOTS], groups: &[String; SLOTS]) -> [bool; SLOTS] {
-    let mut out = shown;
-    for s in 0..SLOTS {
-        let g = groups[s].trim();
-        if out[s] && !g.is_empty() && (0..s).any(|e| out[e] && groups[e].trim().eq_ignore_ascii_case(g)) {
+pub fn effective(shown: &[bool], groups: &[String]) -> Vec<bool> {
+    let mut out = shown.to_vec();
+    for s in 0..out.len() {
+        let g = group_of(groups, s);
+        if out[s] && !g.is_empty() && (0..s).any(|e| out[e] && group_of(groups, e).eq_ignore_ascii_case(g)) {
             out[s] = false;
         }
     }
@@ -163,13 +167,18 @@ pub fn effective(shown: [bool; SLOTS], groups: &[String; SLOTS]) -> [bool; SLOTS
 
 /// The slots' settings once slot `slot` is shown (`on`) or hidden: showing
 /// one of a group hides the others
-pub fn showing(shown: [bool; SLOTS], groups: &[String; SLOTS], slot: usize, on: bool) -> [bool; SLOTS] {
+pub fn showing(shown: &[bool], groups: &[String], slot: usize, on: bool) -> Vec<bool> {
     let mut out = effective(shown, groups);
+    if out.len() <= slot {
+        out.resize(slot + 1, true);
+    }
     out[slot] = on;
-    let g = groups[slot].trim();
+    let g = group_of(groups, slot);
     if on && !g.is_empty() {
-        for s in (0..SLOTS).filter(|&s| s != slot && groups[s].trim().eq_ignore_ascii_case(g)) {
-            out[s] = false;
+        for s in 0..out.len() {
+            if s != slot && group_of(groups, s).eq_ignore_ascii_case(g) {
+                out[s] = false;
+            }
         }
     }
     out
@@ -184,8 +193,8 @@ pub struct Remote {
     /// Hidden GLBs, by layer (missing: shown): from `shown` and `groups`
     pub hidden: Vec<bool>,
     /// Each slot's Show setting, and its group ("" none): the source's settings
-    pub shown: [bool; SLOTS],
-    pub groups: [String; SLOTS],
+    pub shown: Vec<bool>,
+    pub groups: Vec<String>,
     /// Each layer's slot (a slot whose file didn't load has no layer)
     pub layer_slot: Vec<usize>,
     /// Its GLBs (the avatar first), filled in by the source
@@ -211,38 +220,43 @@ impl Remote {
 
     /// Layer `layer`'s slot
     pub fn slot(&self, layer: usize) -> usize {
-        self.layer_slot.get(layer).copied().unwrap_or(layer).min(SLOTS - 1)
+        self.layer_slot.get(layer).copied().unwrap_or(layer)
     }
 
     /// The Show settings once group `group` shows `pick`: one of its GLBs (a
     /// number or a name), "next" (or nothing), or "none"
-    pub fn in_group(&self, group: &str, pick: Option<&Value>) -> Result<[bool; SLOTS], String> {
+    pub fn in_group(&self, group: &str, pick: Option<&Value>) -> Result<Vec<bool>, String> {
         // The group's GLBs (layers), in order
-        let members: Vec<usize> = (0..self.glbs.len()).filter(|&l| !group.is_empty() && self.groups[self.slot(l)].trim().eq_ignore_ascii_case(group.trim())).collect();
+        let members: Vec<usize> = (0..self.glbs.len()).filter(|&l| !group.is_empty() && group_of(&self.groups, self.slot(l)).eq_ignore_ascii_case(group.trim())).collect();
         if members.is_empty() {
             return Err(format!("no GLB in group \"{group}\""));
         }
-        let current = effective(self.shown, &self.groups);
+        let current = effective(&self.shown, &self.groups);
+        let shows = |s: usize| current.get(s).copied().unwrap_or(true);
         let word = pick.and_then(|v| v.as_str()).unwrap_or("").trim().to_ascii_lowercase();
         Ok(match word.as_str() {
             "none" => {
-                let mut out = current;
+                let mut out = current.clone();
                 for &l in &members {
-                    out[self.slot(l)] = false;
+                    let s = self.slot(l);
+                    if out.len() <= s {
+                        out.resize(s + 1, true);
+                    }
+                    out[s] = false;
                 }
                 out
             }
             "next" | "" => {
-                let now = members.iter().position(|&l| current[self.slot(l)]);
+                let now = members.iter().position(|&l| shows(self.slot(l)));
                 let next = members[now.map_or(0, |i| (i + 1) % members.len())];
-                showing(self.shown, &self.groups, self.slot(next), true)
+                showing(&self.shown, &self.groups, self.slot(next), true)
             }
             _ => {
                 let layer = self.layer(pick)?;
                 if !members.contains(&layer) {
                     return Err(format!("GLB {} isn't in group \"{group}\"", self.glbs[layer].name));
                 }
-                showing(self.shown, &self.groups, self.slot(layer), true)
+                showing(&self.shown, &self.groups, self.slot(layer), true)
             }
         })
     }
@@ -250,8 +264,8 @@ impl Remote {
     /// The layers hidden, from the slots' settings; a layer whose Show
     /// changed fades over `pending_fade`
     pub fn update_hidden(&mut self) {
-        let shown = effective(self.shown, &self.groups);
-        let hidden: Vec<bool> = (0..self.layer_slot.len().max(1)).map(|l| !shown[self.slot(l)]).collect();
+        let shown = effective(&self.shown, &self.groups);
+        let hidden: Vec<bool> = (0..self.layer_slot.len().max(1)).map(|l| !shown.get(self.slot(l)).copied().unwrap_or(true)).collect();
         let n = hidden.len();
         self.fade_seconds.resize(n, 0.0);
         for l in 0..n {
@@ -376,7 +390,7 @@ fn apply(args: &Value, source: Ptr, remote: &Shared) -> Result<(), String> {
 }
 
 /// `apply`'s work; `shown`: the slots' Show settings to write
-fn ask(args: &Value, source: Ptr, remote: &Shared, shown: &mut Option<[bool; SLOTS]>) -> Result<(), String> {
+fn ask(args: &Value, source: Ptr, remote: &Shared, shown: &mut Option<Vec<bool>>) -> Result<(), String> {
     let text = |k: &str| args.get(k).and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
     let action = text("action");
     let fade = number(args, "fade", 0.0, 0.0, 60.0);
@@ -426,7 +440,7 @@ fn ask(args: &Value, source: Ptr, remote: &Shared, shown: &mut Option<[bool; SLO
                     _ => Shape::Up,
                 };
                 if flag(args, "show_at_start") {
-                    *shown = Some(showing(r.shown, &r.groups, r.slot(layer), true));
+                    *shown = Some(showing(&r.shown, &r.groups, r.slot(layer), true));
                 }
                 Some(Drive::Once {
                     from: number(args, "from", 0.0, 0.0, 1.0),
@@ -445,7 +459,7 @@ fn ask(args: &Value, source: Ptr, remote: &Shared, shown: &mut Option<[bool; SLO
                 Some(Value::String(s)) if s.eq_ignore_ascii_case("toggle") => r.is_hidden(layer),
                 _ => flag(args, "visible"),
             };
-            *shown = Some(showing(r.shown, &r.groups, r.slot(layer), on));
+            *shown = Some(showing(&r.shown, &r.groups, r.slot(layer), on));
         }
         "group" => *shown = Some(r.in_group(&text("group"), args.get("glb"))?),
         "tile" => {
@@ -534,12 +548,12 @@ pub fn answer(args: &str) -> String {
             .map(|(_, name, remote)| {
                 let r = remote.lock().unwrap();
                 // The groups its loaded GLBs are in
-                let mut groups: Vec<String> = (0..r.glbs.len()).map(|l| r.groups[r.slot(l)].trim().to_string()).filter(|g| !g.is_empty()).collect();
+                let mut groups: Vec<String> = (0..r.glbs.len()).map(|l| group_of(&r.groups, r.slot(l)).to_string()).filter(|g| !g.is_empty()).collect();
                 groups.sort();
                 groups.dedup();
                 json!({
                     "source": name,
-                    "glbs": r.glbs.iter().enumerate().map(|(i, g)| json!({ "index": i, "name": g.name, "keys": g.keys, "visible": !r.is_hidden(i), "group": r.groups[r.slot(i)],
+                    "glbs": r.glbs.iter().enumerate().map(|(i, g)| json!({ "index": i, "name": g.name, "keys": g.keys, "visible": !r.is_hidden(i), "group": group_of(&r.groups, r.slot(i)),
                         "materials": g.materials, "tiles": g.tiles.iter().map(|t| t.name.clone()).collect::<Vec<_>>(),
                         "tiles_on": r.tiles.iter().filter(|t| t.layer == i).map(|t| if t.name.is_empty() { t.grid.map(|(c, rr, cell)| format!("{}x{} cell {cell}", c, rr)).unwrap_or_default() } else { t.name.clone() }).collect::<Vec<_>>() })).collect::<Vec<_>>(),
                     "groups": groups,
@@ -591,15 +605,17 @@ mod tests {
 
     #[test]
     fn one_glb_of_a_group_shows() {
-        let groups = ["".to_string(), "hats".to_string(), "hats".to_string(), "".to_string()];
-        // Both hats set to show: the first does
-        assert_eq!(effective([true, true, true, true], &groups), [true, true, false, true]);
-        // Showing the second hat hides the first
-        assert_eq!(showing([true, true, false, true], &groups, 2, true), [true, false, true, true]);
+        let groups = vec!["".to_string(), "hats".to_string(), "hats".to_string(), "".to_string(), "hats".to_string()];
+        // Three hats set to show: the first does
+        assert_eq!(effective(&[true, true, true, true, true], &groups), [true, true, false, true, false]);
+        // Showing the third hat hides the others
+        assert_eq!(showing(&[true, true, false, true, false], &groups, 4, true), [true, false, false, true, true]);
         // Hiding one leaves the rest
-        assert_eq!(showing([true, true, false, true], &groups, 1, false), [true, false, false, true]);
+        assert_eq!(showing(&[true, true, false, true, false], &groups, 1, false), [true, false, false, true, false]);
         // No group: nothing else changes
-        assert_eq!(showing([true, true, false, false], &groups, 3, true), [true, true, false, true]);
+        assert_eq!(showing(&[true, true, false, false, false], &groups, 3, true), [true, true, false, true, false]);
+        // A slot past the settings shows (a GLB just added)
+        assert_eq!(showing(&[true], &groups, 2, true), [true, false, true]);
     }
 
     #[test]
@@ -609,21 +625,21 @@ mod tests {
         let mut r = Remote {
             glbs: vec![glb("Armature"), glb("Cap"), glb("Crown")],
             layer_slot: vec![0, 1, 3],
-            shown: [true, true, true, true],
-            groups: ["".into(), "hats".into(), "".into(), "Hats".into()],
+            shown: vec![true, true, true, true],
+            groups: vec!["".into(), "hats".into(), "".into(), "Hats".into()],
             ..Default::default()
         };
         r.update_hidden();
         // Both set to show: the first of the group does
         assert_eq!(r.hidden, vec![false, false, true]);
-        assert_eq!(r.in_group("hats", Some(&json!("crown"))), Ok([true, false, true, true]));
-        assert_eq!(r.in_group("hats", Some(&json!("next"))), Ok([true, false, true, true]));
-        assert_eq!(r.in_group("hats", Some(&json!("none"))), Ok([true, false, true, false]));
+        assert_eq!(r.in_group("hats", Some(&json!("crown"))), Ok(vec![true, false, true, true]));
+        assert_eq!(r.in_group("hats", Some(&json!("next"))), Ok(vec![true, false, true, true]));
+        assert_eq!(r.in_group("hats", Some(&json!("none"))), Ok(vec![true, false, true, false]));
         assert!(r.in_group("hats", Some(&json!("Armature"))).is_err());
         assert!(r.in_group("shoes", None).is_err());
         // From the crown, next wraps to the cap
-        r.shown = [true, false, true, true];
-        assert_eq!(r.in_group("HATS", None), Ok([true, true, true, false]));
+        r.shown = vec![true, false, true, true];
+        assert_eq!(r.in_group("HATS", None), Ok(vec![true, true, true, false]));
     }
 
     #[test]
@@ -641,7 +657,7 @@ mod tests {
 
     #[test]
     fn a_glb_fades_over_its_seconds() {
-        let mut r = Remote { layer_slot: vec![0, 1], shown: [true, true, true, true], ..Default::default() };
+        let mut r = Remote { layer_slot: vec![0, 1], shown: vec![true, true], ..Default::default() };
         r.update_hidden();
         assert_eq!(r.fade, vec![1.0, 1.0]);
         // Hidden with a 0.5 s fade: halfway after a quarter second
