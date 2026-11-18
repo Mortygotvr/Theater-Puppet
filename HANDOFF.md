@@ -103,7 +103,10 @@ MediaPipe notes:
 ## Not merged
 
 - Theater Scene, branch `puppet-body-parts`: aim redeems at Puppet's body
-  parts, report the part hit.
+  parts, report the part hit; Rhai docks' `call_proc`, and other plugins'
+  `data\theater-scripts` loaded. Puppet's "🎯 Puppet Tracking" dock
+  (`theater-scripts/puppet_tracking_dock.rhai`, procedure
+  `theater_puppet_tracking` in `src/tracking/dock.rs`) needs both.
 - Theater Control Panel, branch `fix/reader-moderation-dedup`: the
   double-trigger fix. It is installed, but not merged.
 
