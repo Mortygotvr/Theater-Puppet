@@ -92,6 +92,22 @@ MediaPipe notes:
   whole process tree, and the helper exits when OBS's process is gone. Do not
   go back to watching stdin for that; on Windows it blocked the imports.
 
+## Place and animations
+
+- Each Puppet has Turn and Position (X/Y/Z, metres) settings. Procedure
+  `theater_puppet_place` (`src/place.rs`) reads and sets them, through the
+  source's settings.
+- **Animations come only from Blender** (the owner's decision): clips baked
+  on the avatar's own skeleton, exported in its GLB. Puppet plays them as
+  they are (`src/animation.rs`): a looping one in place of the idle motion
+  (the source's "Animation" setting) and one played once over it. Tracking
+  still goes over both. **Do not build Mixamo/FBX import or retargeting in
+  Puppet**; if retargeting help is ever wanted, it belongs in Theater Rig.
+  Procedure `theater_puppet_animation`. Shape key animation is not played yet.
+- The "🧍 Puppet Place" dock (`theater-scripts/puppet_place_dock.rhai`) has
+  both. A test with a real clip runs when `THEATER_PUPPET_ANIMATED_GLB` points
+  to an export with a "Wave" clip on RightArm.
+
 ## OBS graphics lessons already paid for
 
 - Matrices must be transposed before `gs_effect_set_matrix4`.

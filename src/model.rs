@@ -146,6 +146,8 @@ pub struct Model {
     pub skins: Vec<Skin>,
     /// Every shape key's name, once (a face's ARKit keys, mostly)
     pub morph_names: Vec<String>,
+    /// Its animations, made in Blender (animation.rs)
+    pub clips: Vec<crate::animation::Clip>,
 }
 
 impl Model {
@@ -371,7 +373,8 @@ pub fn load(path: &Path) -> Result<Model, String> {
             m.image = None;
         }
     }
-    Ok(Model { primitives, materials, images: images.into_iter().map(rgba).collect(), min, max, nodes, order, skins, morph_names })
+    let clips = crate::animation::load(&doc, &buffers);
+    Ok(Model { primitives, materials, images: images.into_iter().map(rgba).collect(), min, max, nodes, order, skins, morph_names, clips })
 }
 
 fn material(m: gltf::Material) -> Material {

@@ -2,6 +2,7 @@
 //! (a GLB in the Theater convention: Mixamo bones, spring_ chains, ARKit
 //! shape keys, Color<N> slots). This first version draws it at rest.
 
+pub mod animation;
 pub mod filters;
 pub mod ik;
 pub mod model;
@@ -124,6 +125,7 @@ pub extern "C" fn obs_module_load() -> bool {
     parts::register_procs();
     tracking::dock::register();
     place::register();
+    animation::register();
     // Tracking: its settings window's source, its inputs, its menu item
     tracking::menu::register();
     tracking::start();

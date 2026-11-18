@@ -3,7 +3,9 @@
 //! Turn setting eased in so the hair swings after it), then whatever is
 //! tracked (tracking.rs: the face's shapes, the head, the hands, the
 //! fingers…) through the IK routine (ik.rs), then its spring bones, and the
-//! mesh skinned to it. Runs in the source's video_tick; the GPU takes the
+//! mesh skinned to it. An animation of the avatar's own (animation.rs) takes
+//! the idle motion's place while it plays; the Turn and what's tracked still
+//! go over it. Runs in the source's video_tick; the GPU takes the
 //! vertices in its render.
 
 use std::sync::Arc;
@@ -151,6 +153,8 @@ pub struct Rig {
     /// Where each ARKit shape is among the model's shape keys
     arkit: [Option<usize>; 52],
     followed: Followed,
+    /// The avatar's own animations (animation.rs)
+    pub player: crate::animation::Player,
     /// The next blink, when no face is tracked (seconds on `time`)
     next_blink: f32,
     pub points: Vec<Vec<[f32; 4]>>,
@@ -240,6 +244,7 @@ impl Rig {
             morph,
             arkit,
             followed: Followed::default(),
+            player: Default::default(),
             next_blink: 2.0,
             points,
             normals,
@@ -288,12 +293,16 @@ impl Rig {
 
         let model = self.model.clone();
         let bones = self.bones();
-        let (t, idle) = (self.time, motion.idle.clamp(0.0, 1.0));
         let deg = |d: f32| d.to_radians();
         let turn = Quat::from_rotation_y(deg(self.yaw));
         let head_tracked = self.followed.head_turn.get().map(|(_, w)| w).unwrap_or(0.0);
         let pose = &mut self.pose;
         pose.reset(&model);
+        // An animation playing takes the idle motion's place (fading between them)
+        self.player.step(&model, dt);
+        let animated = self.player.apply(&model, pose);
+        let still = 1.0 - animated;
+        let (t, idle) = (self.time, motion.idle.clamp(0.0, 1.0) * still);
         pose.update_world(&model);
         // Turned at the hips, swaying a little
         if let Some(h) = bones.hips {
@@ -316,7 +325,7 @@ impl Rig {
             pose.update_world(&model);
         }
         // Arms down from the T-pose (the avatar faces +Z, its left is +X)
-        let arms = motion.arms_down + (t * 0.8).sin() * 1.5 * idle;
+        let arms = motion.arms_down * still + (t * 0.8).sin() * 1.5 * idle;
         if let Some(a) = bones.left_arm {
             pose.rotate_in_world(&model, a, turn * Quat::from_rotation_z(-deg(arms)) * turn.inverse());
         }
@@ -504,6 +513,41 @@ mod tests {
         }
         let right = rig2.pose.position(rig2.model.node("RightHand").unwrap());
         assert!((right - Vec3::new(-place.x, place.y, place.z)).length() < 0.01, "mirrored hand at {right:?}");
+    }
+
+    /// THEATER_PUPPET_ANIMATED_GLB=<an export with a clip "Wave" on RightArm>
+    #[test]
+    fn a_clip_from_blender_plays_and_gives_back_the_idle_pose() {
+        let Ok(path) = std::env::var("THEATER_PUPPET_ANIMATED_GLB") else { return };
+        let mut rig = Rig::new(Arc::new(crate::model::load(std::path::Path::new(&path)).unwrap()));
+        let names: Vec<&str> = rig.model.clips.iter().map(|c| c.name.as_str()).collect();
+        println!("clips: {names:?}");
+        assert!(names.contains(&"Wave"));
+        let config = tracking::config::Config::default();
+        let hand = rig.model.node("RightHand").unwrap();
+        rig.step_with(1.0 / 60.0, still(), &Snapshot::default(), &config);
+        let idle = rig.pose.position(hand);
+        let mut control = crate::animation::Control { play: Some("Wave".into()), ..Default::default() };
+        let model = rig.model.clone();
+        rig.player.sync(&model, &mut control);
+        // Half way: the arm at its highest
+        let mut highest = idle;
+        for _ in 0..60 {
+            rig.step_with(1.0 / 60.0, still(), &Snapshot::default(), &config);
+            let p = rig.pose.position(hand);
+            if (p - idle).length() > (highest - idle).length() {
+                highest = p;
+            }
+        }
+        println!("right hand: idle {idle:?}, furthest {highest:?}");
+        assert!((highest - idle).length() > 0.2, "the hand hardly moved");
+        // Played once: back to the idle pose
+        for _ in 0..120 {
+            rig.step_with(1.0 / 60.0, still(), &Snapshot::default(), &config);
+        }
+        assert!((rig.pose.position(hand) - idle).length() < 1e-3);
+        rig.player.sync(&model, &mut control);
+        assert_eq!(control.playing, "");
     }
 
     #[test]

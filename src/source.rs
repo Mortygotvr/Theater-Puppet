@@ -31,6 +31,8 @@ const S_CENTRE: &CStr = c"centre";
 pub(crate) const S_YAW: &CStr = c"yaw";
 /// Where the avatar stands (metres): right, up, towards the camera
 pub(crate) const S_POSITION: [&CStr; 3] = [c"position_x", c"position_y", c"position_z"];
+/// The avatar's own clip looping in place of the idle motion ("" = none)
+pub(crate) const S_ANIMATION: &CStr = c"animation";
 const S_ARMS: &CStr = c"arms_down";
 const S_IDLE: &CStr = c"idle";
 const S_SPRINGS: &CStr = c"springs";
@@ -103,6 +105,8 @@ struct Puppet {
     source: Ptr,
     /// Its body parts map, for Theater Scene (parts.rs)
     parts: crate::parts::Shared,
+    /// Its animations' requests and state (animation.rs)
+    animation: crate::animation::Shared,
     running: Mutex<[Option<Running>; SLOTS]>,
     /// Bumped by each new file, so a slow load that finishes late is dropped
     generation: Arc<AtomicU64>,
@@ -361,6 +365,14 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
         ] {
             (api.obs_properties_add_float_slider)(props, key.as_ptr(), label.as_ptr(), -range, range, 0.01);
         }
+        // The avatar's own animations (made in Blender, in its GLB)
+        let clips: Vec<String> = if data.is_null() { Vec::new() } else { (&*(data as *const Puppet)).animation.lock().unwrap().clips.clone() };
+        let list = (api.obs_properties_add_list)(props, S_ANIMATION.as_ptr(), c"Animation (loops; made in Blender, in the GLB)".as_ptr(), obs::OBS_COMBO_TYPE_LIST, obs::OBS_COMBO_FORMAT_STRING);
+        (api.obs_property_list_add_string)(list, c"(none: idle motion)".as_ptr(), c"".as_ptr());
+        for clip in &clips {
+            let c = cstring(clip);
+            (api.obs_property_list_add_string)(list, c.as_ptr(), c.as_ptr());
+        }
         (api.obs_properties_add_float_slider)(props, S_ARMS.as_ptr(), c"Arms down (degrees from the T-pose)".as_ptr(), 0.0, 85.0, 1.0);
         (api.obs_properties_add_float_slider)(props, S_IDLE.as_ptr(), c"Idle motion".as_ptr(), 0.0, 1.0, 0.01);
         (api.obs_properties_add_bool)(props, S_SPRINGS.as_ptr(), c"Spring bones (hair, skirt…)".as_ptr());
@@ -452,10 +464,13 @@ unsafe extern "C" fn style_changed(props: Ptr, _prop: Ptr, settings: Ptr) -> boo
 unsafe extern "C" fn create(settings: Ptr, source: Ptr) -> Ptr {
     let parts: crate::parts::Shared = Default::default();
     crate::parts::add_source(source, parts.clone());
+    let animation: crate::animation::Shared = Default::default();
+    crate::animation::add_source(source, animation.clone());
     let puppet = Box::new(Puppet {
         styles_read: AtomicU64::new(0),
         source,
         parts,
+        animation,
         width: AtomicU32::new(1080),
         height: AtomicU32::new(1080),
         view: Mutex::new(View { zoom: 1.0, height: 0.0, yaw: 0.0, position: glam::Vec3::ZERO }),
@@ -483,6 +498,7 @@ unsafe extern "C" fn create(settings: Ptr, source: Ptr) -> Ptr {
 unsafe extern "C" fn destroy(data: Ptr) {
     let puppet = unsafe { Box::from_raw(data as *mut Puppet) };
     crate::parts::remove_source(puppet.source);
+    crate::animation::remove_source(puppet.source);
     puppet.generation.fetch_add(1, Ordering::SeqCst);
     let gpu = puppet.gpu.lock().unwrap().take();
     let shader = puppet.shader.lock().unwrap().take();
@@ -537,6 +553,7 @@ unsafe extern "C" fn update(data: Ptr, settings: Ptr) {
             tracked: (api.obs_data_get_bool)(settings, S_TRACKED.as_ptr()),
         };
     }
+    puppet.animation.lock().unwrap().loop_clip = get_string(settings, S_ANIMATION);
     *puppet.slots.lock().unwrap() = std::array::from_fn(|slot| get_string(settings, &slot_setting(slot)));
     puppet.styles_read.store(styles::generation(), Ordering::SeqCst);
     *puppet.style_settings.lock().unwrap() = read_style_settings(settings);
@@ -563,10 +580,11 @@ unsafe extern "C" fn update(data: Ptr, settings: Ptr) {
             let result = model::load(&PathBuf::from(&file));
             match &result {
                 Ok(m) => crate::log(&format!(
-                    "[Puppet] 📦 Loaded {file}: {} meshes, {} materials, {} textures in {} ms",
+                    "[Puppet] 📦 Loaded {file}: {} meshes, {} materials, {} textures, animations [{}] in {} ms",
                     m.primitives.len(),
                     m.materials.len(),
                     m.images.len(),
+                    m.clips.iter().map(|c| format!("{} {:.1}s", c.name, c.duration)).collect::<Vec<_>>().join(", "),
                     started.elapsed().as_millis()
                 )),
                 Err(e) => crate::log(&format!("[Puppet] ⚠️ {e}")),
@@ -662,6 +680,7 @@ unsafe extern "C" fn video_tick(data: Ptr, dt: f32) {
         let started = std::time::Instant::now();
         let mut motion = *puppet.motion.lock().unwrap();
         motion.yaw = puppet.view.lock().unwrap().yaw;
+        rig.player.sync(&rig.model.clone(), &mut puppet.animation.lock().unwrap());
         rig.step(dt, motion);
         crate::timing::tick(started.elapsed());
     }
