@@ -32,13 +32,16 @@ pub struct Motion {
     pub adjust: Adjust,
     /// Whether what's tracked (the Tracking window's inputs) moves this avatar
     pub tracked: bool,
-    /// The controller it holds moved from its place on the chest: up, forward (metres)
+    /// The controller it holds moved from its place on the chest: up (0 =
+    /// the lowest), forward (metres)
     pub controller_offset: [f32; 2],
+    /// The hands on it moved from its grips: up, apart (each side; metres)
+    pub hand_offset: [f32; 2],
 }
 
 impl Default for Motion {
     fn default() -> Self {
-        Motion { arms_down: 65.0, idle: 0.5, yaw: 0.0, springs: true, adjust: Adjust::default(), tracked: true, controller_offset: [0.0, 0.0] }
+        Motion { arms_down: 65.0, idle: 0.5, yaw: 0.0, springs: true, adjust: Adjust::default(), tracked: true, controller_offset: [0.0, 0.0], hand_offset: [0.0, 0.03] }
     }
 }
 
@@ -392,7 +395,7 @@ impl Rig {
             prop.fade(self.pad.is_some(), dt);
             let rest_head = self.skeleton.rest_head();
             let (chest, chest_turn) = self.chest_last.unwrap_or_else(|| (chest_bone.map(|c| turn * self.rest.position(c)).unwrap_or(rest_head * 0.8), turn));
-            prop.place(chest, chest_turn, rest_head.y / 1.5, motion.controller_offset, &self.pad.unwrap_or_default());
+            prop.place(chest, chest_turn, rest_head.y / 1.5, motion.controller_offset, motion.hand_offset, &self.pad.unwrap_or_default());
         }
 
         // What's tracked, over the idle pose

@@ -71,6 +71,9 @@ const S_TRACKED: &CStr = c"tracked";
 /// The controller it holds moved from its place on the chest (metres)
 const S_CONTROLLER_UP: &CStr = c"controller_up";
 const S_CONTROLLER_FORWARD: &CStr = c"controller_forward";
+/// The hands on it moved from its grips: up, apart (each side; metres)
+const S_HAND_UP: &CStr = c"controller_hand_up";
+const S_HAND_APART: &CStr = c"controller_hand_apart";
 
 /// Colour slots (Theater Rig's Color<N>) a source can set
 const COLOR_SLOTS: u32 = 100;
@@ -289,6 +292,7 @@ unsafe extern "C" fn get_defaults(settings: Ptr) {
         (api.obs_data_set_default_double)(settings, S_IDLE.as_ptr(), m.idle as f64);
         (api.obs_data_set_default_bool)(settings, S_SPRINGS.as_ptr(), m.springs);
         (api.obs_data_set_default_bool)(settings, S_TRACKED.as_ptr(), m.tracked);
+        (api.obs_data_set_default_double)(settings, S_HAND_APART.as_ptr(), m.hand_offset[1] as f64);
         for kind in 0..KINDS.len() {
             for what in TUNING {
                 (api.obs_data_set_default_double)(settings, tune_key(kind, what).as_ptr(), 1.0);
@@ -478,8 +482,10 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
             if count < MAX_EXTRAS {
                 (api.obs_properties_add_button2)(props, c"extra.add".as_ptr(), c"\u{2795} Add a GLB".as_ptr(), add_extra, std::ptr::null_mut());
             }
-            (api.obs_properties_add_float_slider)(props, S_CONTROLLER_UP.as_ptr(), c"Controller: lower (-) or higher (+), metres".as_ptr(), -0.3, 0.3, 0.01);
+            (api.obs_properties_add_float_slider)(props, S_CONTROLLER_UP.as_ptr(), c"Controller: height (0 = the lowest), metres".as_ptr(), 0.0, 0.4, 0.01);
             (api.obs_properties_add_float_slider)(props, S_CONTROLLER_FORWARD.as_ptr(), c"Controller: closer (-) or farther (+), metres".as_ptr(), -0.2, 0.3, 0.01);
+            (api.obs_properties_add_float_slider)(props, S_HAND_UP.as_ptr(), c"Controller: hands lower (-) or higher (+), metres".as_ptr(), -0.1, 0.15, 0.005);
+            (api.obs_properties_add_float_slider)(props, S_HAND_APART.as_ptr(), c"Controller: hands closer (-) or wider (+), metres each".as_ptr(), -0.05, 0.15, 0.005);
             (api.obs_properties_add_path)(props, S_CONTROLLER_MODEL.as_ptr(), c"Controller it holds (when Arms are on the Controller input; empty: the built-in one)".as_ptr(), obs::OBS_PATH_FILE, c"glTF (*.glb *.gltf)".as_ptr(), std::ptr::null());
         }
         // Colour slots (Theater Rig's Color<N>): the avatar's and its extras'
@@ -780,7 +786,8 @@ unsafe extern "C" fn update(data: Ptr, settings: Ptr) {
             springs: (api.obs_data_get_bool)(settings, S_SPRINGS.as_ptr()),
             adjust: read_adjust(settings),
             tracked: (api.obs_data_get_bool)(settings, S_TRACKED.as_ptr()),
-            controller_offset: [(api.obs_data_get_double)(settings, S_CONTROLLER_UP.as_ptr()) as f32, (api.obs_data_get_double)(settings, S_CONTROLLER_FORWARD.as_ptr()) as f32],
+            controller_offset: [(api.obs_data_get_double)(settings, S_CONTROLLER_UP.as_ptr()).max(0.0) as f32, (api.obs_data_get_double)(settings, S_CONTROLLER_FORWARD.as_ptr()) as f32],
+            hand_offset: [(api.obs_data_get_double)(settings, S_HAND_UP.as_ptr()) as f32, (api.obs_data_get_double)(settings, S_HAND_APART.as_ptr()) as f32],
         };
     }
     puppet.remote.lock().unwrap().animation.loop_clip = get_string(settings, S_ANIMATION);
