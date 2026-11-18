@@ -155,6 +155,8 @@ pub struct Rig {
     followed: Followed,
     /// The avatar's own animations (animation.rs)
     pub player: crate::animation::Player,
+    /// The GLBs drawn with it, copying its pose
+    pub followers: Vec<Follower>,
     /// The next blink, when no face is tracked (seconds on `time`)
     next_blink: f32,
     pub points: Vec<Vec<[f32; 4]>>,
@@ -245,6 +247,7 @@ impl Rig {
             arkit,
             followed: Followed::default(),
             player: Default::default(),
+            followers: Vec::new(),
             next_blink: 2.0,
             points,
             normals,
@@ -352,6 +355,14 @@ impl Rig {
         }
         pose::skin(&model, pose, &self.morph, &mut self.points, &mut self.normals);
         self.dirty = true;
+        for f in &mut self.followers {
+            f.follow(&model, &self.rest, &self.pose, &self.morph, dt, &motion);
+        }
+    }
+
+    /// The GLBs drawn with the avatar (each copies its pose), in place of the ones before
+    pub fn set_extras(&mut self, models: &[Arc<Model>]) {
+        self.followers = models.iter().map(|m| Follower::new(m.clone(), &self.model)).collect();
     }
 
     /// Follows what's tracked: smoothed, each part fading in and out
@@ -447,6 +458,80 @@ impl Rig {
         // The avatar's own animations' shape keys
         let model = self.model.clone();
         self.player.apply_shapes(&model, &mut self.morph);
+    }
+}
+
+/// A GLB drawn with the avatar, in the same picture (so under the same
+/// filters), copying its pose: each bone turns as the avatar's bone of the
+/// same name turns, each shape key follows the avatar's of the same name.
+/// Its own bone lengths are kept; its spring bones swing by themselves.
+pub struct Follower {
+    pub model: Arc<Model>,
+    pose: Pose,
+    rest: Pose,
+    /// Each of its nodes' node in the avatar (the same name)
+    from: Vec<Option<usize>>,
+    /// Each of its shape keys' in the avatar
+    morph_from: Vec<Option<usize>>,
+    morph: Vec<f32>,
+    springs: Springs,
+    settled: bool,
+    pub points: Vec<Vec<[f32; 4]>>,
+    pub normals: Vec<Vec<[f32; 4]>>,
+    pub dirty: bool,
+}
+
+impl Follower {
+    pub fn new(model: Arc<Model>, main: &Model) -> Follower {
+        let pose = Pose::rest(&model);
+        let from = model.nodes.iter().map(|n| main.node(n.name.strip_prefix("mixamorig:").unwrap_or(&n.name))).collect();
+        let morph_from = model.morph_names.iter().map(|n| main.morph(n)).collect();
+        let springs = Springs::new(&model, &pose);
+        Follower {
+            points: model.primitives.iter().map(|p| vec![[0.0; 4]; p.positions.len()]).collect(),
+            normals: model.primitives.iter().map(|p| vec![[0.0; 4]; p.positions.len()]).collect(),
+            morph: vec![0.0; model.morph_names.len()],
+            rest: pose.clone(),
+            pose,
+            from,
+            morph_from,
+            springs,
+            settled: false,
+            dirty: false,
+            model,
+        }
+    }
+
+    /// Takes the avatar's pose (`main_pose`, from `main_rest`) and shape keys
+    pub fn follow(&mut self, main: &Model, main_rest: &Pose, main_pose: &Pose, main_morph: &[f32], dt: f32, motion: &Motion) {
+        let model = self.model.clone();
+        let pose = &mut self.pose;
+        pose.reset(&model);
+        for (i, from) in self.from.iter().enumerate() {
+            let Some(j) = *from else { continue };
+            if j >= main.nodes.len() {
+                continue;
+            }
+            // How the avatar's bone moved from its rest, on this one's rest
+            pose.rotation[i] = (main_pose.rotation[j] * main_rest.rotation[j].inverse() * self.rest.rotation[i]).normalize();
+            pose.translation[i] = self.rest.translation[i] + (main_pose.translation[j] - main_rest.translation[j]);
+            pose.scale[i] = self.rest.scale[i] * main_pose.scale[j] / main_rest.scale[j].max(Vec3::splat(1e-6));
+        }
+        pose.update_world(&model);
+        if motion.springs {
+            if !self.settled {
+                self.springs.reset(pose);
+                self.settled = true;
+            }
+            self.springs.step(&model, pose, dt, &motion.adjust);
+        } else {
+            self.settled = false;
+        }
+        for (k, from) in self.morph_from.iter().enumerate() {
+            self.morph[k] = from.and_then(|m| main_morph.get(m).copied()).unwrap_or(0.0);
+        }
+        pose::skin(&model, pose, &self.morph, &mut self.points, &mut self.normals);
+        self.dirty = true;
     }
 }
 
@@ -564,6 +649,48 @@ mod tests {
             println!("Fcl_MTH_Fun at most {most}");
             assert!(most > 0.5, "the smile hardly showed ({most})");
             assert_eq!(rig.morph[smile], 0.0);
+        }
+    }
+
+    #[test]
+    fn a_glb_drawn_with_it_copies_its_pose_and_face() {
+        let Some(mut rig) = rig() else { return };
+        // The same avatar as its own follower: it must land exactly on it
+        let same = rig.model.clone();
+        rig.set_extras(&[same]);
+        let config = tracking::config::Config { smoothing: 0.0, user_height: rig.skeleton.rest_head().y / 0.87, ..Default::default() };
+        let place = Vec3::new(0.2, rig.skeleton.rest_head().y - 0.3, 0.3);
+        let mut shapes = [0.0; 52];
+        shapes[tracking::arkit_index("jawOpen").unwrap()] = 1.0;
+        let tracked = Snapshot { left_hand: Some(Target { position: place, rotation: Quat::IDENTITY }), shapes: Some(shapes), ..Default::default() };
+        let motion = Motion { yaw: 30.0, springs: false, ..Motion::default() };
+        for _ in 0..30 {
+            rig.step_with(1.0 / 60.0, motion, &tracked, &config);
+        }
+        let hand = rig.model.node("LeftHand").unwrap();
+        let f = &rig.followers[0];
+        assert!((f.pose.position(hand) - rig.pose.position(hand)).length() < 1e-4);
+        assert_eq!(f.morph, rig.morph);
+        let most = rig.points.iter().zip(&f.points).flat_map(|(a, b)| a.iter().zip(b).map(|(p, q)| (Vec3::from_slice(&p[..3]) - Vec3::from_slice(&q[..3])).length())).fold(0.0, f32::max);
+        assert!(most < 1e-4, "a vertex is {most} off");
+
+        // THEATER_PUPPET_EXTRA_GLB: the skeleton with a box held in the right
+        // hand (bone-parented): the box goes where the hand goes
+        if let Ok(path) = std::env::var("THEATER_PUPPET_EXTRA_GLB") {
+            let boxed = Arc::new(crate::model::load(std::path::Path::new(&path)).unwrap());
+            rig.set_extras(&[boxed]);
+            let still_box = Motion { springs: false, idle: 0.0, ..Motion::default() };
+            rig.step_with(1.0 / 60.0, still_box, &Snapshot::default(), &config);
+            let centre = |pts: &Vec<Vec<[f32; 4]>>| pts.iter().flatten().fold(Vec3::ZERO, |a, p| a + Vec3::from_slice(&p[..3])) / pts.iter().map(Vec::len).sum::<usize>() as f32;
+            let right = rig.model.node("RightHand").unwrap();
+            let before = centre(&rig.followers[0].points) - rig.pose.position(right);
+            let reach = Snapshot { right_hand: Some(Target { position: Vec3::new(-0.3, rig.skeleton.rest_head().y, 0.35), rotation: Quat::IDENTITY }), ..Default::default() };
+            for _ in 0..30 {
+                rig.step_with(1.0 / 60.0, still_box, &reach, &config);
+            }
+            let after = centre(&rig.followers[0].points) - rig.pose.position(right);
+            println!("box from the hand: before {before:?}, after the hand moved {after:?}");
+            assert!(before.length() < 0.1 && after.length() < 0.1, "the box isn't in the hand");
         }
     }
 

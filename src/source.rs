@@ -24,6 +24,8 @@ const ID: &CStr = c"theater_puppet";
 const NAME: &CStr = c"\u{1F3AD} Theater Puppet";
 
 const S_FILE: &CStr = c"file";
+/// GLBs drawn with the avatar in its picture, copying its pose
+const S_EXTRAS: [&CStr; 3] = [c"extra1", c"extra2", c"extra3"];
 const S_WIDTH: &CStr = c"width";
 const S_HEIGHT: &CStr = c"height";
 const S_ZOOM: &CStr = c"zoom";
@@ -111,6 +113,12 @@ struct Puppet {
     /// Bumped by each new file, so a slow load that finishes late is dropped
     generation: Arc<AtomicU64>,
     loaded: Arc<Mutex<Option<(u64, Result<Model, String>)>>>,
+    /// The GLBs drawn with it: their files, the latest load (bumped like
+    /// `generation`), what's loaded, and whether the GPU and rig have them yet
+    extra_files: Mutex<Vec<String>>,
+    extra_generation: Arc<AtomicU64>,
+    extra_loaded: Arc<Mutex<Option<(u64, Vec<Arc<Model>>)>>>,
+    extras: Mutex<Vec<Arc<Model>>>,
     gpu: Mutex<Option<Gpu>>,
     /// Its skeleton, springs and posed vertices (motion.rs)
     rig: Mutex<Option<Rig>>,
@@ -292,6 +300,10 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
     unsafe {
         let props = (api.obs_properties_create)();
         (api.obs_properties_add_path)(props, S_FILE.as_ptr(), c"Avatar (GLB from Theater Rig)".as_ptr(), obs::OBS_PATH_FILE, c"glTF avatar (*.glb *.gltf)".as_ptr(), std::ptr::null());
+        for (i, key) in S_EXTRAS.iter().enumerate() {
+            let label = cstring(&format!("Also draw {} (a GLB copying the avatar's pose)", i + 1));
+            (api.obs_properties_add_path)(props, key.as_ptr(), label.as_ptr(), obs::OBS_PATH_FILE, c"glTF (*.glb *.gltf)".as_ptr(), std::ptr::null());
+        }
         (api.obs_properties_add_text)(
             props,
             c"styles_order".as_ptr(),
@@ -480,6 +492,10 @@ unsafe extern "C" fn create(settings: Ptr, source: Ptr) -> Ptr {
         running: Mutex::new(Default::default()),
         generation: Arc::new(AtomicU64::new(0)),
         loaded: Arc::new(Mutex::new(None)),
+        extra_files: Mutex::new(Vec::new()),
+        extra_generation: Arc::new(AtomicU64::new(0)),
+        extra_loaded: Arc::new(Mutex::new(None)),
+        extras: Mutex::new(Vec::new()),
         gpu: Mutex::new(None),
         rig: Mutex::new(None),
         motion: Mutex::new(Motion::default()),
@@ -560,6 +576,37 @@ unsafe extern "C" fn update(data: Ptr, settings: Ptr) {
     *puppet.filter_slots.lock().unwrap() = std::array::from_fn(|slot| get_string(settings, &filter_slot_setting(slot)));
     puppet.filters_read.store(filters::generation(), Ordering::SeqCst);
     *puppet.filter_settings.lock().unwrap() = read_filter_settings(settings);
+
+    // The GLBs drawn with it: loaded again when their list changes
+    let extra_files: Vec<String> = S_EXTRAS.iter().map(|k| get_string(settings, k)).filter(|f| !f.is_empty()).collect();
+    let mut current_extras = puppet.extra_files.lock().unwrap();
+    if *current_extras != extra_files {
+        *current_extras = extra_files.clone();
+        let generation = puppet.extra_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let (loaded, latest) = (puppet.extra_loaded.clone(), puppet.extra_generation.clone());
+        std::thread::Builder::new()
+            .name("theater-puppet-load-extras".into())
+            .spawn(move || {
+                let models: Vec<Arc<Model>> = extra_files
+                    .iter()
+                    .filter_map(|file| match model::load(&PathBuf::from(file)) {
+                        Ok(m) => {
+                            crate::log(&format!("[Puppet] 📦 Also drawn: {file}: {} meshes, {} materials", m.primitives.len(), m.materials.len()));
+                            Some(Arc::new(m))
+                        }
+                        Err(e) => {
+                            crate::log(&format!("[Puppet] ⚠️ {e}"));
+                            None
+                        }
+                    })
+                    .collect();
+                if latest.load(Ordering::SeqCst) == generation {
+                    *loaded.lock().unwrap() = Some((generation, models));
+                }
+            })
+            .ok();
+    }
+    drop(current_extras);
 
     let file = get_string(settings, S_FILE);
     let mut current = puppet.file.lock().unwrap();
@@ -771,8 +818,17 @@ fn stack(running: &[Option<Running>; SLOTS]) -> (String, String, Frame) {
 unsafe extern "C" fn video_render(data: Ptr, _effect: Ptr) {
     let puppet = unsafe { &*(data as *const Puppet) };
     let mut gpu = puppet.gpu.lock().unwrap();
+    // The GLBs drawn with it, newly loaded
+    let mut extras_changed = false;
+    if let Some((generation, models)) = puppet.extra_loaded.lock().unwrap().take() {
+        if generation == puppet.extra_generation.load(Ordering::SeqCst) {
+            *puppet.extras.lock().unwrap() = models;
+            extras_changed = true;
+        }
+    }
     // A newly loaded file replaces what's on the GPU
     if let Some((generation, result)) = puppet.loaded.lock().unwrap().take() {
+        extras_changed = true;
         if generation == puppet.generation.load(Ordering::SeqCst) {
             if let Some(old) = gpu.take() {
                 old.destroy();
@@ -787,13 +843,29 @@ unsafe extern "C" fn video_render(data: Ptr, _effect: Ptr) {
             }
         }
     }
+    // The GPU and the rig take the GLBs drawn with it (a new avatar too)
+    if extras_changed {
+        let extras = puppet.extras.lock().unwrap().clone();
+        if let Some(g) = gpu.as_mut() {
+            g.set_extras(&extras);
+        }
+        if let Some(rig) = puppet.rig.lock().unwrap().as_mut() {
+            rig.set_extras(&extras);
+        }
+    }
     let Some(g) = gpu.as_ref() else { return };
     let timing = crate::timing::begin_render();
     // This frame's pose
     if let Some(rig) = puppet.rig.lock().unwrap().as_mut() {
         if rig.dirty {
-            g.update_vertices(&rig.points, &rig.normals);
+            g.update_vertices(0, &rig.points, &rig.normals);
             rig.dirty = false;
+        }
+        for (i, f) in rig.followers.iter_mut().enumerate() {
+            if f.dirty {
+                g.update_vertices(i + 1, &f.points, &f.normals);
+                f.dirty = false;
+            }
         }
     }
 

@@ -261,12 +261,65 @@ struct Mesh {
     /// Its primitive in the model (the posed vertices come per primitive)
     prim: usize,
     vertices: usize,
+    /// Its model: 0 the avatar, then the GLBs drawn with it (set_extras)
+    layer: usize,
+}
+
+/// A model's meshes, textures and materials on the GPU, as layer `layer`
+/// (its materials' and textures' places after `materials` and `textures`)
+fn upload_meshes(model: &Model, layer: usize, materials: usize, textures: usize) -> (Vec<Mesh>, Vec<Ptr>, Vec<Material>) {
+    let api = obs::api();
+    let new_textures = model
+        .images
+        .iter()
+        .map(|img| {
+            let data = img.rgba.as_ptr();
+            unsafe { (api.gs_texture_create)(img.width, img.height, obs::GS_RGBA, 1, &data, 0) }
+        })
+        .collect();
+    let new_materials = model.materials.iter().map(|m| Material { image: m.image.map(|i| i + textures), ..m.clone() }).collect();
+    let mut meshes = Vec::new();
+    for (prim, p) in model.primitives.iter().enumerate() {
+        let n = p.positions.len();
+        let points: Vec<[f32; 4]> = p.positions.iter().map(|v| [v[0], v[1], v[2], 0.0]).collect();
+        let normals: Vec<[f32; 4]> = p.normals.iter().map(|v| [v[0], v[1], v[2], 0.0]).collect();
+        let vb = unsafe {
+            // libobs's gs_vbdata_create is an inline bzalloc: the same here
+            let data = (api.bmalloc)(std::mem::size_of::<obs::VbData>()) as *mut obs::VbData;
+            std::ptr::write_bytes(data, 0, 1);
+            (*data).num = n;
+            (*data).points = obs_copy(&points);
+            (*data).normals = obs_copy(&normals);
+            // TEXCOORD0: the UVs; TEXCOORD1–3: the body part, one channel
+            // each (the Parts pass). Not one number: across a triangle
+            // from torso (0) to leg (6) it would pass through 1–5
+            (*data).num_tex = 4;
+            let tv = obs_copy(&[obs::TVertArray { width: 2, array: std::ptr::null_mut() }, obs::TVertArray { width: 4, array: std::ptr::null_mut() }, obs::TVertArray { width: 4, array: std::ptr::null_mut() }, obs::TVertArray { width: 4, array: std::ptr::null_mut() }]);
+            (*tv).array = obs_copy(&p.uvs) as *mut _;
+            for group in 0..3 {
+                let channels: Vec<[f32; 4]> = p.parts.iter().map(|&k| std::array::from_fn(|c| if k as usize == group * 4 + c { 1.0 } else { 0.0 })).collect();
+                (*tv.add(1 + group)).array = obs_copy(&channels) as *mut _;
+            }
+            (*data).tvarray = tv;
+            // Dynamic: re-posed every frame (update_vertices)
+            (api.gs_vertexbuffer_create)(data, obs::GS_DYNAMIC)
+        };
+        let ib = unsafe { (api.gs_indexbuffer_create)(obs::GS_UNSIGNED_LONG, obs_copy(&p.indices) as *mut _, p.indices.len(), 0) };
+        if vb.is_null() || ib.is_null() {
+            continue;
+        }
+        meshes.push(Mesh { vb, ib, count: p.indices.len() as u32, material: p.material + materials, prim, vertices: n, layer });
+    }
+    (meshes, new_textures, new_materials)
 }
 
 pub struct Gpu {
     meshes: Vec<Mesh>,
     textures: Vec<Ptr>,
     materials: Vec<Material>,
+    /// The avatar's own (the extras' follow them)
+    main_materials: usize,
+    main_textures: usize,
     target: Ptr,
     /// The ink pass: normals and distances, then the picture with its lines
     gbuf: Ptr,
@@ -342,47 +395,7 @@ impl Gpu {
     /// Uploads the model. Call on the graphics thread.
     pub fn upload(model: &Model) -> Result<Gpu, String> {
         let api = obs::api();
-        let textures = model
-            .images
-            .iter()
-            .map(|img| {
-                let data = img.rgba.as_ptr();
-                unsafe { (api.gs_texture_create)(img.width, img.height, obs::GS_RGBA, 1, &data, 0) }
-            })
-            .collect();
-
-        let mut meshes = Vec::new();
-        for (prim, p) in model.primitives.iter().enumerate() {
-            let n = p.positions.len();
-            let points: Vec<[f32; 4]> = p.positions.iter().map(|v| [v[0], v[1], v[2], 0.0]).collect();
-            let normals: Vec<[f32; 4]> = p.normals.iter().map(|v| [v[0], v[1], v[2], 0.0]).collect();
-            let vb = unsafe {
-                // libobs's gs_vbdata_create is an inline bzalloc: the same here
-                let data = (api.bmalloc)(std::mem::size_of::<obs::VbData>()) as *mut obs::VbData;
-                std::ptr::write_bytes(data, 0, 1);
-                (*data).num = n;
-                (*data).points = obs_copy(&points);
-                (*data).normals = obs_copy(&normals);
-                // TEXCOORD0: the UVs; TEXCOORD1–3: the body part, one channel
-                // each (the Parts pass). Not one number: across a triangle
-                // from torso (0) to leg (6) it would pass through 1–5
-                (*data).num_tex = 4;
-                let tv = obs_copy(&[obs::TVertArray { width: 2, array: std::ptr::null_mut() }, obs::TVertArray { width: 4, array: std::ptr::null_mut() }, obs::TVertArray { width: 4, array: std::ptr::null_mut() }, obs::TVertArray { width: 4, array: std::ptr::null_mut() }]);
-                (*tv).array = obs_copy(&p.uvs) as *mut _;
-                for group in 0..3 {
-                    let channels: Vec<[f32; 4]> = p.parts.iter().map(|&k| std::array::from_fn(|c| if k as usize == group * 4 + c { 1.0 } else { 0.0 })).collect();
-                    (*tv.add(1 + group)).array = obs_copy(&channels) as *mut _;
-                }
-                (*data).tvarray = tv;
-                // Dynamic: re-posed every frame (update_vertices)
-                (api.gs_vertexbuffer_create)(data, obs::GS_DYNAMIC)
-            };
-            let ib = unsafe { (api.gs_indexbuffer_create)(obs::GS_UNSIGNED_LONG, obs_copy(&p.indices) as *mut _, p.indices.len(), 0) };
-            if vb.is_null() || ib.is_null() {
-                continue;
-            }
-            meshes.push(Mesh { vb, ib, count: p.indices.len() as u32, material: p.material, prim, vertices: n });
-        }
+        let (meshes, textures, materials) = upload_meshes(model, 0, 0, 0);
         let target = unsafe { (api.gs_texrender_create)(obs::GS_RGBA, obs::GS_Z24_S8) };
         if target.is_null() {
             return Err("no off-screen texture".into());
@@ -404,8 +417,10 @@ impl Gpu {
         };
         Ok(Gpu {
             meshes,
+            main_materials: materials.len(),
+            main_textures: textures.len(),
             textures,
-            materials: model.materials.clone(),
+            materials,
             target,
             gbuf,
             inked,
@@ -548,11 +563,35 @@ impl Gpu {
         }
     }
 
-    /// The posed vertices (pose::skin's, per primitive) into the GPU's
-    /// buffers. Call on the graphics thread.
-    pub fn update_vertices(&self, points: &[Vec<[f32; 4]>], normals: &[Vec<[f32; 4]>]) {
+    /// The GLBs drawn with the avatar, in the same picture (layers 1, 2…),
+    /// in place of the ones before. Call on the graphics thread.
+    pub fn set_extras(&mut self, models: &[std::sync::Arc<Model>]) {
         let api = obs::api();
-        for mesh in &self.meshes {
+        let (keep, old): (Vec<Mesh>, Vec<Mesh>) = std::mem::take(&mut self.meshes).into_iter().partition(|m| m.layer == 0);
+        self.meshes = keep;
+        unsafe {
+            for m in old {
+                (api.gs_vertexbuffer_destroy)(m.vb);
+                (api.gs_indexbuffer_destroy)(m.ib);
+            }
+            for t in self.textures.drain(self.main_textures..).filter(|t| !t.is_null()) {
+                (api.gs_texture_destroy)(t);
+            }
+        }
+        self.materials.truncate(self.main_materials);
+        for (i, model) in models.iter().enumerate() {
+            let (meshes, textures, materials) = upload_meshes(model, i + 1, self.materials.len(), self.textures.len());
+            self.meshes.extend(meshes);
+            self.textures.extend(textures);
+            self.materials.extend(materials);
+        }
+    }
+
+    /// Layer `layer`'s posed vertices (pose::skin's, per primitive) into the
+    /// GPU's buffers. Call on the graphics thread.
+    pub fn update_vertices(&self, layer: usize, points: &[Vec<[f32; 4]>], normals: &[Vec<[f32; 4]>]) {
+        let api = obs::api();
+        for mesh in self.meshes.iter().filter(|m| m.layer == layer) {
             let (Some(p), Some(n)) = (points.get(mesh.prim), normals.get(mesh.prim)) else { continue };
             if p.len() != mesh.vertices || n.len() != mesh.vertices {
                 continue;

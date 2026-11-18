@@ -107,6 +107,13 @@ MediaPipe notes:
   the key's name, the stronger of clip and tracking wins); a face-only clip
   leaves the idle body motion on. With Blender's "NLA tracks" export, a
   clip is named after its NLA track, not its action.
+- **Also draw 1–3** (source settings): extra GLBs drawn in the same picture,
+  so the filters cover them too. Each copies the avatar's pose by bone name
+  and its shape keys by name (`Follower` in `motion.rs`), keeping its own
+  bone lengths and running its own springs. Nothing more (the owner wants
+  it simple: a full GLB that mimics the main model). On the GPU they are
+  mesh layers 1–3 (`Gpu::set_extras`). Test file: a skeleton with a box in
+  the right hand, `THEATER_PUPPET_EXTRA_GLB`.
 - The "🧍 Puppet Place" dock (`theater-scripts/puppet_place_dock.rhai`) has
   both. A test with a real clip runs when `THEATER_PUPPET_ANIMATED_GLB` points
   to an export with a "Wave" clip on RightArm.
