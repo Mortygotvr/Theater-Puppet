@@ -32,11 +32,13 @@ pub struct Motion {
     pub adjust: Adjust,
     /// Whether what's tracked (the Tracking window's inputs) moves this avatar
     pub tracked: bool,
+    /// The controller it holds moved from its place on the chest: up, forward (metres)
+    pub controller_offset: [f32; 2],
 }
 
 impl Default for Motion {
     fn default() -> Self {
-        Motion { arms_down: 65.0, idle: 0.5, yaw: 0.0, springs: true, adjust: Adjust::default(), tracked: true }
+        Motion { arms_down: 65.0, idle: 0.5, yaw: 0.0, springs: true, adjust: Adjust::default(), tracked: true, controller_offset: [0.0, 0.0] }
     }
 }
 
@@ -166,6 +168,9 @@ pub struct Rig {
     pub prop: Option<crate::controller::Prop>,
     /// The controller's state, while it's held
     pad: Option<crate::tracking::gamepad::Pad>,
+    /// The chest as the last frame left it (where, how turned from rest):
+    /// the controller is bound to it
+    chest_last: Option<(Vec3, Quat)>,
     /// The next blink, when no face is tracked (seconds on `time`)
     next_blink: f32,
     pub points: Vec<Vec<[f32; 4]>>,
@@ -261,6 +266,7 @@ impl Rig {
             hide: Vec::new(),
             prop: None,
             pad: None,
+            chest_last: None,
             next_blink: 2.0,
             points,
             normals,
@@ -379,12 +385,14 @@ impl Rig {
         }
         pose.update_world(&model);
 
-        // The controller held: where it is (coming into the hands, or going)
+        // The controller held: bound to the chest as the last frame left it
+        // (the arms then reach it), coming into the hands or going
+        let chest_bone = model.node("Spine2").or(bones.spine1);
         if let Some(prop) = self.prop.as_mut() {
             prop.fade(self.pad.is_some(), dt);
             let rest_head = self.skeleton.rest_head();
-            let chest = bones.spine1.map(|s| self.rest.position(s)).unwrap_or(rest_head * 0.75);
-            prop.place(chest, rest_head.y / 1.5, turn, &self.pad.unwrap_or_default());
+            let (chest, chest_turn) = self.chest_last.unwrap_or_else(|| (chest_bone.map(|c| turn * self.rest.position(c)).unwrap_or(rest_head * 0.8), turn));
+            prop.place(chest, chest_turn, rest_head.y / 1.5, motion.controller_offset, &self.pad.unwrap_or_default());
         }
 
         // What's tracked, over the idle pose
@@ -411,6 +419,8 @@ impl Rig {
         if let Some(prop) = self.prop.as_mut().filter(|p| p.weight > 0.0) {
             prop.pose_parts(&self.pad.unwrap_or_default());
         }
+        // The chest now, for the controller next frame
+        self.chest_last = chest_bone.map(|c| (self.pose.position(c), self.pose.world_rotation(c) * self.rest.world_rotation(c).inverse()));
     }
 
     /// The controller it holds while its Arms are on the Controller input (None: none)

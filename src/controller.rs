@@ -92,16 +92,17 @@ impl Prop {
         self.weight = if held { (self.weight + d).min(1.0) } else { (self.weight - d).max(0.0) };
     }
 
-    /// Where it is: in front of the belly (`chest`: the avatar's chest, its
-    /// space, unturned; `size`: the avatar's scale, 1 for a grown-up),
-    /// tilted toward the face, turned with the body (`turn`), swaying a
-    /// little with the left stick
-    pub fn place(&mut self, chest: Vec3, size: f32, turn: Quat, pad: &Pad) {
+    /// Where it is: bound to the chest (`chest`: where it is, `chest_turn`:
+    /// how it's turned from rest, the avatar's space), in front of it and a
+    /// little lower, `offset` (up, forward; metres) on top; tilted toward the
+    /// face, swaying a little with the left stick. `size`: the avatar's scale,
+    /// 1 for a grown-up
+    pub fn place(&mut self, chest: Vec3, chest_turn: Quat, size: f32, offset: [f32; 2], pad: &Pad) {
         let tilt = Quat::from_rotation_x(-0.45) * Quat::from_rotation_z(pad.left_stick[0] * 0.05) * Quat::from_rotation_x(pad.left_stick[1] * 0.04);
-        let at = chest + Vec3::new(0.0, -0.06, 0.27) * size;
-        self.turn = turn * tilt;
+        let at = chest + chest_turn * (Vec3::new(0.0, -0.12 + offset[0], 0.32 + offset[1]) * size);
+        self.turn = chest_turn * tilt;
         self.size = size;
-        self.transform = Mat4::from_scale_rotation_translation(Vec3::splat(size), self.turn, turn * at);
+        self.transform = Mat4::from_scale_rotation_translation(Vec3::splat(size), self.turn, at);
     }
 
     /// The wrists' targets (left, right): on the hand markers, the fingers
@@ -222,14 +223,14 @@ mod tests {
         let Some(model) = gamepad() else { return };
         let mut p = Prop::new(model);
         let pad = Pad::default();
-        p.place(Vec3::new(0.0, 1.1, 0.0), 1.0, Quat::IDENTITY, &pad);
+        p.place(Vec3::new(0.0, 1.25, 0.0), Quat::IDENTITY, 1.0, [0.0, 0.0], &pad);
         let [l, r] = p.hands();
         // In front of the chest, the left hand on the left (+X), both lower than the chest
         assert!(l.position.z > 0.1 && r.position.z > 0.1, "{l:?} {r:?}");
         assert!(l.position.x > 0.04 && r.position.x < -0.04);
-        assert!(l.position.y < 1.1 && r.position.y < 1.1);
+        assert!(l.position.y < 1.25 && r.position.y < 1.25);
         // Turned half round: in front of the turned body (-Z)
-        p.place(Vec3::new(0.0, 1.1, 0.0), 1.0, Quat::from_rotation_y(std::f32::consts::PI), &pad);
+        p.place(Vec3::new(0.0, 1.25, 0.0), Quat::from_rotation_y(std::f32::consts::PI), 1.0, [0.0, 0.0], &pad);
         assert!(p.hands()[0].position.z < -0.1);
         // Pressing A sinks it, pulling the right trigger turns it
         let before = { p.pose_parts(&pad); p.points.clone() };

@@ -68,6 +68,9 @@ const S_ARMS: &CStr = c"arms_down";
 const S_IDLE: &CStr = c"idle";
 const S_SPRINGS: &CStr = c"springs";
 const S_TRACKED: &CStr = c"tracked";
+/// The controller it holds moved from its place on the chest (metres)
+const S_CONTROLLER_UP: &CStr = c"controller_up";
+const S_CONTROLLER_FORWARD: &CStr = c"controller_forward";
 
 /// Colour slots (Theater Rig's Color<N>) a source can set
 const COLOR_SLOTS: u32 = 100;
@@ -475,6 +478,8 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
             if count < MAX_EXTRAS {
                 (api.obs_properties_add_button2)(props, c"extra.add".as_ptr(), c"\u{2795} Add a GLB".as_ptr(), add_extra, std::ptr::null_mut());
             }
+            (api.obs_properties_add_float_slider)(props, S_CONTROLLER_UP.as_ptr(), c"Controller: lower (-) or higher (+), metres".as_ptr(), -0.3, 0.3, 0.01);
+            (api.obs_properties_add_float_slider)(props, S_CONTROLLER_FORWARD.as_ptr(), c"Controller: closer (-) or farther (+), metres".as_ptr(), -0.2, 0.3, 0.01);
             (api.obs_properties_add_path)(props, S_CONTROLLER_MODEL.as_ptr(), c"Controller it holds (when Arms are on the Controller input; empty: the built-in one)".as_ptr(), obs::OBS_PATH_FILE, c"glTF (*.glb *.gltf)".as_ptr(), std::ptr::null());
         }
         // Colour slots (Theater Rig's Color<N>): the avatar's and its extras'
@@ -775,6 +780,7 @@ unsafe extern "C" fn update(data: Ptr, settings: Ptr) {
             springs: (api.obs_data_get_bool)(settings, S_SPRINGS.as_ptr()),
             adjust: read_adjust(settings),
             tracked: (api.obs_data_get_bool)(settings, S_TRACKED.as_ptr()),
+            controller_offset: [(api.obs_data_get_double)(settings, S_CONTROLLER_UP.as_ptr()) as f32, (api.obs_data_get_double)(settings, S_CONTROLLER_FORWARD.as_ptr()) as f32],
         };
     }
     puppet.remote.lock().unwrap().animation.loop_clip = get_string(settings, S_ANIMATION);
