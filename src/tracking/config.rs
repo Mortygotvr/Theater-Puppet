@@ -82,6 +82,9 @@ pub struct Config {
     pub mirror: bool,
     /// How much of your head's turn the avatar's makes (1 = all)
     pub head_strength: f32,
+    /// How much of a lean the spine and hips take before the legs bend
+    /// (0 = the legs only, 1 = all they can)
+    pub spine_lean: f32,
     /// 0 = raw, 1 = very smooth (and a little late)
     pub smoothing: f32,
     /// Your height in metres: what's tracked is scaled from yours to the avatar's
@@ -103,6 +106,7 @@ impl Default for Config {
             assign: Assign::default(),
             mirror: false,
             head_strength: 1.0,
+            spine_lean: 1.0,
             smoothing: 0.5,
             user_height: 1.7,
         }

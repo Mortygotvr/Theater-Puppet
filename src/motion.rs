@@ -327,7 +327,7 @@ impl Rig {
 
         // What's tracked, over the idle pose
         let targets = self.targets(turn, &bones);
-        self.skeleton.apply(&model, &mut self.pose, &targets, config.head_strength);
+        self.skeleton.apply(&model, &mut self.pose, &targets, config.head_strength, config.spine_lean);
         self.shapes(&targets, idle);
 
         let pose = &mut self.pose;

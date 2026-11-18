@@ -95,6 +95,7 @@ fn to_data(config: &Config, data: Ptr) {
     string(c"camera", &config.camera);
     boolean(c"mirror", config.mirror);
     double(c"head_strength", config.head_strength);
+    double(c"spine_lean", config.spine_lean);
     double(c"smoothing", config.smoothing);
     double(c"user_height", config.user_height);
     for part in Part::ALL {
@@ -125,6 +126,7 @@ fn from_data(data: Ptr) -> Config {
     c.camera = get_string(data, c"camera");
     c.mirror = boolean(c"mirror");
     c.head_strength = double(c"head_strength");
+    c.spine_lean = double(c"spine_lean");
     c.smoothing = double(c"smoothing");
     c.user_height = double(c"user_height");
     for part in Part::ALL {
@@ -153,6 +155,7 @@ unsafe extern "C" fn get_defaults(settings: Ptr) {
     let d = Config::default();
     unsafe {
         (api.obs_data_set_default_double)(settings, c"head_strength".as_ptr(), d.head_strength as f64);
+        (api.obs_data_set_default_double)(settings, c"spine_lean".as_ptr(), d.spine_lean as f64);
         (api.obs_data_set_default_double)(settings, c"smoothing".as_ptr(), d.smoothing as f64);
         (api.obs_data_set_default_double)(settings, c"user_height".as_ptr(), d.user_height as f64);
         for part in Part::ALL {
@@ -211,6 +214,7 @@ unsafe extern "C" fn get_properties(_: Ptr) -> Ptr {
         info(c"i_feel", "How it feels:");
         (api.obs_properties_add_bool)(props, c"mirror".as_ptr(), c"Mirror (your left moves the avatar's right)".as_ptr());
         (api.obs_properties_add_float_slider)(props, c"head_strength".as_ptr(), c"Head turn strength".as_ptr(), 0.0, 1.5, 0.05);
+        (api.obs_properties_add_float_slider)(props, c"spine_lean".as_ptr(), c"Lean with the spine and hips before bending the legs (0 = legs only)".as_ptr(), 0.0, 1.0, 0.05);
         (api.obs_properties_add_float_slider)(props, c"smoothing".as_ptr(), c"Smoothing (0 = raw, 1 = smooth but a little late)".as_ptr(), 0.0, 1.0, 0.05);
         (api.obs_properties_add_float_slider)(props, c"user_height".as_ptr(), c"Your height (metres)".as_ptr(), 1.0, 2.2, 0.01);
         info(c"i_avatar", "Each Theater Puppet source follows this while its \"Follow tracking\" is on.");

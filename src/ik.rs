@@ -2,7 +2,9 @@
 //! the head and hands are, how the head is turned, how the fingers bend) to
 //! the Mixamo bones' rotations.
 //!
-//! - The body follows the head: the hips move under it (leaning, crouching).
+//! - The body follows the head: the spine and hips lean toward it first
+//!   (as much as the Tracking window's "spine lean" says), then the hips
+//!   move under it for what's left (crouching, stepping).
 //! - The feet stay planted where they stood (or go where they're tracked),
 //!   the legs bending to reach them.
 //! - Each hand goes where it's tracked, the arm bending at the elbow (toward
@@ -33,6 +35,8 @@ type Fingers = [[Option<usize>; 3]; 5];
 /// The bones the routine turns, and how the avatar stands at rest
 pub struct Skeleton {
     hips: Option<usize>,
+    /// The bones a lean bends, and each one's share of it (adding up to 1)
+    spine: Vec<(usize, f32)>,
     neck: Option<usize>,
     head: Option<usize>,
     arms: [Option<Limb>; 2],
@@ -47,6 +51,12 @@ pub struct Skeleton {
 
 const FINGERS: [&str; 5] = ["Thumb", "Index", "Middle", "Ring", "Pinky"];
 
+/// The bones a lean bends, from the bottom, and how much of it each takes
+const SPINE: [(&str, f32); 5] = [("Hips", 0.2), ("Spine", 0.25), ("Spine1", 0.25), ("Spine2", 0.2), ("Neck", 0.1)];
+
+/// The most a body leans from the hips before the legs take over (radians)
+const MAX_LEAN: f32 = 0.61;
+
 impl Skeleton {
     /// `rest` is the avatar's rest pose, its world matrices current
     pub fn new(model: &Model, rest: &Pose) -> Skeleton {
@@ -56,8 +66,11 @@ impl Skeleton {
         };
         let at = |n: Option<usize>| n.map(|i| rest.position(i)).unwrap_or(Vec3::ZERO);
         let legs = [limb("LeftUpLeg", "LeftLeg", "LeftFoot"), limb("RightUpLeg", "RightLeg", "RightFoot")];
+        let spine: Vec<(usize, f32)> = SPINE.iter().filter_map(|(n, w)| Some((model.node(n)?, *w))).collect();
+        let share: f32 = spine.iter().map(|(_, w)| w).sum();
         Skeleton {
             hips: model.node("Hips"),
+            spine: spine.into_iter().map(|(b, w)| (b, w / share)).collect(),
             neck: model.node("Neck"),
             head: model.node("Head"),
             arms: [limb("LeftArm", "LeftForeArm", "LeftHand"), limb("RightArm", "RightForeArm", "RightHand")],
@@ -82,14 +95,25 @@ impl Skeleton {
 
     /// Poses the body to `tracked`. `pose` already has the idle motion, its
     /// world current; it's left current. `head_strength`: how much of the
-    /// head's turn is made (1 = all).
-    pub fn apply(&self, model: &Model, pose: &mut Pose, tracked: &Snapshot, head_strength: f32) {
-        // The body under the head: the hips move as the head does
-        if let (Some(hips), Some(head)) = (self.hips, tracked.head_position) {
-            let mut shift = head - self.rest_head;
+    /// head's turn is made (1 = all). `spine`: how much of a lean the spine
+    /// and hips take before the legs (0 = the legs only, 1 = all they can).
+    pub fn apply(&self, model: &Model, pose: &mut Pose, tracked: &Snapshot, head_strength: f32, spine: f32) {
+        // The body's frame (its turn, its sway), before any lean: the head turns from there
+        let body = self.hips.map(|h| pose.world_rotation(h) * self.rest_rotation[h].inverse()).unwrap_or(Quat::IDENTITY);
+        // The spine and hips lean toward the head first
+        if let (Some(head), Some(target)) = (self.head, tracked.head_position) {
+            if spine > 0.0 {
+                self.lean(model, pose, head, target, spine);
+            }
+        }
+        // Then the hips move under the head for what's left
+        if let (Some(hips), Some(target)) = (self.hips, tracked.head_position) {
+            let now = self.head.map(|h| pose.position(h)).unwrap_or(self.rest_head);
+            let mut shift = target - now;
             // Not through the floor, nor off its legs
             let legs = self.rest_hips.y - self.rest_feet[0].y.min(self.rest_feet[1].y);
-            shift.y = shift.y.clamp(-legs * 0.6, legs * 0.08);
+            let low = pose.position(hips).y - self.rest_hips.y;
+            shift.y = (low + shift.y).clamp(-legs * 0.6, legs * 0.08) - low;
             move_in_world(model, pose, hips, shift);
         }
         if let (Some(hips), Some(t)) = (self.hips, tracked.hips) {
@@ -119,7 +143,6 @@ impl Skeleton {
         if let Some(turn) = tracked.head_turn {
             let turn = Quat::IDENTITY.slerp(turn, head_strength.clamp(0.0, 1.5));
             // (in the body's frame: a turned body's head turns from there)
-            let body = self.hips.map(|h| pose.world_rotation(h) * self.rest_rotation[h].inverse()).unwrap_or(Quat::IDENTITY);
             if let Some(neck) = self.neck {
                 let part = Quat::IDENTITY.slerp(turn, 0.35);
                 self.turn_to(model, pose, neck, body * part);
@@ -145,6 +168,37 @@ impl Skeleton {
             self.bend_fingers(model, pose, side, arm.end, &hand);
         }
         pose.update_world(model);
+    }
+
+    /// Bends the hips and spine so the head goes toward `target`, as seen
+    /// from the hips: `amount` of the way, MAX_LEAN at most. What a bend
+    /// can't do (a head lower or higher, not elsewhere) is left to the legs.
+    fn lean(&self, model: &Model, pose: &mut Pose, head: usize, target: Vec3, amount: f32) {
+        let Some(hips) = self.hips else { return };
+        let pivot = pose.position(hips);
+        let (start, want) = ((pose.position(head) - pivot).normalize_or_zero(), (target - pivot).normalize_or_zero());
+        if start == Vec3::ZERO || want == Vec3::ZERO {
+            return;
+        }
+        let (axis, angle) = Quat::from_rotation_arc(start, want).to_axis_angle();
+        let angle = (angle * amount.clamp(0.0, 1.0)).min(MAX_LEAN);
+        if angle < 1e-3 {
+            return;
+        }
+        let goal = Quat::from_axis_angle(axis, angle) * start;
+        // Each bone turns about its own joint, so the head goes a little
+        // less far than asked: a few passes close the gap
+        for _ in 0..4 {
+            let now = (pose.position(head) - pivot).normalize_or_zero();
+            let step = Quat::from_rotation_arc(now, goal);
+            if step.angle_between(Quat::IDENTITY) < 1e-3 {
+                break;
+            }
+            for &(bone, share) in &self.spine {
+                pose.rotate_in_world(model, bone, Quat::IDENTITY.slerp(step, share));
+                pose.update_world(model);
+            }
+        }
     }
 
     /// Turns `node` to `turn` from how it is at rest (in the avatar's space)
@@ -267,7 +321,7 @@ mod tests {
         // In front of the chest, palm facing in
         let target = Target { position: shoulder + Vec3::new(-0.05, -0.15, 0.3), rotation: hand_turn(true, Vec3::Z, Vec3::NEG_X) };
         let tracked = Snapshot { left_hand: Some(target), ..Default::default() };
-        skeleton.apply(&model, &mut pose, &tracked, 1.0);
+        skeleton.apply(&model, &mut pose, &tracked, 1.0, 0.0);
         let hand = pose.position(arm.end);
         println!("left hand {hand:?}, target {:?}, elbow {:?}", target.position, pose.position(arm.mid));
         assert!((hand - target.position).length() < 0.005, "missed by {}", (hand - target.position).length());
@@ -285,7 +339,7 @@ mod tests {
         // Out of reach: the arm straightens toward it
         let far = Target { position: shoulder + Vec3::new(3.0, 0.0, 0.0), rotation: Quat::IDENTITY };
         let mut pose = Pose::rest(&model);
-        skeleton.apply(&model, &mut pose, &Snapshot { left_hand: Some(far), ..Default::default() }, 1.0);
+        skeleton.apply(&model, &mut pose, &Snapshot { left_hand: Some(far), ..Default::default() }, 1.0, 0.0);
         let reach = (pose.position(arm.end) - shoulder).length();
         let full = length(&rest, arm.root, arm.mid) + length(&rest, arm.mid, arm.end);
         assert!((reach - full).abs() < 0.002 && pose.position(arm.end).is_finite());
@@ -299,7 +353,7 @@ mod tests {
         let knee = pose.position(left.mid);
         // The head 25 cm lower and a little to the side
         let tracked = Snapshot { head_position: Some(skeleton.rest_head() + Vec3::new(0.05, -0.25, 0.0)), ..Default::default() };
-        skeleton.apply(&model, &mut pose, &tracked, 1.0);
+        skeleton.apply(&model, &mut pose, &tracked, 1.0, 0.0);
         let head = model.node("Head").unwrap();
         println!("head {:?} (rest {:?}), knee {:?} (rest {knee:?})", pose.position(head), skeleton.rest_head(), pose.position(left.mid));
         assert!((pose.position(head) - (skeleton.rest_head() + Vec3::new(0.05, -0.25, 0.0))).length() < 0.01);
@@ -309,11 +363,49 @@ mod tests {
     }
 
     #[test]
+    fn a_lean_bends_the_spine_before_the_legs() {
+        let Some((model, rest, skeleton)) = rig() else { return };
+        let hips = model.node("Hips").unwrap();
+        let chest = model.node("Spine2").unwrap();
+        let knee = model.node("LeftLeg").unwrap();
+        // The head 25 cm forward and a little lower: leaning over a desk
+        let target = skeleton.rest_head() + Vec3::new(0.0, -0.05, 0.25);
+        let tracked = Snapshot { head_position: Some(target), ..Default::default() };
+        let pose_with = |spine: f32| {
+            let mut pose = rest.clone();
+            skeleton.apply(&model, &mut pose, &tracked, 1.0, spine);
+            pose
+        };
+        let (legs, bent) = (pose_with(0.0), pose_with(1.0));
+        let head = model.node("Head").unwrap();
+        let moved = |p: &Pose| (p.position(hips) - rest.position(hips)).length();
+        let chest_turn = |p: &Pose| (p.world_rotation(chest) * rest.world_rotation(chest).inverse()).angle_between(Quat::IDENTITY);
+        println!(
+            "legs only: hips moved {:.3}, chest turned {:.1} deg; spine first: hips moved {:.3}, chest turned {:.1} deg, head off {:.3}",
+            moved(&legs),
+            chest_turn(&legs).to_degrees(),
+            moved(&bent),
+            chest_turn(&bent).to_degrees(),
+            (bent.position(head) - target).length()
+        );
+        // Legs only: the hips carry it, the chest stays upright
+        assert!(moved(&legs) > 0.2 && chest_turn(&legs) < 0.01);
+        // Spine first: the chest bends, the hips hardly move, the head still gets there
+        assert!(chest_turn(&bent) > 0.3, "the chest didn't bend");
+        assert!(moved(&bent) < moved(&legs) - 0.12, "the hips still carry it");
+        assert!((bent.position(head) - target).length() < 0.02);
+        // The feet stay where they stood, the knees less bent
+        let foot = model.node("LeftFoot").unwrap();
+        assert!((bent.position(foot) - rest.position(foot)).length() < 0.01);
+        assert!((bent.position(knee) - rest.position(knee)).length() < (legs.position(knee) - rest.position(knee)).length());
+    }
+
+    #[test]
     fn the_head_turns_and_fingers_curl() {
         let Some((model, mut pose, skeleton)) = rig() else { return };
         let head = model.node("Head").unwrap();
         let turn = Quat::from_rotation_y(40f32.to_radians());
-        skeleton.apply(&model, &mut pose, &Snapshot { head_turn: Some(turn), ..Default::default() }, 1.0);
+        skeleton.apply(&model, &mut pose, &Snapshot { head_turn: Some(turn), ..Default::default() }, 1.0, 0.0);
         let now = pose.world_rotation(head) * skeleton.rest_rotation[head].inverse();
         assert!(now.angle_between(turn) < 0.02, "head off by {}", now.angle_between(turn));
 
@@ -322,7 +414,7 @@ mod tests {
         let tip = model.node("LeftHandIndex3").unwrap();
         let before = pose.position(tip);
         let fist = Hand { bend: [[1.2; 3]; 5], spread: [0.0; 5] };
-        skeleton.apply(&model, &mut pose, &Snapshot { left_fingers: Some(fist), ..Default::default() }, 1.0);
+        skeleton.apply(&model, &mut pose, &Snapshot { left_fingers: Some(fist), ..Default::default() }, 1.0, 0.0);
         let after = pose.position(tip);
         println!("index tip {before:?} -> {after:?}");
         assert!(after.y < before.y - 0.02 && after.x < before.x, "the index didn't curl toward the palm");
