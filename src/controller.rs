@@ -47,6 +47,8 @@ pub struct Prop {
     size: f32,
     /// The hands moved from the markers: up, and apart (each side), metres
     hand_offset: [f32; 2],
+    /// The hands turned about their forearm (degrees; mirrored left / right)
+    pub hand_roll: f32,
 }
 
 impl Prop {
@@ -85,6 +87,7 @@ impl Prop {
             turn: Quat::IDENTITY,
             size: 1.0,
             hand_offset: [0.0, 0.0],
+            hand_roll: 0.0,
             model,
         }
     }
@@ -121,6 +124,8 @@ impl Prop {
             let marker = marker + Vec3::new(self.hand_offset[1] * s, self.hand_offset[0], 0.0);
             let fingers = self.turn * Vec3::new(-0.3 * s, -0.15, 1.0);
             let palm = self.turn * Vec3::new(-0.45 * s, -1.0, 0.1);
+            // The rotation slider: about the forearm, the same way on both sides
+            let palm = Quat::from_axis_angle(fingers.normalize(), (self.hand_roll * s).to_radians()) * palm;
             Target { position: self.transform.transform_point3(marker), rotation: crate::ik::hand_turn(left, fingers, palm) }
         })
     }
