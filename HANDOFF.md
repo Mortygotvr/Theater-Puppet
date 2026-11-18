@@ -106,7 +106,7 @@ MediaPipe notes:
   (the source's "Animation" setting) and one played once over it. Tracking
   still goes over both. **Do not build Mixamo/FBX import or retargeting in
   Puppet**; if retargeting help is ever wanted, it belongs in Theater Rig.
-  Procedure `theater_puppet_animation`. Shape key clips play too (matched by
+  Shape key clips play too (matched by
   the key's name, the stronger of clip and tracking wins); a face-only clip
   leaves the idle body motion on. With Blender's "NLA tracks" export, a
   clip is named after its NLA track, not its action.
@@ -116,12 +116,32 @@ MediaPipe notes:
   bone lengths and running its own springs. Nothing more (the owner wants
   it simple: a full GLB that mimics the main model). On the GPU they are
   mesh layers 1–3 (`Gpu::set_extras`). Test file: a skeleton with a box in
-  the right hand, `THEATER_PUPPET_EXTRA_GLB`. Planned by the owner, not
-  built: Control Panel toggles each extra GLB on and off, and GLBs get
-  groups, only one of a group active at once.
+  the right hand, `THEATER_PUPPET_EXTRA_GLB`. Each GLB can be shown or
+  hidden (see below). Planned by the owner, not built: GLB groups, only one
+  of a group shown at once.
+- Colour slots: the source's "Colours" properties (Recolour slot N + its
+  colour), on every GLB; a slot's shade is its colour as much darker as the
+  material's own (`shade_ratio`).
 - The "🎬 Puppet Animations" dock (`theater-scripts/puppet_animation_dock.rhai`)
   picks the loop and plays clips. A test with a real clip runs when `THEATER_PUPPET_ANIMATED_GLB` points
   to an export with a "Wave" clip on RightArm.
+
+## Driven from outside: Control Panel and Scene
+
+- **One procedure**, `theater_puppet_command(in string args, out string
+  json)` (`src/remote.rs`): `list`, `animation`, `shape` (on / off /
+  ping-pong, per GLB), `shape_anim` (range, up / down / ping-pong, duration,
+  show the GLB at the start, hide it at the end), `glb` (show / hide /
+  toggle), `color` (a slot on every GLB, saved in the source's settings).
+  The module comment lists every field. Shape keys driven this way go over
+  tracking and animations; GLB visibility is not saved.
+- **Theater Control Panel module**: `control-panel/puppet.tcp` ("TCP" is the
+  Control Panel's module format, not the network protocol), deployed to
+  `data\control-panel\`, loaded from the Panel's Modules tab. It calls the
+  procedure through the Panel's `obs_call_proc` bridge.
+- **Theater Scene**: the "🎭 Puppet" redeem type (`Trust/src/puppet_redeem.rs`,
+  branch `puppet-body-parts`), a form in the Studio's redeem editor; its text
+  settings take the redeem's wildcards.
 
 ## OBS graphics lessons already paid for
 
