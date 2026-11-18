@@ -261,6 +261,9 @@ impl Mapper {
             face.head = Quat::IDENTITY;
         }
         let at = Vec3::new(m[3], m[7], m[11]);
+        if RECENTRE.swap(false, Ordering::SeqCst) {
+            self.neutral = None;
+        }
         let neutral = *self.neutral.get_or_insert(at);
         // (how near the camera is guessed from the face's size: half trusted)
         self.shift = (at - neutral) * 0.01 * Vec3::new(1.0, 1.0, 0.5);
@@ -405,6 +408,13 @@ unsafe extern "system" {
 }
 
 static GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// The next face seen is the head at rest again (the dock's "re-centre")
+static RECENTRE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn recentre() {
+    RECENTRE.store(true, Ordering::SeqCst);
+}
 
 pub fn restart(config: &Config) {
     let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;

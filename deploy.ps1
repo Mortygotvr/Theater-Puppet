@@ -19,6 +19,9 @@ foreach ($root in @("C:\ProgramData\obs-studio\plugins\theater-puppet", "$env:AP
     # MediaPipe's helper (run by a Python that has mediapipe and opencv)
     New-Item -ItemType Directory -Path "$root\data\mediapipe" -Force | Out-Null
     Copy-Item "$PSScriptRoot\mediapipe\*.py" "$root\data\mediapipe\" -Force
+    # Its dock, a Theater Scene Rhai dock (Scene loads every plugin's data\theater-scripts)
+    New-Item -ItemType Directory -Path "$root\data\theater-scripts" -Force | Out-Null
+    Copy-Item "$PSScriptRoot\theater-scripts\*.rhai" "$root\data\theater-scripts\" -Force
     # The filters it ships with (Theater Scene's are read from its own folders)
     New-Item -ItemType Directory -Path "$root\data\filters" -Force | Out-Null
     Copy-Item "$PSScriptRoot\filters\*.rhai" "$root\data\filters\" -Force

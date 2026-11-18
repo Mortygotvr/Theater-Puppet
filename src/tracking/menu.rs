@@ -91,6 +91,7 @@ fn to_data(config: &Config, data: Ptr) {
     boolean(c"leap", config.leap);
     boolean(c"leap_on_head", config.leap_on_head);
     double(c"leap_height", config.leap_height);
+    double(c"leap_forward", config.leap_forward);
     boolean(c"mediapipe", config.mediapipe);
     string(c"camera", &config.camera);
     boolean(c"mirror", config.mirror);
@@ -123,6 +124,7 @@ fn from_data(data: Ptr) -> Config {
     c.leap = boolean(c"leap");
     c.leap_on_head = boolean(c"leap_on_head");
     c.leap_height = double(c"leap_height");
+    c.leap_forward = double(c"leap_forward");
     c.mediapipe = boolean(c"mediapipe");
     c.camera = get_string(data, c"camera");
     c.mirror = boolean(c"mirror");
@@ -195,6 +197,7 @@ unsafe extern "C" fn get_properties(_: Ptr) -> Ptr {
         (api.obs_properties_add_bool)(props, c"leap".as_ptr(), key(&format!("Leap Motion (hands): {}", status(Source::Leap))).as_ptr());
         (api.obs_properties_add_bool)(props, c"leap_on_head".as_ptr(), c"The Leap is on the headset, not on the desk".as_ptr());
         (api.obs_properties_add_float_slider)(props, c"leap_height".as_ptr(), c"Leap: hands higher (+) or lower (-), metres".as_ptr(), -0.6, 0.6, 0.01);
+        (api.obs_properties_add_float_slider)(props, c"leap_forward".as_ptr(), c"Leap: hands forward (+) or back (-), metres".as_ptr(), -0.6, 0.6, 0.01);
         (api.obs_properties_add_bool)(props, c"mediapipe".as_ptr(), key(&format!("MediaPipe (webcam: body and face): {}", status(Source::MediaPipe))).as_ptr());
 
         // MediaPipe tracks from a camera: any on the PC (its helper opens it)
@@ -307,6 +310,18 @@ unsafe extern "C" fn open(_: *mut c_void) {
             (obs::api().obs_data_release)(data);
         }
         SOURCE.store(source, Ordering::SeqCst);
+    } else {
+        // The dock may have changed settings since: the window shows them as they are
+        type GetSettings = unsafe extern "C" fn(Ptr) -> Ptr;
+        if let Some(get) = function::<GetSettings>("obs.dll", c"obs_source_get_settings") {
+            unsafe {
+                let data = get(source);
+                if !data.is_null() {
+                    to_data(&config::get(), data);
+                    (obs::api().obs_data_release)(data);
+                }
+            }
+        }
     }
     match function::<OpenProperties>("obs-frontend-api.dll", c"obs_frontend_open_source_properties") {
         Some(open) if !source.is_null() => unsafe { open(source) },

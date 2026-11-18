@@ -165,7 +165,7 @@ pub fn register_procs() {
     crate::log("[Puppet] 🔗 Registered theater_puppet_parts / theater_puppet_part_at");
 }
 
-fn get_string(cd: *mut Calldata, name: &CStr) -> String {
+pub(crate) fn get_string(cd: *mut Calldata, name: &CStr) -> String {
     let mut s: *const c_char = std::ptr::null();
     if unsafe { (obs::api().calldata_get_string)(cd as Ptr, name.as_ptr(), &mut s) } && !s.is_null() {
         unsafe { CStr::from_ptr(s) }.to_string_lossy().into_owned()
@@ -181,7 +181,7 @@ fn get_float(cd: *mut Calldata, name: &CStr) -> f64 {
     v
 }
 
-fn set_string(cd: *mut Calldata, name: &CStr, value: &str) {
+pub(crate) fn set_string(cd: *mut Calldata, name: &CStr, value: &str) {
     let value = CString::new(value.replace('\0', "")).unwrap_or_default();
     let bytes = value.as_bytes_with_nul();
     unsafe { (obs::api().calldata_set_data)(cd as Ptr, name.as_ptr(), bytes.as_ptr() as *const c_void, bytes.len()) };

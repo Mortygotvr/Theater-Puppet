@@ -11,6 +11,7 @@
 
 use std::ffi::c_void;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
@@ -140,9 +141,35 @@ fn turned(v: LeapVector, on_head: bool) -> Vec3 {
 /// Where the device is and how it's turned, for a user `height` tall
 /// standing at the avatar's place: on a desk in front of the chest, or on
 /// the headset (`head`: the headset as SteamVR tracks it, when it does)
-fn device(height: f32, on_head: bool, head: Option<Target>, raised: f32) -> (Vec3, glam::Quat) {
+fn device(height: f32, on_head: bool, head: Option<Target>, raised: f32, forward: f32) -> (Vec3, glam::Quat) {
     let (at, facing) = device_at(height, on_head, head);
-    (at + Vec3::Y * raised, facing)
+    (at + Vec3::Y * raised + facing * Vec3::Z * forward, facing)
+}
+
+/// Where the hands were last, without the height and forward settings,
+/// and when: what "centre on my hands" goes by
+static LAST: Mutex<Option<(Vec3, Instant)>> = Mutex::new(None);
+
+/// Whether the Leap sees hands now
+pub fn hands_seen() -> bool {
+    LAST.lock().unwrap_or_else(|e| e.into_inner()).is_some_and(|(_, at)| at.elapsed() < Duration::from_millis(500))
+}
+
+/// The hands where they are now become hands resting in front of the
+/// avatar, a little above its waist: sets the height and forward settings.
+/// False when the Leap sees no hands.
+pub fn centre() -> bool {
+    let Some((raw, at)) = *LAST.lock().unwrap_or_else(|e| e.into_inner()) else { return false };
+    if at.elapsed() > Duration::from_secs(1) {
+        return false;
+    }
+    let mut c = super::config::get();
+    let want = Vec3::new(0.0, c.user_height.clamp(0.5, 2.5) * 0.63, 0.28);
+    c.leap_height = (want.y - raw.y).clamp(-0.6, 0.6);
+    c.leap_forward = (want.z - raw.z).clamp(-0.6, 0.6);
+    crate::log(&format!("[Puppet] 🖐️ Leap: centred on the hands (height {:+.2} m, forward {:+.2} m)", c.leap_height, c.leap_forward));
+    super::config::set(c);
+    true
 }
 
 fn device_at(height: f32, on_head: bool, head: Option<Target>) -> (Vec3, glam::Quat) {
@@ -180,7 +207,7 @@ pub fn restart(config: &Config) {
     if !config.leap {
         return;
     }
-    let (on_head, height, raised) = (config.leap_on_head, config.user_height.clamp(0.5, 2.5), config.leap_height.clamp(-1.0, 1.0));
+    let on_head = config.leap_on_head;
     let _ = std::thread::Builder::new().name("theater-puppet-leap".into()).spawn(move || {
         let alive = || GENERATION.load(Ordering::SeqCst) == generation;
         let Some((lib, path)) = Library::first(&candidates()) else {
@@ -225,7 +252,11 @@ pub fn restart(config: &Config) {
             let frame = unsafe { std::ptr::read_unaligned(event as *const LeapTrackingEvent) };
             let (count, first) = (frame.hands as usize, frame.hand);
             let head = if on_head { super::head_from(Source::SteamVr) } else { None };
-            let (origin, facing) = device(height, on_head, head, raised);
+            // (the height and forward settings read live: the dock's sliders move the hands at once)
+            let live = super::config::get();
+            let (raised, forward) = (live.leap_height.clamp(-1.0, 1.0), live.leap_forward.clamp(-1.0, 1.0));
+            let (origin, facing) = device(live.user_height.clamp(0.5, 2.5), on_head, head, raised, forward);
+            let offset = Vec3::Y * raised + facing * Vec3::Z * forward;
             let (mut body, mut hands) = (Body::default(), Hands::default());
             for i in 0..count.min(4) {
                 if first.is_null() {
@@ -242,6 +273,10 @@ pub fn restart(config: &Config) {
                 }
             }
             super::set_status(Source::Leap, if count == 0 { "connected, no hand in view".to_string() } else { format!("receiving {count} hand(s)") });
+            let wrists: Vec<Vec3> = [body.left_hand, body.right_hand].into_iter().flatten().map(|t| t.position - offset).collect();
+            if !wrists.is_empty() {
+                *LAST.lock().unwrap_or_else(|e| e.into_inner()) = Some((wrists.iter().sum::<Vec3>() / wrists.len() as f32, Instant::now()));
+            }
             if count > 0 {
                 super::set_body(Source::Leap, body);
                 super::set_hands(Source::Leap, hands);
@@ -296,7 +331,7 @@ mod tests {
 
     #[test]
     fn a_desk_hand_lands_in_front_of_the_avatar() {
-        let (origin, facing) = device(1.7, false, None, 0.0);
+        let (origin, facing) = device(1.7, false, None, 0.0, 0.0);
         let (left, target, fingers) = hand(&flat_left(), false, origin, facing);
         assert!(left);
         // Your left is the avatar's left (+X); in front of it (+Z), below the shoulders
@@ -315,7 +350,7 @@ mod tests {
         // Seen from a headset: 30 cm ahead (device Y), 10 cm below (device Z)
         let mut h = flat_left();
         h.arm.next_joint = v(100.0, 300.0, 100.0);
-        let (origin, facing) = device(1.7, true, None, 0.0);
+        let (origin, facing) = device(1.7, true, None, 0.0, 0.0);
         let (_, target, _) = hand(&h, true, origin, facing);
         assert!(target.position.x > 0.05 && target.position.z > 0.3 && target.position.y < 1.7 * 0.93 - 0.05, "{:?}", target.position);
     }

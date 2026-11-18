@@ -71,6 +71,8 @@ pub struct Config {
     pub leap_on_head: bool,
     /// The Leap's hands raised (+) or lowered (-) on the avatar, metres
     pub leap_height: f32,
+    /// The Leap's hands moved forward (+) or back (-) on the avatar, metres
+    pub leap_forward: f32,
     pub mediapipe: bool,
     /// MediaPipe's camera: its device id, as OBS's Video Capture Device lists it
     pub camera: String,
@@ -102,6 +104,7 @@ impl Default for Config {
             leap: false,
             leap_on_head: false,
             leap_height: 0.0,
+            leap_forward: 0.0,
             mediapipe: false,
             camera: String::new(),
             python: String::new(),
@@ -135,20 +138,31 @@ pub fn get() -> Config {
         .clone()
 }
 
-/// New settings: kept, saved, and the inputs restarted with them
+/// The settings that only change how what's tracked is used, read every
+/// frame: a change of them alone doesn't restart the inputs
+fn without_live(c: &Config) -> Config {
+    Config { leap_height: 0.0, leap_forward: 0.0, mirror: false, head_strength: 0.0, spine_lean: 0.0, torso_follow: 0.0, smoothing: 0.0, ..c.clone() }
+}
+
+/// New settings: kept, saved, and the inputs restarted with them (when
+/// more than the live settings changed)
 pub fn set(config: Config) {
-    {
+    let restart = {
         let mut cached = CONFIG.lock().unwrap_or_else(|e| e.into_inner());
         if cached.as_ref() == Some(&config) {
             return;
         }
+        let restart = cached.as_ref().is_none_or(|old| without_live(old) != without_live(&config));
         *cached = Some(config.clone());
-    }
+        restart
+    };
     if !cfg!(test) {
         if let Ok(json) = serde_json::to_string_pretty(&config) {
             let _ = std::fs::write(file(), json);
         }
-        super::start();
+        if restart {
+            super::start();
+        }
     }
 }
 

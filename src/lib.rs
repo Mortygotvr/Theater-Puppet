@@ -120,6 +120,7 @@ pub extern "C" fn obs_module_load() -> bool {
     }
     source::register();
     parts::register_procs();
+    tracking::dock::register();
     // Tracking: its settings window's source, its inputs, its menu item
     tracking::menu::register();
     tracking::start();

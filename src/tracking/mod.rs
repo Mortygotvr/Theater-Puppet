@@ -15,6 +15,7 @@
 
 pub mod config;
 mod dll;
+pub mod dock;
 mod fingers;
 pub mod ifacialmocap;
 pub mod leap;
