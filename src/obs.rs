@@ -118,6 +118,7 @@ api! {
     obs_properties_add_int_slider: fn(Ptr, *const c_char, *const c_char, i32, i32, i32) -> Ptr;
     obs_properties_add_bool: fn(Ptr, *const c_char, *const c_char) -> Ptr;
     obs_properties_add_color_alpha: fn(Ptr, *const c_char, *const c_char) -> Ptr;
+    obs_properties_add_color: fn(Ptr, *const c_char, *const c_char) -> Ptr;
     obs_properties_add_text: fn(Ptr, *const c_char, *const c_char, u32) -> Ptr;
     obs_properties_add_list: fn(Ptr, *const c_char, *const c_char, u32, u32) -> Ptr;
     obs_properties_add_group: fn(Ptr, *const c_char, *const c_char, u32, Ptr) -> Ptr;

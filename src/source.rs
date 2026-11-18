@@ -40,6 +40,62 @@ const S_IDLE: &CStr = c"idle";
 const S_SPRINGS: &CStr = c"springs";
 const S_TRACKED: &CStr = c"tracked";
 
+/// Colour slots (Theater Rig's Color<N>) a source can set
+const COLOR_SLOTS: u32 = 100;
+
+/// Colour slot N's settings: recoloured or not, and its colour (OBS's 0xAABBGGRR)
+fn color_on_key(slot: u32) -> CString {
+    cstring(&format!("color{slot}.on"))
+}
+
+fn color_key(slot: u32) -> CString {
+    cstring(&format!("color{slot}"))
+}
+
+/// OBS's colour (0xAABBGGRR) as sRGB 0–1, and back (opaque)
+fn obs_to_rgb(c: i64) -> [f32; 3] {
+    [0, 8, 16].map(|s| ((c >> s) & 0xFF) as f32 / 255.0)
+}
+
+fn rgb_to_obs(rgb: [f32; 3]) -> i64 {
+    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as i64;
+    0xFF00_0000 | (byte(rgb[2]) << 16) | (byte(rgb[1]) << 8) | byte(rgb[0])
+}
+
+#[cfg(test)]
+mod color_tests {
+    use super::*;
+
+    #[test]
+    fn obs_colours_go_both_ways() {
+        // OBS: 0xAABBGGRR
+        assert_eq!(obs_to_rgb(0xFF0080FF), [1.0, 128.0 / 255.0, 0.0]);
+        assert_eq!(rgb_to_obs([1.0, 128.0 / 255.0, 0.0]), 0xFF0080FF);
+    }
+
+    #[test]
+    fn the_avatar_s_slots_are_listed() {
+        let Ok(path) = std::env::var("THEATER_PUPPET_GLB") else { return };
+        let m = model::load(std::path::Path::new(&path)).unwrap();
+        println!("colour slots: {:?}", color_slots(&[&m]));
+    }
+}
+
+/// The colour slots the avatar (and the GLBs drawn with it) have, each with
+/// the colour it shows now (its first material's)
+fn color_slots(models: &[&Model]) -> Vec<(u32, [f32; 3])> {
+    let mut out: Vec<(u32, [f32; 3])> = Vec::new();
+    for m in models.iter().flat_map(|m| m.materials.iter()) {
+        if let Some(slot) = m.color_slot.filter(|s| *s < COLOR_SLOTS) {
+            if !out.iter().any(|(s, _)| *s == slot) {
+                out.push((slot, [m.color[0], m.color[1], m.color[2]]));
+            }
+        }
+    }
+    out.sort_by_key(|(s, _)| *s);
+    out
+}
+
 /// Style slots, applied in order
 const SLOTS: usize = 4;
 /// A new source's first style
@@ -109,6 +165,8 @@ struct Puppet {
     parts: crate::parts::Shared,
     /// Its animations' requests and state (animation.rs)
     animation: crate::animation::Shared,
+    /// Colour slots given a colour (sRGB, 0–1)
+    colors: Mutex<HashMap<u32, [f32; 3]>>,
     running: Mutex<[Option<Running>; SLOTS]>,
     /// Bumped by each new file, so a slow load that finishes late is dropped
     generation: Arc<AtomicU64>,
@@ -304,6 +362,36 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
             let label = cstring(&format!("Also draw {} (a GLB copying the avatar's pose)", i + 1));
             (api.obs_properties_add_path)(props, key.as_ptr(), label.as_ptr(), obs::OBS_PATH_FILE, c"glTF (*.glb *.gltf)".as_ptr(), std::ptr::null());
         }
+        // Colour slots (Theater Rig's Color<N>): the avatar's and its extras'
+        if !data.is_null() {
+            let puppet = &*(data as *const Puppet);
+            let slots = puppet.rig.lock().unwrap().as_ref().map(|r| {
+                let models: Vec<&Model> = std::iter::once(&*r.model).chain(r.followers.iter().map(|f| &*f.model)).collect();
+                color_slots(&models)
+            });
+            if let Some(slots) = slots.filter(|s| !s.is_empty()) {
+                // Each picker starts at the colour the slot shows now
+                let settings = (api.obs_source_get_settings)(puppet.source);
+                let group = (api.obs_properties_create)();
+                (api.obs_properties_add_text)(
+                    group,
+                    c"colors_info".as_ptr(),
+                    c"Theater Rig's colour slots: every part named Color<N> takes slot N's colour, its shadow the same colour, darker.".as_ptr(),
+                    obs::OBS_TEXT_INFO,
+                );
+                for (slot, rgb) in slots {
+                    if !settings.is_null() {
+                        (api.obs_data_set_default_int)(settings, color_key(slot).as_ptr(), rgb_to_obs(rgb));
+                    }
+                    (api.obs_properties_add_bool)(group, color_on_key(slot).as_ptr(), cstring(&format!("Recolour slot {slot}")).as_ptr());
+                    (api.obs_properties_add_color)(group, color_key(slot).as_ptr(), cstring(&format!("Colour {slot}")).as_ptr());
+                }
+                if !settings.is_null() {
+                    (api.obs_data_release)(settings);
+                }
+                (api.obs_properties_add_group)(props, c"colors".as_ptr(), c"Colours".as_ptr(), obs::OBS_GROUP_NORMAL, group);
+            }
+        }
         (api.obs_properties_add_text)(
             props,
             c"styles_order".as_ptr(),
@@ -483,6 +571,7 @@ unsafe extern "C" fn create(settings: Ptr, source: Ptr) -> Ptr {
         source,
         parts,
         animation,
+        colors: Mutex::new(HashMap::new()),
         width: AtomicU32::new(1080),
         height: AtomicU32::new(1080),
         view: Mutex::new(View { zoom: 1.0, height: 0.0, yaw: 0.0, position: glam::Vec3::ZERO }),
@@ -570,6 +659,10 @@ unsafe extern "C" fn update(data: Ptr, settings: Ptr) {
         };
     }
     puppet.animation.lock().unwrap().loop_clip = get_string(settings, S_ANIMATION);
+    *puppet.colors.lock().unwrap() = (0..COLOR_SLOTS)
+        .filter(|&s| unsafe { (api.obs_data_get_bool)(settings, color_on_key(s).as_ptr()) })
+        .map(|s| (s, obs_to_rgb(unsafe { (api.obs_data_get_int)(settings, color_key(s).as_ptr()) })))
+        .collect();
     *puppet.slots.lock().unwrap() = std::array::from_fn(|slot| get_string(settings, &slot_setting(slot)));
     puppet.styles_read.store(styles::generation(), Ordering::SeqCst);
     *puppet.style_settings.lock().unwrap() = read_style_settings(settings);
@@ -894,6 +987,7 @@ unsafe extern "C" fn video_render(data: Ptr, _effect: Ptr) {
             Err(e) => crate::log(&format!("[Puppet] ⚠️ The plain shader didn't compile: {e}")),
         }
     }
+    *g.colors.lock().unwrap() = puppet.colors.lock().unwrap().clone();
     if let Some((_, s)) = shader.as_ref() {
         let view = placed(puppet);
         let (width, height) = (puppet.width.load(Ordering::Relaxed), puppet.height.load(Ordering::Relaxed));

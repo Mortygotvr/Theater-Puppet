@@ -33,6 +33,9 @@ pub struct Material {
     pub alpha: Alpha,
     /// Color<N> in its name: follows colour slot N
     pub color_slot: Option<u32>,
+    /// How much darker its shade is than its colour (brightness, 0–1): a
+    /// slot given a new colour gets it this much darker as its shade
+    pub shade_ratio: f32,
 }
 
 pub struct Primitive {
@@ -245,7 +248,7 @@ pub fn load(path: &Path) -> Result<Model, String> {
 
     let mut materials: Vec<Material> = doc.materials().map(material).collect();
     let default_material = materials.len();
-    materials.push(Material { name: "default".into(), color: [1.0; 4], shade: [0.7; 3], image: None, alpha: Alpha::Opaque, color_slot: None });
+    materials.push(Material { name: "default".into(), color: [1.0; 4], shade: [0.7; 3], image: None, alpha: Alpha::Opaque, color_slot: None, shade_ratio: 0.7 });
 
     let parts_of = node_parts(&doc);
     let mut morph_names: Vec<String> = Vec::new();
@@ -408,6 +411,8 @@ fn material(m: gltf::Material) -> Material {
         gltf::material::AlphaMode::Mask => Alpha::Mask(m.alpha_cutoff().unwrap_or(0.5)),
         gltf::material::AlphaMode::Blend => Alpha::Blend,
     };
+    let brightness = |c: &[f32]| 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+    let shade_ratio = (brightness(&shade) / brightness(&color[..3]).max(1e-4)).clamp(0.0, 1.0);
     Material {
         name,
         color,
@@ -415,7 +420,14 @@ fn material(m: gltf::Material) -> Material {
         image: pbr.base_color_texture().map(|t| t.texture().source().index()),
         alpha,
         color_slot,
+        shade_ratio,
     }
+}
+
+/// A material with its slot's new colour (sRGB, 0–1): its shade the same
+/// colour, as much darker as its own shade was
+pub fn recoloured(m: &Material, rgb: [f32; 3]) -> Material {
+    Material { color: [rgb[0], rgb[1], rgb[2], m.color[3]], shade: rgb.map(|c| c * m.shade_ratio), ..m.clone() }
 }
 
 fn linear_to_srgb(c: f32) -> f32 {
@@ -451,6 +463,15 @@ mod tests {
         assert_eq!(part("RightToeBase"), Some("right_foot"));
         assert_eq!(part("Spine2"), Some("torso"));
         assert_eq!(part("spring_hair_1_3"), None);
+    }
+
+    #[test]
+    fn a_new_colour_keeps_its_shadow_the_same_colour_darker() {
+        let m = Material { name: "Hair_Color2".into(), color: [0.8, 0.6, 0.4, 1.0], shade: [0.4, 0.3, 0.2], image: None, alpha: Alpha::Opaque, color_slot: Some(2), shade_ratio: 0.5 };
+        let r = recoloured(&m, [0.2, 0.4, 1.0]);
+        assert_eq!(r.color, [0.2, 0.4, 1.0, 1.0]);
+        assert_eq!(r.shade, [0.1, 0.2, 0.5]);
+        assert_eq!(r.color_slot, Some(2));
     }
 
     #[test]

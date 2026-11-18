@@ -320,6 +320,9 @@ pub struct Gpu {
     /// The avatar's own (the extras' follow them)
     main_materials: usize,
     main_textures: usize,
+    /// Colour slots given a colour (sRGB, 0–1), by slot: their materials
+    /// show it in place of their own (every layer's)
+    pub colors: std::sync::Mutex<std::collections::HashMap<u32, [f32; 3]>>,
     target: Ptr,
     /// The ink pass: normals and distances, then the picture with its lines
     gbuf: Ptr,
@@ -419,6 +422,7 @@ impl Gpu {
             meshes,
             main_materials: materials.len(),
             main_textures: textures.len(),
+            colors: Default::default(),
             textures,
             materials,
             target,
@@ -816,14 +820,17 @@ impl Gpu {
     unsafe fn pass(&self, shader: &Shader, values: &FrameValues, technique: &std::ffi::CStr, wanted: impl Fn(&Material) -> bool) {
         let api = obs::api();
         let mut first = true;
+        let colors = self.colors.lock().unwrap().clone();
         for mesh in &self.meshes {
             let m = &self.materials[mesh.material];
             if !wanted(m) {
                 continue;
             }
+            // Its colour slot's colour, when the slot has one
+            let recoloured = m.color_slot.and_then(|s| colors.get(&s)).map(|rgb| crate::model::recoloured(m, *rgb));
             unsafe {
                 shader.set_frame(values);
-                self.set_material(shader, m);
+                self.set_material(shader, recoloured.as_ref().unwrap_or(m));
                 if first {
                     first = false;
                     shader.log_unset(technique);
