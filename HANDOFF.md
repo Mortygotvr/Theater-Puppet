@@ -94,9 +94,12 @@ MediaPipe notes:
 
 ## Place and animations
 
-- Each Puppet has Turn and Position (X/Y/Z, metres) settings. Procedure
-  `theater_puppet_place` (`src/place.rs`) reads and sets them, through the
-  source's settings.
+- Each Puppet has Turn and Position (X/Y/Z, metres) settings. On top of
+  them, the **"🧍 Puppet Place" filter** (`src/place.rs`) adds its own Turn
+  and Position. It's a filter on purpose: Theater Scene's Studio shows a
+  source's filters' sliders in its filter part, and its poses save and ease
+  them, so the avatar turns and moves with poses without Scene knowing about
+  Puppet. It passes the picture through untouched.
 - **Animations come only from Blender** (the owner's decision): clips baked
   on the avatar's own skeleton, exported in its GLB. Puppet plays them as
   they are (`src/animation.rs`): a looping one in place of the idle motion
@@ -113,9 +116,11 @@ MediaPipe notes:
   bone lengths and running its own springs. Nothing more (the owner wants
   it simple: a full GLB that mimics the main model). On the GPU they are
   mesh layers 1–3 (`Gpu::set_extras`). Test file: a skeleton with a box in
-  the right hand, `THEATER_PUPPET_EXTRA_GLB`.
-- The "🧍 Puppet Place" dock (`theater-scripts/puppet_place_dock.rhai`) has
-  both. A test with a real clip runs when `THEATER_PUPPET_ANIMATED_GLB` points
+  the right hand, `THEATER_PUPPET_EXTRA_GLB`. Planned by the owner, not
+  built: Control Panel toggles each extra GLB on and off, and GLBs get
+  groups, only one of a group active at once.
+- The "🎬 Puppet Animations" dock (`theater-scripts/puppet_animation_dock.rhai`)
+  picks the loop and plays clips. A test with a real clip runs when `THEATER_PUPPET_ANIMATED_GLB` points
   to an export with a "Wave" clip on RightArm.
 
 ## OBS graphics lessons already paid for

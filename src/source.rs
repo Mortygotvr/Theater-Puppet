@@ -718,6 +718,15 @@ fn filter_chain(puppet: &Puppet) -> Vec<FilterPass> {
     chain
 }
 
+/// The view with what Puppet Place filters on it add (place.rs)
+fn placed(puppet: &Puppet) -> View {
+    let mut view = *puppet.view.lock().unwrap();
+    let o = crate::place::offset(puppet.source);
+    view.yaw += o.turn;
+    view.position += o.position;
+    view
+}
+
 /// Runs each slot's tick: what it sets this frame
 unsafe extern "C" fn video_tick(data: Ptr, dt: f32) {
     let puppet = unsafe { &*(data as *const Puppet) };
@@ -726,7 +735,7 @@ unsafe extern "C" fn video_tick(data: Ptr, dt: f32) {
     if let Some(rig) = puppet.rig.lock().unwrap().as_mut() {
         let started = std::time::Instant::now();
         let mut motion = *puppet.motion.lock().unwrap();
-        motion.yaw = puppet.view.lock().unwrap().yaw;
+        motion.yaw = placed(puppet).yaw;
         rig.player.sync(&rig.model.clone(), &mut puppet.animation.lock().unwrap());
         rig.step(dt, motion);
         crate::timing::tick(started.elapsed());
@@ -886,7 +895,7 @@ unsafe extern "C" fn video_render(data: Ptr, _effect: Ptr) {
         }
     }
     if let Some((_, s)) = shader.as_ref() {
-        let view = *puppet.view.lock().unwrap();
+        let view = placed(puppet);
         let (width, height) = (puppet.width.load(Ordering::Relaxed), puppet.height.load(Ordering::Relaxed));
         let filters = filter_chain(puppet);
         g.draw(width, height, view, s, &frame, &filters);

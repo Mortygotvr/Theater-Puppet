@@ -1,103 +1,140 @@
-//! Where each Puppet stands and which way it faces, for Theater Scene's
-//! docks (theater-scripts/puppet_place_dock.rhai), through OBS's procedure
-//! handler:
+//! The "🧍 Puppet Place" filter: put on a Puppet source, its Turn and
+//! Position sliders turn and move the avatar. It's a filter so that Theater
+//! Scene's Studio shows its sliders in a source's filter part, its poses save
+//! them and ease them from one pose to the next, like every filter's. The
+//! picture itself goes through untouched.
 //!
-//! `theater_puppet_place(in string args, out string json)`, `args` being JSON:
-//! - `{"action": "get"}` (or none): every Puppet's place;
-//! - `{"action": "set", "source": name, "turn": degrees, "x", "y", "z": metres}`:
-//!   any of them, on that Puppet ("" or none = every Puppet). They are the
-//!   source's own Turn and Position settings, so its properties agree, and
-//!   the turn eases in as the slider's does (the hair swings after it).
-//!
-//! It answers `{"puppets": [{"source", "turn", "x", "y", "z"}], "done"}`.
+//! Its values add to the source's own Turn and Position settings (adding
+//! the filter never makes the avatar jump). Disabled or removed: no effect.
 
-use std::ffi::CStr;
+use std::ffi::{CStr, c_char};
+use std::sync::Mutex;
 
-use serde_json::{Value, json};
+use glam::Vec3;
 
 use crate::obs::{self, Ptr};
-use crate::parts::{Calldata, get_string, set_string};
-use crate::source::{S_POSITION, S_YAW};
 
-const DECL: &CStr = c"void theater_puppet_place(in string args, out string json)";
+const ID: &CStr = c"theater_puppet_place_filter";
+const NAME: &CStr = c"\u{1F9CD} Puppet Place";
 
-/// Turn's range, degrees; position's, metres (x, y, z): the properties' sliders
+const S_TURN: &CStr = c"turn";
+const S_POSITION: [&CStr; 3] = [c"x", c"y", c"z"];
+
+/// Turn's range, degrees; position's, metres (x, y, z)
 pub const TURN: f64 = 180.0;
 pub const RANGE: [f64; 3] = [3.0, 2.0, 3.0];
 
-/// Registers the procedure. Call from obs_module_load.
-pub fn register() {
-    let api = obs::api();
-    unsafe {
-        let handler = (api.obs_get_proc_handler)();
-        if !handler.is_null() {
-            (api.proc_handler_add)(handler, DECL.as_ptr(), place_proc, std::ptr::null_mut());
-        }
-    }
+/// What a filter adds to its Puppet
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Offset {
+    /// Degrees
+    pub turn: f32,
+    /// Metres: right, up, towards the camera
+    pub position: Vec3,
 }
 
-unsafe extern "C" fn place_proc(_data: Ptr, cd: *mut Calldata) {
-    let args = get_string(cd, c"args");
-    let json = std::panic::catch_unwind(|| answer(&args)).unwrap_or_else(|_| "{}".into());
-    set_string(cd, c"json", &json);
-}
+/// Each Puppet Place filter (OBS's pointer): its settings, and the Puppet
+/// it's on (found at its tick; 0 before)
+static FILTERS: Mutex<Vec<(usize, Offset, usize)>> = Mutex::new(Vec::new());
 
-/// The settings `args` asks for, each clamped to its slider's range
-pub fn changes(args: &Value) -> Vec<(&'static CStr, f64)> {
-    let number = |k: &str| args.get(k).and_then(|v| v.as_f64()).filter(|v| v.is_finite());
-    let mut out = Vec::new();
-    if let Some(t) = number("turn") {
-        // Any angle, brought into -180..180
-        out.push((S_YAW, (t + TURN).rem_euclid(2.0 * TURN) - TURN));
-    }
-    for (i, k) in ["x", "y", "z"].into_iter().enumerate() {
-        if let Some(v) = number(k) {
-            out.push((S_POSITION[i], v.clamp(-RANGE[i], RANGE[i])));
-        }
+/// What the enabled Place filters on `source` add (several add up)
+pub fn offset(source: Ptr) -> Offset {
+    let filters = FILTERS.lock().unwrap();
+    let mut out = Offset::default();
+    for (_, o, _) in filters.iter().filter(|(_, _, p)| *p == source as usize) {
+        out.turn += o.turn;
+        out.position += o.position;
     }
     out
 }
 
-fn answer(args: &str) -> String {
-    let args: Value = serde_json::from_str(args).unwrap_or(json!({}));
+pub fn register() {
+    static INFO: obs::SourceInfo = obs::SourceInfo {
+        id: ID.as_ptr(),
+        type_: obs::OBS_SOURCE_TYPE_FILTER,
+        output_flags: obs::OBS_SOURCE_VIDEO,
+        get_name: Some(get_name),
+        create: Some(create),
+        destroy: Some(destroy),
+        get_width: None,
+        get_height: None,
+        get_defaults: Some(get_defaults),
+        get_properties: Some(get_properties),
+        update: Some(update),
+        activate: None,
+        deactivate: None,
+        show: None,
+        hide: None,
+        video_tick: Some(video_tick),
+        video_render: Some(video_render),
+    };
+    unsafe { (obs::api().obs_register_source_s)(&INFO, std::mem::size_of::<obs::SourceInfo>()) };
+}
+
+unsafe extern "C" fn get_name(_: Ptr) -> *const c_char {
+    NAME.as_ptr()
+}
+
+unsafe extern "C" fn get_defaults(settings: Ptr) {
     let api = obs::api();
-    let puppets = crate::parts::sources();
-    let mut done = true;
-    if args.get("action").and_then(|a| a.as_str()) == Some("set") {
-        let which = args.get("source").and_then(|s| s.as_str()).unwrap_or("");
-        let changes = changes(&args);
-        let targets: Vec<Ptr> = puppets.iter().filter(|(_, n)| which.is_empty() || n == which).map(|(s, _)| *s).collect();
-        done = !targets.is_empty();
-        if !changes.is_empty() {
-            for source in targets {
-                unsafe {
-                    let data = (api.obs_data_create)();
-                    if data.is_null() {
-                        continue;
-                    }
-                    for (key, value) in &changes {
-                        (api.obs_data_set_double)(data, key.as_ptr(), *value);
-                    }
-                    // Merged into its settings, then its update runs
-                    (api.obs_source_update)(source, data);
-                    (api.obs_data_release)(data);
-                }
-            }
+    unsafe {
+        (api.obs_data_set_default_double)(settings, S_TURN.as_ptr(), 0.0);
+        for k in S_POSITION {
+            (api.obs_data_set_default_double)(settings, k.as_ptr(), 0.0);
         }
     }
-    let list: Vec<Value> = puppets
-        .iter()
-        .map(|(source, name)| unsafe {
-            let settings = (api.obs_source_get_settings)(*source);
-            let get = |k: &CStr| if settings.is_null() { 0.0 } else { (api.obs_data_get_double)(settings, k.as_ptr()) };
-            let v = json!({ "source": name, "turn": get(S_YAW), "x": get(S_POSITION[0]), "y": get(S_POSITION[1]), "z": get(S_POSITION[2]) });
-            if !settings.is_null() {
-                (api.obs_data_release)(settings);
-            }
-            v
-        })
-        .collect();
-    json!({ "puppets": list, "done": done }).to_string()
+}
+
+unsafe extern "C" fn get_properties(_: Ptr) -> Ptr {
+    let api = obs::api();
+    unsafe {
+        let props = (api.obs_properties_create)();
+        (api.obs_properties_add_float_slider)(props, S_TURN.as_ptr(), c"Turn (degrees)".as_ptr(), -TURN, TURN, 1.0);
+        for (i, label) in [c"Left / right (m)", c"Down / up (m)", c"Back / forward (m)"].into_iter().enumerate() {
+            (api.obs_properties_add_float_slider)(props, S_POSITION[i].as_ptr(), label.as_ptr(), -RANGE[i], RANGE[i], 0.01);
+        }
+        (api.obs_properties_add_text)(
+            props,
+            c"place_info".as_ptr(),
+            c"Added to the Puppet's own Turn and Position. Theater Scene's poses save and ease these like any filter's.".as_ptr(),
+            obs::OBS_TEXT_INFO,
+        );
+        props
+    }
+}
+
+/// The filter's OBS source (its `data`: it needs nothing else)
+unsafe extern "C" fn create(settings: Ptr, filter: Ptr) -> Ptr {
+    FILTERS.lock().unwrap().push((filter as usize, Offset::default(), 0));
+    unsafe { update(filter, settings) };
+    filter
+}
+
+unsafe extern "C" fn destroy(filter: Ptr) {
+    FILTERS.lock().unwrap().retain(|(f, _, _)| *f != filter as usize);
+}
+
+unsafe extern "C" fn update(filter: Ptr, settings: Ptr) {
+    let api = obs::api();
+    let get = |k: &CStr| unsafe { (api.obs_data_get_double)(settings, k.as_ptr()) as f32 };
+    let o = Offset { turn: get(S_TURN), position: Vec3::new(get(S_POSITION[0]), get(S_POSITION[1]), get(S_POSITION[2])) };
+    if let Some(entry) = FILTERS.lock().unwrap().iter_mut().find(|(f, _, _)| *f == filter as usize) {
+        entry.1 = o;
+    }
+}
+
+/// Finds the Puppet it's on (0 while disabled: it adds nothing)
+unsafe extern "C" fn video_tick(filter: Ptr, _dt: f32) {
+    let api = obs::api();
+    let parent = unsafe { if (api.obs_source_enabled)(filter) { (api.obs_filter_get_parent)(filter) as usize } else { 0 } };
+    if let Some(entry) = FILTERS.lock().unwrap().iter_mut().find(|(f, _, _)| *f == filter as usize) {
+        entry.2 = parent;
+    }
+}
+
+/// The picture as it is
+unsafe extern "C" fn video_render(filter: Ptr, _effect: Ptr) {
+    unsafe { (obs::api().obs_source_skip_video_filter)(filter) };
 }
 
 #[cfg(test)]
@@ -105,14 +142,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn turns_wrap_and_positions_stay_in_range() {
-        let c = changes(&json!({ "turn": 270.0, "x": 10.0, "z": -0.5 }));
-        assert_eq!(c.len(), 3);
-        assert_eq!(c[0], (S_YAW, -90.0));
-        assert_eq!(c[1], (S_POSITION[0], 3.0));
-        assert_eq!(c[2], (S_POSITION[2], -0.5));
-        assert_eq!(changes(&json!({ "turn": -180.0 }))[0].1, -180.0);
-        assert_eq!(changes(&json!({ "turn": 45 }))[0].1, 45.0);
-        assert!(changes(&json!({ "action": "set" })).is_empty());
+    fn filters_on_a_puppet_add_up_and_others_dont_count() {
+        let (a, b) = (0x1000 as Ptr, 0x2000 as Ptr);
+        {
+            let mut f = FILTERS.lock().unwrap();
+            f.push((1, Offset { turn: 30.0, position: Vec3::X }, a as usize));
+            f.push((2, Offset { turn: 15.0, position: Vec3::Y }, a as usize));
+            f.push((3, Offset { turn: 90.0, position: Vec3::Z }, b as usize));
+            f.push((4, Offset { turn: 90.0, position: Vec3::Z }, 0));
+        }
+        assert_eq!(offset(a), Offset { turn: 45.0, position: Vec3::new(1.0, 1.0, 0.0) });
+        assert_eq!(offset(0x3000 as Ptr), Offset::default());
+        FILTERS.lock().unwrap().retain(|(f, _, _)| *f > 4);
     }
 }

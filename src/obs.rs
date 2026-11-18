@@ -31,6 +31,7 @@ pub struct SourceInfo {
 unsafe impl Sync for SourceInfo {}
 
 pub const OBS_SOURCE_TYPE_INPUT: u32 = 0;
+pub const OBS_SOURCE_TYPE_FILTER: u32 = 1;
 pub const OBS_SOURCE_VIDEO: u32 = 1 << 0;
 pub const OBS_SOURCE_CUSTOM_DRAW: u32 = 1 << 3;
 pub const OBS_PATH_FILE: u32 = 0;
@@ -137,6 +138,9 @@ api! {
     obs_data_set_double: fn(Ptr, *const c_char, f64);
     obs_data_set_string: fn(Ptr, *const c_char, *const c_char);
     obs_source_update: fn(Ptr, Ptr);
+    obs_source_enabled: fn(Ptr) -> bool;
+    obs_filter_get_parent: fn(Ptr) -> Ptr;
+    obs_source_skip_video_filter: fn(Ptr);
     obs_data_set_default_bool: fn(Ptr, *const c_char, bool);
     obs_data_set_default_string: fn(Ptr, *const c_char, *const c_char);
     gs_stagesurface_create: fn(u32, u32, u32) -> Ptr;
