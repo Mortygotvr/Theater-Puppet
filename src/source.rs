@@ -28,7 +28,9 @@ const S_WIDTH: &CStr = c"width";
 const S_HEIGHT: &CStr = c"height";
 const S_ZOOM: &CStr = c"zoom";
 const S_CENTRE: &CStr = c"centre";
-const S_YAW: &CStr = c"yaw";
+pub(crate) const S_YAW: &CStr = c"yaw";
+/// Where the avatar stands (metres): right, up, towards the camera
+pub(crate) const S_POSITION: [&CStr; 3] = [c"position_x", c"position_y", c"position_z"];
 const S_ARMS: &CStr = c"arms_down";
 const S_IDLE: &CStr = c"idle";
 const S_SPRINGS: &CStr = c"springs";
@@ -166,6 +168,9 @@ unsafe extern "C" fn get_defaults(settings: Ptr) {
         (api.obs_data_set_default_double)(settings, S_ZOOM.as_ptr(), 1.0);
         (api.obs_data_set_default_double)(settings, S_CENTRE.as_ptr(), 0.0);
         (api.obs_data_set_default_double)(settings, S_YAW.as_ptr(), 0.0);
+        for key in S_POSITION {
+            (api.obs_data_set_default_double)(settings, key.as_ptr(), 0.0);
+        }
         let m = Motion::default();
         (api.obs_data_set_default_double)(settings, S_ARMS.as_ptr(), m.arms_down as f64);
         (api.obs_data_set_default_double)(settings, S_IDLE.as_ptr(), m.idle as f64);
@@ -349,6 +354,13 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
         (api.obs_properties_add_float_slider)(props, S_ZOOM.as_ptr(), c"Zoom".as_ptr(), 0.2, 8.0, 0.05);
         (api.obs_properties_add_float_slider)(props, S_CENTRE.as_ptr(), c"Centre (feet to head)".as_ptr(), -1.0, 1.0, 0.01);
         (api.obs_properties_add_float_slider)(props, S_YAW.as_ptr(), c"Turn".as_ptr(), -180.0, 180.0, 1.0);
+        for (key, label, range) in [
+            (S_POSITION[0], c"Position: left / right (m)", 3.0),
+            (S_POSITION[1], c"Position: down / up (m)", 2.0),
+            (S_POSITION[2], c"Position: back / forward (m)", 3.0),
+        ] {
+            (api.obs_properties_add_float_slider)(props, key.as_ptr(), label.as_ptr(), -range, range, 0.01);
+        }
         (api.obs_properties_add_float_slider)(props, S_ARMS.as_ptr(), c"Arms down (degrees from the T-pose)".as_ptr(), 0.0, 85.0, 1.0);
         (api.obs_properties_add_float_slider)(props, S_IDLE.as_ptr(), c"Idle motion".as_ptr(), 0.0, 1.0, 0.01);
         (api.obs_properties_add_bool)(props, S_SPRINGS.as_ptr(), c"Spring bones (hair, skirt…)".as_ptr());
@@ -446,7 +458,7 @@ unsafe extern "C" fn create(settings: Ptr, source: Ptr) -> Ptr {
         parts,
         width: AtomicU32::new(1080),
         height: AtomicU32::new(1080),
-        view: Mutex::new(View { zoom: 1.0, height: 0.0, yaw: 0.0 }),
+        view: Mutex::new(View { zoom: 1.0, height: 0.0, yaw: 0.0, position: glam::Vec3::ZERO }),
         file: Mutex::new(String::new()),
         slots: Mutex::new(Default::default()),
         style_settings: Mutex::new(HashMap::new()),
@@ -514,6 +526,7 @@ unsafe extern "C" fn update(data: Ptr, settings: Ptr) {
             zoom: (api.obs_data_get_double)(settings, S_ZOOM.as_ptr()) as f32,
             height: (api.obs_data_get_double)(settings, S_CENTRE.as_ptr()) as f32,
             yaw: (api.obs_data_get_double)(settings, S_YAW.as_ptr()) as f32,
+            position: glam::Vec3::from_array(S_POSITION.map(|k| (api.obs_data_get_double)(settings, k.as_ptr()) as f32)),
         };
         *puppet.motion.lock().unwrap() = Motion {
             arms_down: (api.obs_data_get_double)(settings, S_ARMS.as_ptr()) as f32,

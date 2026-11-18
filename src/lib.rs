@@ -8,6 +8,7 @@ pub mod model;
 pub mod motion;
 pub mod obs;
 pub mod parts;
+pub mod place;
 pub mod pose;
 pub mod render;
 pub mod snapshot;
@@ -122,6 +123,7 @@ pub extern "C" fn obs_module_load() -> bool {
     source::register();
     parts::register_procs();
     tracking::dock::register();
+    place::register();
     // Tracking: its settings window's source, its inputs, its menu item
     tracking::menu::register();
     tracking::start();

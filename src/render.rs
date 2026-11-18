@@ -316,6 +316,9 @@ pub struct View {
     pub height: f32,
     /// Turn, degrees
     pub yaw: f32,
+    /// Where the avatar stands, metres from the middle: its right (+X, as
+    /// seen), up, towards the camera
+    pub position: Vec3,
 }
 
 /// Copies `src` into a libobs allocation (OBS frees it with the buffer)
@@ -424,8 +427,9 @@ impl Gpu {
         let fov = 30f32.to_radians();
         let aspect = width as f32 / height.max(1) as f32;
         // Standing on the origin, looked at from the front (+Z). (Turn turns
-        // the body itself, motion.rs: its hair swings after it.)
-        let model = Mat4::from_translation(Vec3::new(-centre.x, 0.0, -centre.z));
+        // the body itself, motion.rs: its hair swings after it.) Position
+        // moves it from there; the camera stays.
+        let model = Mat4::from_translation(Vec3::new(-centre.x, 0.0, -centre.z) + view.position);
         let visible = size.y * 1.08 / view.zoom.max(0.05);
         let target = Vec3::new(0.0, centre.y + view.height * size.y * 0.5, 0.0);
         let distance = visible * 0.5 / (fov * 0.5).tan() + size.z;

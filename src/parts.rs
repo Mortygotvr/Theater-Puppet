@@ -118,14 +118,21 @@ pub fn remove_source(source: Ptr) {
     SOURCES.lock().unwrap().retain(|(s, _)| *s != source as usize);
 }
 
+fn name_of(s: usize) -> String {
+    unsafe {
+        let p = (obs::api().obs_source_get_name)(s as Ptr);
+        if p.is_null() { String::new() } else { CStr::from_ptr(p).to_string_lossy().into_owned() }
+    }
+}
+
+/// Every Puppet source (OBS's pointer) and its name, oldest first
+pub(crate) fn sources() -> Vec<(Ptr, String)> {
+    SOURCES.lock().unwrap().iter().map(|(s, _)| (*s as Ptr, name_of(*s))).collect()
+}
+
 /// The Puppet source called `name` ("" = the first), and its OBS name
 fn find(name: &str) -> Option<(String, Shared)> {
-    let api = obs::api();
     let sources = SOURCES.lock().unwrap().clone();
-    let name_of = |s: usize| unsafe {
-        let p = (api.obs_source_get_name)(s as Ptr);
-        if p.is_null() { String::new() } else { CStr::from_ptr(p).to_string_lossy().into_owned() }
-    };
     if name.is_empty() {
         return sources.first().map(|(s, m)| (name_of(*s), m.clone()));
     }

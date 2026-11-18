@@ -133,6 +133,9 @@ api! {
     calldata_get_data: fn(Ptr, *const c_char, *mut c_void, usize) -> bool;
     calldata_set_data: fn(Ptr, *const c_char, *const c_void, usize);
     obs_data_release: fn(Ptr);
+    obs_data_create: fn() -> Ptr;
+    obs_data_set_double: fn(Ptr, *const c_char, f64);
+    obs_source_update: fn(Ptr, Ptr);
     obs_data_set_default_bool: fn(Ptr, *const c_char, bool);
     obs_data_set_default_string: fn(Ptr, *const c_char, *const c_char);
     gs_stagesurface_create: fn(u32, u32, u32) -> Ptr;
