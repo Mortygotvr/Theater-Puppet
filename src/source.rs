@@ -28,6 +28,9 @@ const S_FILE: &CStr = c"file";
 /// draw" 1, 2…: as many as added): how many, and each one's file, Show and
 /// group (of a group, only one shows: remote.rs). Slot 0 is the avatar.
 const S_EXTRA_COUNT: &CStr = c"extras";
+/// The controller it holds (Arms on the Controller input): a GLB of your own,
+/// "" for the built-in one (controller.rs)
+const S_CONTROLLER_MODEL: &CStr = c"controller_model";
 /// The most there can be
 const MAX_EXTRAS: usize = 64;
 
@@ -205,6 +208,12 @@ struct Puppet {
     extra_loaded: Arc<Mutex<Option<(u64, Vec<(usize, Arc<Model>)>)>>>,
     /// Each loaded extra with its slot (1, 2…)
     extras: Mutex<Vec<(usize, Arc<Model>)>>,
+    /// The controller's file, its latest load (bumped like `generation`),
+    /// and the model loaded
+    prop_file: Mutex<String>,
+    prop_generation: Arc<AtomicU64>,
+    prop_loaded: Arc<Mutex<Option<(u64, Option<Arc<Model>>)>>>,
+    prop_model: Mutex<Option<Arc<Model>>>,
     gpu: Mutex<Option<Gpu>>,
     /// Its skeleton, springs and posed vertices (motion.rs)
     rig: Mutex<Option<Rig>>,
@@ -466,6 +475,7 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
             if count < MAX_EXTRAS {
                 (api.obs_properties_add_button2)(props, c"extra.add".as_ptr(), c"\u{2795} Add a GLB".as_ptr(), add_extra, std::ptr::null_mut());
             }
+            (api.obs_properties_add_path)(props, S_CONTROLLER_MODEL.as_ptr(), c"Controller it holds (when Arms are on the Controller input; empty: the built-in one)".as_ptr(), obs::OBS_PATH_FILE, c"glTF (*.glb *.gltf)".as_ptr(), std::ptr::null());
         }
         // Colour slots (Theater Rig's Color<N>): the avatar's and its extras'
         if !data.is_null() {
@@ -690,6 +700,10 @@ unsafe extern "C" fn create(settings: Ptr, source: Ptr) -> Ptr {
         extra_generation: Arc::new(AtomicU64::new(0)),
         extra_loaded: Arc::new(Mutex::new(None)),
         extras: Mutex::new(Vec::new()),
+        prop_file: Mutex::new(String::new()),
+        prop_generation: Arc::new(AtomicU64::new(0)),
+        prop_loaded: Arc::new(Mutex::new(None)),
+        prop_model: Mutex::new(None),
         gpu: Mutex::new(None),
         rig: Mutex::new(None),
         motion: Mutex::new(Motion::default()),
@@ -783,6 +797,38 @@ unsafe extern "C" fn update(data: Ptr, settings: Ptr) {
         r.groups = (0..=count).map(|s| if s == 0 { String::new() } else { get_string(settings, &group_key(s)).trim().to_string() }).collect();
         r.update_hidden();
     }
+
+    // The controller it holds: the built-in one unless it has its own
+    let prop_file = {
+        let own = get_string(settings, S_CONTROLLER_MODEL);
+        if own.trim().is_empty() {
+            crate::data_dir().map(|d| d.join("controller").join("gamepad.glb").to_string_lossy().into_owned()).unwrap_or_default()
+        } else {
+            own
+        }
+    };
+    let mut current_prop = puppet.prop_file.lock().unwrap();
+    if *current_prop != prop_file {
+        *current_prop = prop_file.clone();
+        let generation = puppet.prop_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let (loaded, latest) = (puppet.prop_loaded.clone(), puppet.prop_generation.clone());
+        std::thread::Builder::new()
+            .name("theater-puppet-load-controller".into())
+            .spawn(move || {
+                let model = match model::load(&PathBuf::from(&prop_file)) {
+                    Ok(m) => Some(Arc::new(m)),
+                    Err(e) => {
+                        crate::log(&format!("[Puppet] ⚠️ The controller: {e}"));
+                        None
+                    }
+                };
+                if latest.load(Ordering::SeqCst) == generation {
+                    *loaded.lock().unwrap() = Some((generation, model));
+                }
+            })
+            .ok();
+    }
+    drop(current_prop);
 
     // The GLBs drawn with it: loaded again when their list changes
     let extra_files: Vec<(usize, String)> = (1..=extra_count(settings)).map(|n| (n, get_string(settings, &extra_key(n)))).filter(|(_, f)| !f.is_empty()).collect();
@@ -1128,6 +1174,13 @@ unsafe extern "C" fn video_render(data: Ptr, _effect: Ptr) {
             extras_changed = true;
         }
     }
+    // The controller, newly loaded
+    if let Some((generation, model)) = puppet.prop_loaded.lock().unwrap().take() {
+        if generation == puppet.prop_generation.load(Ordering::SeqCst) {
+            *puppet.prop_model.lock().unwrap() = model;
+            extras_changed = true;
+        }
+    }
     // A newly loaded file replaces what's on the GPU
     if let Some((generation, result)) = puppet.loaded.lock().unwrap().take() {
         extras_changed = true;
@@ -1154,15 +1207,22 @@ unsafe extern "C" fn video_render(data: Ptr, _effect: Ptr) {
             r.layer_slot = std::iter::once(0).chain(loaded.iter().map(|(s, _)| *s)).collect();
             r.update_hidden();
         }
+        // The controller drawn last, after the extras
+        let prop = puppet.prop_model.lock().unwrap().clone();
         if let Some(g) = gpu.as_mut() {
-            g.set_extras(&extras);
+            let all: Vec<Arc<Model>> = extras.iter().cloned().chain(prop.clone()).collect();
+            g.set_extras(&all);
+            *g.prop_layer.lock().unwrap() = prop.as_ref().map(|_| extras.len() + 1);
         }
         if let Some(rig) = puppet.rig.lock().unwrap().as_mut() {
             rig.set_extras(&extras);
+            rig.set_prop(prop);
         }
     }
     let Some(g) = gpu.as_ref() else { return };
     let timing = crate::timing::begin_render();
+    // The controller's layer and how much it's held (set below)
+    let mut prop_fade: Option<(usize, f32)> = None;
     // This frame's pose
     if let Some(rig) = puppet.rig.lock().unwrap().as_mut() {
         if rig.dirty {
@@ -1174,6 +1234,14 @@ unsafe extern "C" fn video_render(data: Ptr, _effect: Ptr) {
                 g.update_vertices(i + 1, &f.points, &f.normals);
                 f.dirty = false;
             }
+        }
+        let layer = rig.followers.len() + 1;
+        if let Some(p) = rig.prop.as_mut() {
+            if p.dirty {
+                g.update_vertices(layer, &p.points, &p.normals);
+                p.dirty = false;
+            }
+            prop_fade = Some((layer, p.weight));
         }
         // The tiles showing: each material's texture placement
         let (tiles, tile_fade) = {
@@ -1205,7 +1273,17 @@ unsafe extern "C" fn video_render(data: Ptr, _effect: Ptr) {
         }
     }
     *g.colors.lock().unwrap() = puppet.colors.lock().unwrap().clone();
-    *g.fade.lock().unwrap() = puppet.remote.lock().unwrap().fade.clone();
+    {
+        let mut fade = puppet.remote.lock().unwrap().fade.clone();
+        // The controller: shown as much as it's held
+        if let Some((layer, weight)) = prop_fade {
+            if fade.len() <= layer {
+                fade.resize(layer + 1, 1.0);
+            }
+            fade[layer] = weight;
+        }
+        *g.fade.lock().unwrap() = fade;
+    }
     if let Some((_, s)) = shader.as_ref() {
         let view = placed(puppet);
         let (width, height) = (puppet.width.load(Ordering::Relaxed), puppet.height.load(Ordering::Relaxed));

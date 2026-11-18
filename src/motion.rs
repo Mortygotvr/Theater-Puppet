@@ -162,6 +162,10 @@ pub struct Rig {
     /// GLBs (layers) to hide, and the fade they take: their shape-key
     /// animation ended so
     pub hide: Vec<(usize, f32)>,
+    /// The controller it holds while its Arms are on the Controller input
+    pub prop: Option<crate::controller::Prop>,
+    /// The controller's state, while it's held
+    pad: Option<crate::tracking::gamepad::Pad>,
     /// The next blink, when no face is tracked (seconds on `time`)
     next_blink: f32,
     pub points: Vec<Vec<[f32; 4]>>,
@@ -255,6 +259,8 @@ impl Rig {
             followers: Vec::new(),
             overrides: Vec::new(),
             hide: Vec::new(),
+            prop: None,
+            pad: None,
             next_blink: 2.0,
             points,
             normals,
@@ -328,6 +334,7 @@ impl Rig {
 
         let tracked = if config.mirror { mirrored(tracked) } else { tracked.clone() };
         self.follow(&tracked, dt, config);
+        self.pad = tracked.controller;
 
         let model = self.model.clone();
         let bones = self.bones();
@@ -372,6 +379,14 @@ impl Rig {
         }
         pose.update_world(&model);
 
+        // The controller held: where it is (coming into the hands, or going)
+        if let Some(prop) = self.prop.as_mut() {
+            prop.fade(self.pad.is_some(), dt);
+            let rest_head = self.skeleton.rest_head();
+            let chest = bones.spine1.map(|s| self.rest.position(s)).unwrap_or(rest_head * 0.75);
+            prop.place(chest, rest_head.y / 1.5, turn, &self.pad.unwrap_or_default());
+        }
+
         // What's tracked, over the idle pose
         let targets = self.targets(turn, &bones);
         self.skeleton.apply(&model, &mut self.pose, &targets, config.head_strength, config.spine_lean, config.torso_follow);
@@ -393,6 +408,14 @@ impl Rig {
         for (i, f) in self.followers.iter_mut().enumerate() {
             f.follow(&model, &self.rest, &self.pose, &self.morph, dt, &motion, &self.overrides, i + 1);
         }
+        if let Some(prop) = self.prop.as_mut().filter(|p| p.weight > 0.0) {
+            prop.pose_parts(&self.pad.unwrap_or_default());
+        }
+    }
+
+    /// The controller it holds while its Arms are on the Controller input (None: none)
+    pub fn set_prop(&mut self, model: Option<Arc<Model>>) {
+        self.prop = model.map(crate::controller::Prop::new);
     }
 
     /// The GLBs drawn with the avatar (each copies its pose), in place of the ones before
@@ -458,6 +481,22 @@ impl Rig {
         out.hips = f.hips.get().map(|(t, w)| blend(bones.hips, t, w));
         out.left_foot = f.feet[0].get().map(|(t, w)| blend(self.model.node("LeftFoot"), t, w));
         out.right_foot = f.feet[1].get().map(|(t, w)| blend(self.model.node("RightFoot"), t, w));
+        // Holding the controller: the hands on it, the fingers on its buttons
+        if let Some(prop) = self.prop.as_ref().filter(|p| p.weight > 0.0) {
+            let w = prop.weight;
+            let held = |bone: Option<usize>, t: Target| match bone {
+                Some(b) if w < 1.0 => mix_target(Target { position: pose.position(b), rotation: pose.world_rotation(b) * self.rest.world_rotation(b).inverse() }, t, w),
+                _ => t,
+            };
+            let [l, r] = prop.hands();
+            out.left_hand = Some(held(bones.left_hand, l));
+            out.right_hand = Some(held(bones.right_hand, r));
+            out.left_elbow = None;
+            out.right_elbow = None;
+            let [lf, rf] = crate::controller::fingers(&self.pad.unwrap_or_default());
+            out.left_fingers = Some(mix_hand(Hand::default(), lf, w));
+            out.right_fingers = Some(mix_hand(Hand::default(), rf, w));
+        }
         out
     }
 
@@ -776,6 +815,41 @@ mod tests {
         }
         assert_eq!(rig.hide, vec![(1, 0.3)]);
         assert!(rig.overrides.is_empty());
+    }
+
+    #[test]
+    fn it_holds_the_controller() {
+        use crate::tracking::gamepad::{Pad, button};
+        let Some(mut rig) = rig() else { return };
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("controller").join("gamepad.glb");
+        rig.set_prop(Some(Arc::new(crate::model::load(&path).unwrap())));
+        let config = tracking::config::Config { smoothing: 0.0, ..Default::default() };
+        let held = Snapshot { controller: Some(Pad::default()), ..Default::default() };
+        for _ in 0..40 {
+            rig.step_with(1.0 / 60.0, still(), &held, &config);
+        }
+        let prop = rig.prop.as_ref().unwrap();
+        assert_eq!(prop.weight, 1.0);
+        let [l, r] = prop.hands();
+        let at = |n: &str| rig.pose.position(rig.model.node(n).unwrap());
+        // The wrists reach the controller's hand markers
+        let (lh, rh) = (at("LeftHand"), at("RightHand"));
+        println!("left wrist {lh:?} (marker {:?}), right {rh:?} (marker {:?}), chest {:?}", l.position, r.position, at("Spine1"));
+        assert!((lh - l.position).length() < 0.03 && (rh - r.position).length() < 0.03, "the hands don't reach it");
+        // In front of the body, below the shoulders, the elbows below the shoulders
+        assert!(lh.z > at("Spine1").z + 0.1 && lh.y < at("LeftArm").y);
+        assert!(at("LeftForeArm").y < at("LeftArm").y, "the left elbow is up");
+        // Pressing A: the right thumb bends more
+        let thumb = rig.model.node("RightHandThumb2").or(rig.model.node("RightHandThumb1")).unwrap();
+        let rest_thumb = rig.pose.rotation[thumb];
+        let pressed = Snapshot { controller: Some(Pad { buttons: button::A, ..Default::default() }), ..Default::default() };
+        rig.step_with(1.0 / 60.0, still(), &pressed, &config);
+        assert!(rig.pose.rotation[thumb].angle_between(rest_thumb) > 0.05);
+        // Let go: it fades out of the hands
+        for _ in 0..30 {
+            rig.step_with(1.0 / 60.0, still(), &Snapshot::default(), &config);
+        }
+        assert_eq!(rig.prop.as_ref().unwrap().weight, 0.0);
     }
 
     #[test]

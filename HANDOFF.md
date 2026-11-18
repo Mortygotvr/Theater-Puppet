@@ -148,6 +148,23 @@ MediaPipe notes:
   picks the loop and plays clips. A test with a real clip runs when `THEATER_PUPPET_ANIMATED_GLB` points
   to an export with a "Wave" clip on RightArm.
 
+## The controller it holds
+
+- Input `Source::Controller` (`src/tracking/gamepad.rs`): XInput
+  (xinput1_4.dll) or SDL3 (Puppet's own SDL3.dll in its data folder, else
+  Steam's `Steam\SDL3.dll`), the user's choice in the Tracking window (Auto:
+  XInput when it has a controller, else SDL). Reading doesn't take the
+  controller from the game. Background events are on for SDL.
+- When **Arms** are on it, the snapshot carries the controller's state; the
+  rig (`src/controller.rs`) places the controller GLB in front of the belly
+  (turned with the body), puts the wrists on its `hand_left`/`hand_right`
+  markers, poses the fingers from the buttons, and moves its sticks,
+  triggers, buttons. It's the last GPU layer, its fade the hold's weight, and
+  left out of the parts map.
+- The built-in model: `controller/gamepad.glb`, made by
+  `controller/make_gamepad.py` (Blender), which documents the node names a
+  user's own controller GLB needs (source setting "Controller it holds").
+
 ## Driven from outside: Control Panel and Scene
 
 - **One procedure**, `theater_puppet_command(in string args, out string

@@ -96,6 +96,13 @@ fn to_data(config: &Config, data: Ptr) {
     double(c"leap_forward", config.leap_forward);
     boolean(c"mediapipe", config.mediapipe);
     string(c"camera", &config.camera);
+    boolean(c"controller_on", config.controller.enabled);
+    string(c"controller_backend", match config.controller.backend {
+        super::gamepad::Backend::Auto => "auto",
+        super::gamepad::Backend::XInput => "xinput",
+        super::gamepad::Backend::Sdl => "sdl",
+    });
+    string(c"controller_device", &config.controller.device);
     boolean(c"mirror", config.mirror);
     double(c"head_strength", config.head_strength);
     double(c"spine_lean", config.spine_lean);
@@ -131,6 +138,13 @@ fn from_data(data: Ptr) -> Config {
     c.leap_forward = double(c"leap_forward");
     c.mediapipe = boolean(c"mediapipe");
     c.camera = get_string(data, c"camera");
+    c.controller.enabled = boolean(c"controller_on");
+    c.controller.backend = match get_string(data, c"controller_backend").as_str() {
+        "xinput" => super::gamepad::Backend::XInput,
+        "sdl" => super::gamepad::Backend::Sdl,
+        _ => super::gamepad::Backend::Auto,
+    };
+    c.controller.device = get_string(data, c"controller_device");
     c.mirror = boolean(c"mirror");
     c.head_strength = double(c"head_strength");
     c.spine_lean = double(c"spine_lean");
@@ -211,6 +225,22 @@ unsafe extern "C" fn get_properties(_: Ptr) -> Ptr {
         (api.obs_property_list_add_string)(list, c"(none)".as_ptr(), c"".as_ptr());
         for (name, id) in cameras() {
             (api.obs_property_list_add_string)(list, key(&name).as_ptr(), key(&id).as_ptr());
+        }
+
+        // A game controller, held by the avatar (Arms set to it below)
+        (api.obs_properties_add_bool)(props, c"controller_on".as_ptr(), key(&format!("Controller (the avatar holds one and presses its buttons; set Arms to it below): {}", status(Source::Controller))).as_ptr());
+        let list = (api.obs_properties_add_list)(props, c"controller_backend".as_ptr(), c"Controller: read through".as_ptr(), obs::OBS_COMBO_TYPE_LIST, obs::OBS_COMBO_FORMAT_STRING);
+        for (label, value) in [
+            (c"Auto (XInput, else SDL)", c"auto"),
+            (c"XInput (Xbox controllers, Steam Input)", c"xinput"),
+            (c"SDL (any controller: PlayStation, Switch Pro…)", c"sdl"),
+        ] {
+            (api.obs_property_list_add_string)(list, label.as_ptr(), value.as_ptr());
+        }
+        let list = (api.obs_properties_add_list)(props, c"controller_device".as_ptr(), c"Controller: which one".as_ptr(), obs::OBS_COMBO_TYPE_LIST, obs::OBS_COMBO_FORMAT_STRING);
+        (api.obs_property_list_add_string)(list, c"The first one found".as_ptr(), c"".as_ptr());
+        for (label, id) in super::gamepad::devices() {
+            (api.obs_property_list_add_string)(list, key(&label).as_ptr(), key(&id).as_ptr());
         }
 
         info(c"i_assign", "What tracks what: for each part of the avatar, the input that drives it. Auto takes whichever of its inputs sent last.");

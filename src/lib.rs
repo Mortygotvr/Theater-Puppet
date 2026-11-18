@@ -3,6 +3,7 @@
 //! shape keys, Color<N> slots). This first version draws it at rest.
 
 pub mod animation;
+pub mod controller;
 pub mod filters;
 pub mod ik;
 pub mod model;

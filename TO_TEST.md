@@ -3,6 +3,22 @@
 What's built but not yet tried live, newest first. Tick it (or tell Claude
 what went wrong) and it comes off the list.
 
+## Controller (the avatar holds one)
+- [ ] Tracking window: turn on "Controller", "read through" Auto, then set
+      **Arms** to "Controller (held)". The avatar holds the built-in gamepad
+      in front of its belly (zoom out the Puppet source to see the hands).
+- [ ] Hands and fingers look right around it (palms, thumbs on top, index
+      fingers on the triggers). Their angles were worked out, not seen: say
+      what's off.
+- [ ] Buttons: A/B/X/Y (right thumb reaches, the button sinks), triggers and
+      bumpers (index fingers), sticks (they tilt, the thumbs ride), d-pad.
+- [ ] Your controller through XInput, and through SDL (Steam's SDL3.dll).
+      A PlayStation / Switch controller through SDL.
+- [ ] While playing a game (OBS not in front): it still follows.
+- [ ] Puppet properties → "Controller it holds": your own GLB (make it from
+      `controller/make_gamepad.py`'s names: hand_left/right, stick_left/right…).
+- [ ] Arms set back to something else: the controller fades out of the hands.
+
 ## iFacialMocap head position
 - [ ] Tracking window: Head position → iFacialMocap. Lean left / right, up /
       down, toward / away from the phone: the avatar's head follows, the

@@ -17,6 +17,7 @@ pub mod config;
 mod dll;
 pub mod dock;
 mod fingers;
+pub mod gamepad;
 pub mod ifacialmocap;
 pub mod leap;
 pub mod mediapipe;
@@ -61,10 +62,12 @@ pub enum Source {
     MediaPipe,
     /// The headset's own telemetry server (as the Unity avatar app reads it)
     Telemetry,
+    /// A game controller held in the hands (gamepad.rs)
+    Controller,
 }
 
 impl Source {
-    pub const ALL: [Source; 6] = [Source::IFacialMocap, Source::MeowFace, Source::SteamVr, Source::Telemetry, Source::Leap, Source::MediaPipe];
+    pub const ALL: [Source; 7] = [Source::IFacialMocap, Source::MeowFace, Source::SteamVr, Source::Telemetry, Source::Leap, Source::MediaPipe, Source::Controller];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -74,6 +77,7 @@ impl Source {
             Source::Leap => "Leap Motion",
             Source::MediaPipe => "MediaPipe",
             Source::Telemetry => "VR telemetry",
+            Source::Controller => "Controller (held)",
         }
     }
 }
@@ -227,7 +231,7 @@ impl Part {
             Part::Expressions => &[Source::IFacialMocap, Source::MeowFace, Source::MediaPipe],
             Part::HeadTurn => &[Source::IFacialMocap, Source::MeowFace, Source::MediaPipe, Source::SteamVr, Source::Telemetry],
             Part::HeadPosition => &[Source::SteamVr, Source::Telemetry, Source::IFacialMocap, Source::MediaPipe],
-            Part::Arms => &[Source::SteamVr, Source::Telemetry, Source::Leap, Source::MediaPipe],
+            Part::Arms => &[Source::SteamVr, Source::Telemetry, Source::Leap, Source::MediaPipe, Source::Controller],
             Part::Fingers => &[Source::Leap, Source::MediaPipe, Source::SteamVr, Source::Telemetry],
             Part::LowerBody => &[Source::SteamVr, Source::Telemetry, Source::MediaPipe],
         }
@@ -264,6 +268,8 @@ pub struct Snapshot {
     pub right_foot: Option<Target>,
     /// Which input each part came from (the Tracking window says)
     pub from: Vec<(Part, Source)>,
+    /// The controller held (Arms set to it): the hands go on it, the fingers press it
+    pub controller: Option<gamepad::Pad>,
 }
 
 /// The newest fresh thing from an input `part` may use, that has `get`:
@@ -342,6 +348,14 @@ pub fn snapshot(assign: &config::Assign) -> Snapshot {
             out.right_foot = Some(t);
             note(&mut out.from, Part::LowerBody, src);
         }
+        // Arms on the controller: the hands hold it (and its fingers are the controller's)
+        if assign.arms == Pick::Only(Source::Controller) {
+            out.controller = gamepad::latest();
+            if out.controller.is_some() {
+                note(&mut out.from, Part::Arms, Source::Controller);
+                note(&mut out.from, Part::Fingers, Source::Controller);
+            }
+        }
         out
     })
 }
@@ -369,6 +383,7 @@ pub fn start() {
     telemetry::restart(&cfg);
     leap::restart(&cfg);
     mediapipe::restart(&cfg);
+    gamepad::restart(&cfg.controller);
 }
 
 #[cfg(test)]

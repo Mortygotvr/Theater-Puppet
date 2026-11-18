@@ -80,6 +80,8 @@ pub struct Config {
     pub mediapipe: bool,
     /// MediaPipe's camera: its device id, as OBS's Video Capture Device lists it
     pub camera: String,
+    /// A game controller the avatar holds (gamepad.rs)
+    pub controller: super::gamepad::Settings,
     /// A Python of your own that has mediapipe and opencv (only in the file;
     /// empty: Puppet's own, which it installs by itself the first time)
     pub python: String,
@@ -114,6 +116,7 @@ impl Default for Config {
             mediapipe: false,
             camera: String::new(),
             python: String::new(),
+            controller: Default::default(),
             assign: Assign::default(),
             mirror: false,
             head_strength: 1.0,

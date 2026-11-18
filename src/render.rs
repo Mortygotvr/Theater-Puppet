@@ -358,6 +358,8 @@ pub struct Gpu {
     pub colors: std::sync::Mutex<std::collections::HashMap<u32, [f32; 3]>>,
     /// How much of each layer shows (0 not drawn, below 1 dissolving; missing: 1)
     pub fade: std::sync::Mutex<Vec<f32>>,
+    /// The controller's layer (controller.rs): left out of the parts map
+    pub prop_layer: std::sync::Mutex<Option<usize>>,
     /// Each mesh's texture placement now (set_uvs), and its crossfade
     uv_now: std::sync::Mutex<Vec<[f32; 4]>>,
     uv_fade: std::sync::Mutex<Vec<Option<TileFade>>>,
@@ -464,6 +466,7 @@ impl Gpu {
             main_textures: textures.len(),
             colors: Default::default(),
             fade: Default::default(),
+            prop_layer: Default::default(),
             uv_now: Default::default(),
             uv_fade: Default::default(),
             uv_clock: Default::default(),
@@ -914,10 +917,12 @@ impl Gpu {
         let fade = self.fade.lock().unwrap().clone();
         let uv_now = self.uv_now.lock().unwrap().clone();
         let uv_fade = self.uv_fade.lock().unwrap().clone();
+        // The controller isn't a body part to hit
+        let skip_layer = if technique == c"Parts" { *self.prop_layer.lock().unwrap() } else { None };
         for (i, mesh) in self.meshes.iter().enumerate() {
             let m = &self.materials[mesh.material];
             let shows = fade.get(mesh.layer).copied().unwrap_or(1.0);
-            if !wanted(m) || shows <= 0.0 {
+            if !wanted(m) || shows <= 0.0 || Some(mesh.layer) == skip_layer {
                 continue;
             }
             // Its colour slot's colour, when the slot has one
