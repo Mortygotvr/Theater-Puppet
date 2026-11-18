@@ -15,6 +15,12 @@ uniform float4 outline_color;
 uniform float outline_jitter;
 uniform float outline_boil;
 uniform float time;
+// How much of its GLB shows (0–1): below 1 it dissolves, pixel by pixel
+uniform float glb_fade;
+// A tile crossfading (remote.rs): the tile before, where the UVs' tile maps
+// to (uv * xy + zw), and how far the new one has come in (1 = all of it)
+uniform float4 tile_map;
+uniform float tile_mix;
 
 sampler_state tex_sampler {
 	Filter   = Linear;
@@ -50,9 +56,23 @@ struct Surface {
 
 float4 texel(float2 uv)
 {
-	if (use_texture > 0.5)
-		return image.Sample(tex_sampler, uv);
-	return float4(1.0, 1.0, 1.0, 1.0);
+	if (use_texture < 0.5)
+		return float4(1.0, 1.0, 1.0, 1.0);
+	float4 now = image.Sample(tex_sampler, uv);
+	if (tile_mix >= 1.0)
+		return now;
+	float4 before = image.Sample(tex_sampler, uv * tile_map.xy + tile_map.zw);
+	return lerp(before, now, saturate(tile_mix));
+}
+
+// A GLB fading: whether this pixel is gone yet (a fine noise, the same
+// every frame, so it dissolves rather than flickers)
+bool faded_out(float2 screen)
+{
+	if (glb_fade >= 1.0)
+		return false;
+	float n = frac(52.9829189 * frac(dot(floor(screen), float2(0.06711056, 0.00583715))));
+	return n >= glb_fade;
 }
 
 /* STYLE_CODE */
@@ -71,7 +91,7 @@ float4 PSPuppet(VertOut v) : TARGET
 {
 	float4 t = texel(v.uv);
 	float4 albedo = base_color * t;
-	if (albedo.a < alpha_cutoff)
+	if (albedo.a < alpha_cutoff || faded_out(v.pos.xy))
 		discard;
 	Surface s;
 	s.albedo = albedo;
@@ -111,7 +131,7 @@ float4 PSOutline(VertOut v) : TARGET
 {
 	if (dot(normalize(v.norm), normalize(eye.xyz - v.wpos)) > 0.0)
 		discard;
-	if ((base_color * texel(v.uv)).a < alpha_cutoff)
+	if ((base_color * texel(v.uv)).a < alpha_cutoff || faded_out(v.pos.xy))
 		discard;
 	return float4(outline_color.rgb, 1.0);
 }
@@ -149,7 +169,7 @@ PartOut VSParts(PartIn v)
 
 float4 PSParts(PartOut v) : TARGET
 {
-	if ((base_color * texel(v.uv)).a < alpha_cutoff)
+	if ((base_color * texel(v.uv)).a < alpha_cutoff || faded_out(v.pos.xy))
 		discard;
 	float best = v.p0.x;
 	float id = 0.0;
@@ -195,7 +215,7 @@ GOut VSGBuffer(VertIn v)
 
 float4 PSGBuffer(GOut v) : TARGET
 {
-	if ((base_color * texel(v.uv)).a < alpha_cutoff)
+	if ((base_color * texel(v.uv)).a < alpha_cutoff || faded_out(v.pos.xy))
 		discard;
 	return float4(normalize(v.norm) * 0.5 + 0.5, v.depth);
 }

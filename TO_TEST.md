@@ -3,6 +3,16 @@
 What's built but not yet tried live, newest first. Tick it (or tell Claude
 what went wrong) and it comes off the list.
 
+## Fades
+- [ ] Show / hide a GLB with Fade 0.5 s: it dissolves in / out (a fine
+      grain, then gone), outlines and filters too.
+- [ ] A group swap with a fade: one dissolves out while the other comes in.
+- [ ] Animate shape key with "hide at the end" and a fade.
+- [ ] A tile with Crossfade 0.3 s: the old tile melts into the new one;
+      `off` melts back. Grid `next` crossfades each step.
+- [ ] Does the dissolve grain look good enough on stream, or should it be a
+      true transparency (more work)?
+
 ## Tile textures
 - [ ] Theater Rig: export HavocFFT.vrm (or WendigoFFT / Wendussy) with
       Export GLB; the report says "8 tile texture expression(s) kept".

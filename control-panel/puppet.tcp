@@ -66,6 +66,7 @@
     const SOURCE = { id: "source", label: "Puppet source (empty: every Puppet)", type: "obs_source", default: "" };
     const GLB = { id: "glb", label: "GLB (0 = the avatar, 1–3 = Also draw, or its file name)", type: "text", default: "0" };
     const KEY = { id: "key", label: "Shape key (its name in Blender)", type: "text", default: "" };
+    const FADE = { id: "fade", label: "Fade (seconds; 0 = at once)", type: "number", default: 0 };
 
     // ─── Animation ───────────────────────────────────────────────────────────
     window.TheaterController.registerCommand("puppet_animation", async (inputs) => {
@@ -116,7 +117,8 @@
             from: num(inputs.from, 0), to: num(inputs.to, 1), duration: num(inputs.seconds, 1),
             type: inputs.kind || "up",
             show_at_start: vis === "show" || vis === "both",
-            hide_at_end: vis === "hide" || vis === "both"
+            hide_at_end: vis === "hide" || vis === "both",
+            fade: num(inputs.fade, 0)
         }, `Shape key ${key}: ${inputs.kind || "up"} over ${num(inputs.seconds, 1)} s`);
     }, {
         label: "Puppet: Animate Shape Key",
@@ -135,7 +137,8 @@
                 { value: "show", label: "Show it at the start" },
                 { value: "hide", label: "Hide it at the end" },
                 { value: "both", label: "Show at the start, hide at the end" }
-            ] }
+            ] },
+            FADE
         ]
     }, MODULE_ID);
 
@@ -144,7 +147,8 @@
         const v = inputs.visible || "toggle";
         await send({
             action: "glb", source: text(inputs.source), glb: text(inputs.glb),
-            visible: v === "toggle" ? "toggle" : v === "on"
+            visible: v === "toggle" ? "toggle" : v === "on",
+            fade: num(inputs.fade, 0)
         }, `GLB ${text(inputs.glb)}: ${v === "on" ? "shown" : v === "off" ? "hidden" : "toggled"}`);
     }, {
         label: "Puppet: Show / Hide GLB",
@@ -154,14 +158,15 @@
                 { value: "on", label: "Show" },
                 { value: "off", label: "Hide" },
                 { value: "toggle", label: "Toggle" }
-            ] }
+            ] },
+            FADE
         ]
     }, MODULE_ID);
 
     // ─── Tile texture ────────────────────────────────────────────────────────
     window.TheaterController.registerCommand("puppet_tile", async (inputs) => {
         const name = text(inputs.name);
-        const args = { action: "tile", source: text(inputs.source), glb: text(inputs.glb), state: inputs.state || "on", value: num(inputs.value, 1) };
+        const args = { action: "tile", source: text(inputs.source), glb: text(inputs.glb), state: inputs.state || "on", fade: num(inputs.fade, 0) };
         if (name) {
             args.name = name;
         } else {
@@ -182,7 +187,7 @@
                 { value: "off", label: "Off (back to its own)" },
                 { value: "toggle", label: "Toggle" }
             ] },
-            { id: "value", label: "Strength 0–1", type: "number", default: 1 }
+            { id: "fade", label: "Crossfade (seconds; 0 = at once)", type: "number", default: 0 }
         ]
     }, MODULE_ID);
 
@@ -190,14 +195,15 @@
     window.TheaterController.registerCommand("puppet_group", async (inputs) => {
         const group = text(inputs.group);
         const pick = text(inputs.glb) || "next";
-        await send({ action: "group", source: text(inputs.source), group, glb: pick },
+        await send({ action: "group", source: text(inputs.source), group, glb: pick, fade: num(inputs.fade, 0) },
             `Group ${group}: ${pick}`);
     }, {
         label: "Puppet: Show GLB of Group",
         fields: [
             SOURCE,
             { id: "group", label: "Group (as in the Puppet's properties)", type: "text", default: "" },
-            { id: "glb", label: "Show (a GLB's name or number, next, or none)", type: "text", default: "next" }
+            { id: "glb", label: "Show (a GLB's name or number, next, or none)", type: "text", default: "next" },
+            FADE
         ]
     }, MODULE_ID);
 

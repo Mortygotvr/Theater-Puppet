@@ -21,13 +21,16 @@
 //!   group hides the others);
 //! - `group` {group, glb: a GLB of it | "next" | "none"}: shows that one of
 //!   the group (the others hidden), the next one, or none;
-//! - `tile` {glb, state: "on" | "off" | "toggle", value (0–1)} and either
+//! - `tile` {glb, state: "on" | "off" | "toggle"} and either
 //!   `name` (a tile the GLB has: a VRM expression moving textures, kept by
 //!   Theater Rig) or `material` + `columns` + `rows` + `cell` (a number, 0 the
 //!   top left, across then down; "next"; "random"): its texture shows that
 //!   tile of a grid of any size. One tile per material at a time;
 //! - `color` {slot, color: "#rrggbb" | "reset"}: that colour slot on every
 //!   GLB of the Puppet (saved in the source's settings).
+//!
+//! `glb`, `group`, `shape_anim` (its show and hide) and `tile` take `fade`
+//! (seconds, 0 at once): a GLB dissolves in or out, a tile crossfades.
 //!
 //! It answers `{"ok", "error"?, "puppets"?}`.
 
@@ -47,7 +50,7 @@ pub enum Drive {
     /// Back and forth from 0 to `top` every `period` seconds, until turned off
     PingPong { top: f32, period: f32 },
     /// Once, over `duration` seconds
-    Once { from: f32, to: f32, duration: f32, shape: Shape, hide_at_end: bool },
+    Once { from: f32, to: f32, duration: f32, shape: Shape, hide_at_end: bool, fade: f32 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -191,6 +194,14 @@ pub struct Remote {
     pub slots: Vec<u32>,
     /// Tiles showing (not saved)
     pub tiles: Vec<ActiveTile>,
+    /// How much of each layer shows now (0–1), easing toward its Show
+    /// setting over that layer's fade seconds
+    pub fade: Vec<f32>,
+    pub fade_seconds: Vec<f32>,
+    /// The fade the next Show change takes (a command's), then 0
+    pub pending_fade: f32,
+    /// Each (layer, material)'s crossfade, seconds (the last tile command's)
+    pub tile_fade: Vec<((usize, usize), f32)>,
 }
 
 impl Remote {
@@ -236,10 +247,40 @@ impl Remote {
         })
     }
 
-    /// The layers hidden, from the slots' settings
+    /// The layers hidden, from the slots' settings; a layer whose Show
+    /// changed fades over `pending_fade`
     pub fn update_hidden(&mut self) {
         let shown = effective(self.shown, &self.groups);
-        self.hidden = (0..self.layer_slot.len().max(1)).map(|l| !shown[self.slot(l)]).collect();
+        let hidden: Vec<bool> = (0..self.layer_slot.len().max(1)).map(|l| !shown[self.slot(l)]).collect();
+        let n = hidden.len();
+        self.fade_seconds.resize(n, 0.0);
+        for l in 0..n {
+            if self.hidden.get(l) != Some(&hidden[l]) {
+                self.fade_seconds[l] = self.pending_fade;
+            }
+            // A new layer starts as it is
+            if l >= self.fade.len() {
+                self.fade.push(if hidden[l] { 0.0 } else { 1.0 });
+            }
+        }
+        self.fade.truncate(n);
+        self.pending_fade = 0.0;
+        self.hidden = hidden;
+    }
+
+    /// Each layer's fade `dt` seconds later
+    pub fn step_fade(&mut self, dt: f32) {
+        for l in 0..self.fade.len() {
+            let target = if self.is_hidden(l) { 0.0 } else { 1.0 };
+            let secs = self.fade_seconds.get(l).copied().unwrap_or(0.0);
+            let f = &mut self.fade[l];
+            *f = if secs <= 0.0 { target } else if *f < target { (*f + dt / secs).min(target) } else { (*f - dt / secs).max(target) };
+        }
+    }
+
+    /// The crossfade seconds of a layer's material
+    pub fn tile_fade_of(&self, layer: usize, material: usize) -> f32 {
+        self.tile_fade.iter().find(|(k, _)| *k == (layer, material)).map(|(_, s)| *s).unwrap_or(0.0)
     }
 
     /// `glb` (a number, or a GLB's name) as its layer
@@ -338,7 +379,11 @@ fn apply(args: &Value, source: Ptr, remote: &Shared) -> Result<(), String> {
 fn ask(args: &Value, source: Ptr, remote: &Shared, shown: &mut Option<[bool; SLOTS]>) -> Result<(), String> {
     let text = |k: &str| args.get(k).and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
     let action = text("action");
+    let fade = number(args, "fade", 0.0, 0.0, 60.0);
     let mut r = remote.lock().unwrap();
+    if matches!(action.as_str(), "glb" | "group" | "shape_anim") {
+        r.pending_fade = fade;
+    }
     match action.as_str() {
         "animation" => {
             let clip = text("clip");
@@ -389,6 +434,7 @@ fn ask(args: &Value, source: Ptr, remote: &Shared, shown: &mut Option<[bool; SLO
                     duration: number(args, "duration", 1.0, 0.0, 600.0),
                     shape,
                     hide_at_end: flag(args, "hide_at_end"),
+                    fade,
                 })
             };
             r.shapes.push((layer, key, drive));
@@ -426,6 +472,11 @@ fn ask(args: &Value, source: Ptr, remote: &Shared, shown: &mut Option<[bool; SLO
                 ActiveTile { layer, name: String::new(), binds: vec![(material, grid_cell(columns, rows, cell))], weight, grid: Some((columns, rows, cell)) }
             };
             let materials: Vec<usize> = tile.binds.iter().map(|(m, _)| *m).collect();
+            // The crossfade its materials take (on, and off)
+            for &m in &materials {
+                r.tile_fade.retain(|(k, _)| *k != (layer, m));
+                r.tile_fade.push(((layer, m), fade));
+            }
             // Already showing: the same named tile, or the same cell of a grid
             let showing = r.tiles.iter().any(|t| t.layer == layer && if tile.name.is_empty() { t.name.is_empty() && t.binds == tile.binds } else { t.name == tile.name });
             let on = match state.as_str() {
@@ -518,7 +569,7 @@ mod tests {
         assert_eq!(at(pp, 0.0), Some(0.0));
         assert_eq!(at(pp, 1.0), Some(1.0));
         assert_eq!(at(pp, 1.5), Some(0.5));
-        let once = |shape| Drive::Once { from: 0.2, to: 0.8, duration: 2.0, shape, hide_at_end: false };
+        let once = |shape| Drive::Once { from: 0.2, to: 0.8, duration: 2.0, shape, hide_at_end: false, fade: 0.0 };
         assert_eq!(at(once(Shape::Up), 0.0), Some(0.2));
         assert!((at(once(Shape::Up), 1.0).unwrap() - 0.5).abs() < 1e-6);
         assert!((at(once(Shape::Down), 0.5).unwrap() - 0.65).abs() < 1e-6);
@@ -586,6 +637,26 @@ mod tests {
         assert_eq!(tiled(base, &[t(0.5)], 0, 2), Some([0.75, 0.75, 0.25, 0.0]));
         assert_eq!(tiled(base, &[t(1.0)], 0, 1), None);
         assert_eq!(tiled(base, &[t(1.0)], 1, 2), None);
+    }
+
+    #[test]
+    fn a_glb_fades_over_its_seconds() {
+        let mut r = Remote { layer_slot: vec![0, 1], shown: [true, true, true, true], ..Default::default() };
+        r.update_hidden();
+        assert_eq!(r.fade, vec![1.0, 1.0]);
+        // Hidden with a 0.5 s fade: halfway after a quarter second
+        r.pending_fade = 0.5;
+        r.shown[1] = false;
+        r.update_hidden();
+        r.step_fade(0.25);
+        assert!((r.fade[1] - 0.5).abs() < 1e-6 && r.fade[0] == 1.0);
+        r.step_fade(1.0);
+        assert_eq!(r.fade[1], 0.0);
+        // Shown again with no fade: at once
+        r.shown[1] = true;
+        r.update_hidden();
+        r.step_fade(0.01);
+        assert_eq!(r.fade[1], 1.0);
     }
 
     #[test]

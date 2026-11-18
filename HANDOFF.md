@@ -121,7 +121,10 @@ MediaPipe notes:
   Show setting, each Also draw a Group name. Of a group, only one shows:
   showing one hides the others; with several set, the first wins
   (`remote::effective` / `remote::showing`). Saved in the source's settings,
-  so they survive a restart. A layer's slot is kept apart (`layer_slot`): an
+  so they survive a restart. A Show change can fade (a command's `fade`):
+  the GLB dissolves pixel by pixel (`glb_fade`, `faded_out` in
+  `puppet.effect`; every pass, so depth, outlines and the parts map agree).
+  Not alpha: a half-transparent opaque model shows its own insides. A layer's slot is kept apart (`layer_slot`): an
   Also draw whose file doesn't load has no layer.
 - **Tile textures**: a texture holding a grid of tiles (eyes, mouths,
   faces), a material showing one of them. Theater Rig's Export copies the
@@ -133,7 +136,9 @@ MediaPipe notes:
   UVs of that material's meshes on the GPU (`Gpu::set_uvs`), so styles,
   filters and the parts map all see it. The `tile` command picks a named
   tile, or any cell of a grid of any size (the owner: the number of tiles
-  is never fixed). One tile per material at a time. Test avatar:
+  is never fixed). One tile per material at a time. A tile change can
+  crossfade: the shader samples the tile before too (`tile_map`,
+  `tile_mix` in `puppet.effect`). Test avatar:
   `Documents\VRM\HavocFFT.vrm`.
 - Colour slots: the source's "Colours" properties (Recolour slot N + its
   colour), on every GLB; a slot's shade is its colour as much darker as the

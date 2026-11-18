@@ -838,9 +838,10 @@ fn sync_remote(puppet: &Puppet, rig: &mut Rig) -> Option<[bool; crate::remote::S
     rig.player.sync(&model, &mut r.animation);
     rig.drive_shapes(std::mem::take(&mut r.shapes));
     let mut shown = None;
-    for layer in std::mem::take(&mut rig.hide) {
+    for (layer, fade) in std::mem::take(&mut rig.hide) {
         let now = shown.unwrap_or(r.shown);
         shown = Some(crate::remote::showing(now, &r.groups, r.slot(layer), false));
+        r.pending_fade = r.pending_fade.max(fade);
     }
     // Its GLBs (the avatar first) and colour slots, when they changed
     let models: Vec<&Model> = std::iter::once(&*rig.model).chain(rig.followers.iter().map(|f| &*f.model)).collect();
@@ -929,6 +930,7 @@ unsafe extern "C" fn video_tick(data: Ptr, dt: f32) {
         let mut motion = *puppet.motion.lock().unwrap();
         motion.yaw = placed(puppet).yaw;
         shown = sync_remote(puppet, rig);
+        puppet.remote.lock().unwrap().step_fade(dt);
         rig.step(dt, motion);
         crate::timing::tick(started.elapsed());
     }
@@ -1078,11 +1080,15 @@ unsafe extern "C" fn video_render(data: Ptr, _effect: Ptr) {
             }
         }
         // The tiles showing: each material's texture placement
-        let tiles = puppet.remote.lock().unwrap().tiles.clone();
+        let (tiles, tile_fade) = {
+            let r = puppet.remote.lock().unwrap();
+            (r.tiles.clone(), r.tile_fade.clone())
+        };
         let models: Vec<Arc<Model>> = std::iter::once(rig.model.clone()).chain(rig.followers.iter().map(|f| f.model.clone())).collect();
         g.set_uvs(|layer, material| {
-            let base = models.get(layer)?.materials.get(material)?.uv;
-            crate::remote::tiled(base, &tiles, layer, material)
+            let seconds = tile_fade.iter().find(|(k, _)| *k == (layer, material)).map(|(_, s)| *s).unwrap_or(0.0);
+            let base = models.get(layer).and_then(|m| m.materials.get(material)).map(|m| m.uv);
+            (base.and_then(|base| crate::remote::tiled(base, &tiles, layer, material)), seconds)
         });
     }
 
@@ -1103,7 +1109,7 @@ unsafe extern "C" fn video_render(data: Ptr, _effect: Ptr) {
         }
     }
     *g.colors.lock().unwrap() = puppet.colors.lock().unwrap().clone();
-    *g.hidden.lock().unwrap() = puppet.remote.lock().unwrap().hidden.clone();
+    *g.fade.lock().unwrap() = puppet.remote.lock().unwrap().fade.clone();
     if let Some((_, s)) = shader.as_ref() {
         let view = placed(puppet);
         let (width, height) = (puppet.width.load(Ordering::Relaxed), puppet.height.load(Ordering::Relaxed));

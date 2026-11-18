@@ -159,8 +159,9 @@ pub struct Rig {
     pub followers: Vec<Follower>,
     /// Shape keys driven from outside (remote.rs), on any of its GLBs
     pub overrides: Vec<crate::remote::Override>,
-    /// GLBs (layers) to hide: their shape-key animation ended so
-    pub hide: Vec<usize>,
+    /// GLBs (layers) to hide, and the fade they take: their shape-key
+    /// animation ended so
+    pub hide: Vec<(usize, f32)>,
     /// The next blink, when no face is tracked (seconds on `time`)
     next_blink: f32,
     pub points: Vec<Vec<[f32; 4]>>,
@@ -307,8 +308,8 @@ impl Rig {
         let hide = &mut self.hide;
         self.overrides.retain(|o| {
             let going = o.value().is_none();
-            if going && matches!(o.drive, crate::remote::Drive::Once { hide_at_end: true, .. }) {
-                hide.push(o.layer);
+            if let (true, crate::remote::Drive::Once { hide_at_end: true, fade, .. }) = (going, o.drive) {
+                hide.push((o.layer, fade));
             }
             !going
         });
@@ -764,7 +765,7 @@ mod tests {
         rig.step_with(1.0 / 60.0, still(), &Snapshot::default(), &config);
         assert_eq!(rig.morph[jaw], 0.0);
         // Once, up, half a second, then its GLB hidden
-        rig.drive_shapes(vec![(1, key.clone(), Some(Drive::Once { from: 0.0, to: 1.0, duration: 0.5, shape: Shape::Up, hide_at_end: true }))]);
+        rig.drive_shapes(vec![(1, key.clone(), Some(Drive::Once { from: 0.0, to: 1.0, duration: 0.5, shape: Shape::Up, hide_at_end: true, fade: 0.3 }))]);
         for _ in 0..15 {
             rig.step_with(1.0 / 60.0, still(), &Snapshot::default(), &config);
         }
@@ -773,7 +774,7 @@ mod tests {
         for _ in 0..20 {
             rig.step_with(1.0 / 60.0, still(), &Snapshot::default(), &config);
         }
-        assert_eq!(rig.hide, vec![1]);
+        assert_eq!(rig.hide, vec![(1, 0.3)]);
         assert!(rig.overrides.is_empty());
     }
 

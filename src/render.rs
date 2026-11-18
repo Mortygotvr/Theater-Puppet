@@ -116,6 +116,9 @@ struct Params {
     outline_jitter: Ptr,
     outline_boil: Ptr,
     time: Ptr,
+    glb_fade: Ptr,
+    tile_map: Ptr,
+    tile_mix: Ptr,
 }
 
 /// The effect a style's code compiles into
@@ -181,6 +184,9 @@ impl Shader {
             outline_jitter: p("outline_jitter"),
             outline_boil: p("outline_boil"),
             time: p("time"),
+            glb_fade: p("glb_fade"),
+            tile_map: p("tile_map"),
+            tile_mix: p("tile_mix"),
         };
         let mut numeric = Vec::new();
         unsafe {
@@ -268,6 +274,24 @@ struct Mesh {
     uvs: Vec<[f32; 2]>,
 }
 
+/// A mesh's tile crossfading: the placement before, how far in, and over how long
+#[derive(Clone, Copy, Debug)]
+struct TileFade {
+    from: [f32; 4],
+    time: f32,
+    duration: f32,
+}
+
+/// For the shader: where the tile before is, from the UVs placed by `now`
+/// (uv * xy + zw); None when `now` can't be undone (a scale of 0)
+fn tile_map(from: [f32; 4], now: [f32; 4]) -> Option<[f32; 4]> {
+    if now[0].abs() < 1e-6 || now[1].abs() < 1e-6 {
+        return None;
+    }
+    let (ax, ay) = (from[0] / now[0], from[1] / now[1]);
+    Some([ax, ay, from[2] - now[2] * ax, from[3] - now[3] * ay])
+}
+
 /// UVs placed by `st` (scale x, y, offset x, y): uv * scale + offset
 fn placed_uvs(uvs: &[[f32; 2]], st: [f32; 4]) -> Vec<[f32; 2]> {
     uvs.iter().map(|[u, v]| [u * st[0] + st[2], v * st[1] + st[3]]).collect()
@@ -332,10 +356,13 @@ pub struct Gpu {
     /// Colour slots given a colour (sRGB, 0–1), by slot: their materials
     /// show it in place of their own (every layer's)
     pub colors: std::sync::Mutex<std::collections::HashMap<u32, [f32; 3]>>,
-    /// Layers not drawn (by layer; missing: drawn)
-    pub hidden: std::sync::Mutex<Vec<bool>>,
-    /// Each mesh's texture placement now (set_uvs)
+    /// How much of each layer shows (0 not drawn, below 1 dissolving; missing: 1)
+    pub fade: std::sync::Mutex<Vec<f32>>,
+    /// Each mesh's texture placement now (set_uvs), and its crossfade
     uv_now: std::sync::Mutex<Vec<[f32; 4]>>,
+    uv_fade: std::sync::Mutex<Vec<Option<TileFade>>>,
+    /// When set_uvs last ran (its crossfades' clock)
+    uv_clock: std::sync::Mutex<Option<std::time::Instant>>,
     target: Ptr,
     /// The ink pass: normals and distances, then the picture with its lines
     gbuf: Ptr,
@@ -436,8 +463,10 @@ impl Gpu {
             main_materials: materials.len(),
             main_textures: textures.len(),
             colors: Default::default(),
-            hidden: Default::default(),
+            fade: Default::default(),
             uv_now: Default::default(),
+            uv_fade: Default::default(),
+            uv_clock: Default::default(),
             textures,
             materials,
             target,
@@ -606,20 +635,39 @@ impl Gpu {
         }
         // Each mesh as uploaded: its material's own placement
         *self.uv_now.lock().unwrap() = self.meshes.iter().map(|m| self.materials[m.material].uv).collect();
+        *self.uv_fade.lock().unwrap() = vec![None; self.meshes.len()];
     }
 
     /// Each mesh's texture placement: `tile(layer, its material in its model)`
-    /// when a tile moves it, else its material's own. Rewritten only when it
-    /// changes. Call on the graphics thread.
-    pub fn set_uvs(&self, tile: impl Fn(usize, usize) -> Option<[f32; 4]>) {
+    /// is (Some(placement) when a tile moves it, else its material's own; the
+    /// seconds a change crossfades over). Rewritten only when it changes.
+    /// Call on the graphics thread, once a frame.
+    pub fn set_uvs(&self, tile: impl Fn(usize, usize) -> (Option<[f32; 4]>, f32)) {
         let api = obs::api();
+        let dt = {
+            let mut clock = self.uv_clock.lock().unwrap();
+            let dt = clock.map(|t| t.elapsed().as_secs_f32()).unwrap_or(0.0).min(0.25);
+            *clock = Some(std::time::Instant::now());
+            dt
+        };
         let mut now = self.uv_now.lock().unwrap();
+        let mut fades = self.uv_fade.lock().unwrap();
         now.resize(self.meshes.len(), crate::model::UV_IDENTITY);
+        fades.resize(self.meshes.len(), None);
         for (i, mesh) in self.meshes.iter().enumerate() {
-            let st = tile(mesh.layer, mesh.local_material).unwrap_or(self.materials[mesh.material].uv);
+            if let Some(f) = fades[i].as_mut() {
+                f.time += dt;
+                if f.time >= f.duration {
+                    fades[i] = None;
+                }
+            }
+            let (st, seconds) = tile(mesh.layer, mesh.local_material);
+            let st = st.unwrap_or(self.materials[mesh.material].uv);
             if now[i] == st || mesh.uvs.len() != mesh.vertices {
                 continue;
             }
+            // From what shows now (mid-crossfade: the new one of it)
+            fades[i] = (seconds > 0.0 && tile_map(now[i], st).is_some()).then_some(TileFade { from: now[i], time: 0.0, duration: seconds });
             unsafe {
                 let data = (api.gs_vertexbuffer_get_data)(mesh.vb);
                 if data.is_null() || (*data).num != mesh.vertices || (*data).tvarray.is_null() || (*(*data).tvarray).array.is_null() {
@@ -863,10 +911,13 @@ impl Gpu {
         let api = obs::api();
         let mut first = true;
         let colors = self.colors.lock().unwrap().clone();
-        let hidden = self.hidden.lock().unwrap().clone();
-        for mesh in &self.meshes {
+        let fade = self.fade.lock().unwrap().clone();
+        let uv_now = self.uv_now.lock().unwrap().clone();
+        let uv_fade = self.uv_fade.lock().unwrap().clone();
+        for (i, mesh) in self.meshes.iter().enumerate() {
             let m = &self.materials[mesh.material];
-            if !wanted(m) || hidden.get(mesh.layer).copied().unwrap_or(false) {
+            let shows = fade.get(mesh.layer).copied().unwrap_or(1.0);
+            if !wanted(m) || shows <= 0.0 {
                 continue;
             }
             // Its colour slot's colour, when the slot has one
@@ -874,6 +925,13 @@ impl Gpu {
             unsafe {
                 shader.set_frame(values);
                 self.set_material(shader, recoloured.as_ref().unwrap_or(m));
+                // Its GLB fading, its tile crossfading (set after set_frame zeroed them)
+                let p = &shader.params;
+                (api.gs_effect_set_float)(p.glb_fade, shows.min(1.0));
+                let crossfade = uv_fade.get(i).copied().flatten().and_then(|f| Some((tile_map(f.from, *uv_now.get(i)?)?, f.time / f.duration.max(1e-3))));
+                let (map, mix) = crossfade.unwrap_or(([1.0, 1.0, 0.0, 0.0], 1.0));
+                (api.gs_effect_set_vec4)(p.tile_map, &map);
+                (api.gs_effect_set_float)(p.tile_mix, mix);
                 if first {
                     first = false;
                     shader.log_unset(technique);

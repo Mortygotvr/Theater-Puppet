@@ -529,6 +529,23 @@ mod tests {
     }
 
     #[test]
+    fn what_an_avatar_takes_in_memory() {
+        let Ok(path) = std::env::var("THEATER_PUPPET_GLB") else { return };
+        let m = load(Path::new(&path)).unwrap();
+        let images: usize = m.images.iter().map(|i| i.rgba.len()).sum();
+        let vertices: usize = m.primitives.iter().map(|p| p.positions.len()).sum();
+        let morphs: usize = m.primitives.iter().flat_map(|p| p.morphs.iter()).map(|x| x.deltas.len()).sum();
+        println!(
+            "memory: textures {:.0} MB ({} images), {} vertices, {} shape key deltas (~{:.0} MB of meshes)",
+            images as f64 / 1e6,
+            m.images.len(),
+            vertices,
+            morphs,
+            (vertices * 100 + morphs * 16) as f64 / 1e6
+        );
+    }
+
+    #[test]
     fn tiles_kept_by_theater_rig_are_read() {
         // THEATER_PUPPET_TILED_GLB: HavocFFT.vrm through Theater Rig's Export
         let Ok(path) = std::env::var("THEATER_PUPPET_TILED_GLB") else { return };
