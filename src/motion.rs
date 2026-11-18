@@ -519,3 +519,4 @@ mod tests {
         assert!(closed > 0.8, "no blink in ten seconds ({closed})");
     }
 }
+

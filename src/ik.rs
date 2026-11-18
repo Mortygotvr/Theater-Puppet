@@ -60,6 +60,9 @@ const SPINE: [(&str, f32); 5] = [("Hips", 0.2), ("Spine", 0.25), ("Spine1", 0.25
 /// The bones that turn the torso with the head, and how much each takes
 const TORSO: [(&str, f32); 3] = [("Spine", 0.3), ("Spine1", 0.35), ("Spine2", 0.35)];
 
+/// How far the hips may come down, against the legs' length (a deep squat)
+const DEEPEST_CROUCH: f32 = 0.85;
+
 /// The most a body leans from the hips before the legs take over (radians)
 const MAX_LEAN: f32 = 0.61;
 
@@ -121,10 +124,11 @@ impl Skeleton {
         if let (Some(hips), Some(target)) = (self.hips, tracked.head_position) {
             let now = self.head.map(|h| pose.position(h)).unwrap_or(self.rest_head);
             let mut shift = target - now;
-            // Not through the floor, nor off its legs
+            // Down to a deep squat (the hips a little above the heels), not
+            // off its legs: the knees fold as far as that takes
             let legs = self.rest_hips.y - self.rest_feet[0].y.min(self.rest_feet[1].y);
             let low = pose.position(hips).y - self.rest_hips.y;
-            shift.y = (low + shift.y).clamp(-legs * 0.6, legs * 0.08) - low;
+            shift.y = (low + shift.y).clamp(-legs * DEEPEST_CROUCH, legs * 0.08) - low;
             move_in_world(model, pose, hips, shift);
         }
         if let (Some(hips), Some(t)) = (self.hips, tracked.hips) {
@@ -423,6 +427,23 @@ mod tests {
         let foot = model.node("LeftFoot").unwrap();
         assert!((bent.position(foot) - rest.position(foot)).length() < 0.01);
         assert!((bent.position(knee) - rest.position(knee)).length() < (legs.position(knee) - rest.position(knee)).length());
+    }
+
+    #[test]
+    fn a_deep_squat_comes_through() {
+        let Some((model, rest, skeleton)) = rig() else { return };
+        let head = model.node("Head").unwrap();
+        let (left, right) = (skeleton.legs[0].unwrap(), skeleton.legs[1].unwrap());
+        let feet = [rest.position(left.end), rest.position(right.end)];
+        // The head 65 cm lower: a deep squat
+        let target = skeleton.rest_head() - Vec3::Y * 0.65;
+        let mut pose = rest.clone();
+        skeleton.apply(&model, &mut pose, &Snapshot { head_position: Some(target), ..Default::default() }, 1.0, 0.0, 0.0);
+        println!("squat: head {:?} for {target:?}, knee {:?}", pose.position(head), pose.position(left.mid));
+        assert!((pose.position(head) - target).length() < 0.02, "the head stopped at {:?}", pose.position(head));
+        // The feet stay put, the knees go forward
+        assert!((pose.position(left.end) - feet[0]).length() < 0.01 && (pose.position(right.end) - feet[1]).length() < 0.01);
+        assert!(pose.position(left.mid).z > rest.position(left.mid).z + 0.1);
     }
 
     #[test]
