@@ -100,8 +100,9 @@ fn color_slots(models: &[&Model]) -> Vec<(u32, [f32; 3])> {
     out
 }
 
-/// Style slots, applied in order
-const SLOTS: usize = 4;
+/// Style slots: one (a style per source; the slot code stays, its setting
+/// keeps its name, style1, so saved sources keep theirs)
+const SLOTS: usize = 1;
 /// A new source's first style
 const DEFAULT_STYLE: &str = "toon";
 
@@ -405,11 +406,11 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
         (api.obs_properties_add_text)(
             props,
             c"styles_order".as_ptr(),
-            c"Styles apply top to bottom, each on what the ones above made. Empty slots do nothing; with none, the colours are drawn plain.".as_ptr(),
+            c"The style shades the avatar (and its Also draw GLBs) in 3D, before the filters. (none): the colours with a soft light.".as_ptr(),
             obs::OBS_TEXT_INFO,
         );
         for slot in 0..SLOTS {
-            let label = cstring(&format!("Style {}", slot + 1));
+            let label = if SLOTS == 1 { cstring("Style") } else { cstring(&format!("Style {}", slot + 1)) };
             let list = (api.obs_properties_add_list)(props, slot_setting(slot).as_ptr(), label.as_ptr(), obs::OBS_COMBO_TYPE_LIST, obs::OBS_COMBO_FORMAT_STRING);
             (api.obs_property_list_add_string)(list, c"(none)".as_ptr(), c"".as_ptr());
             for s in &all {
@@ -423,7 +424,7 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
                 for (i, prop) in s.props.iter().enumerate() {
                     add_prop(group, &|k| setting_key(slot, &s.id, k), i, prop);
                 }
-                let title = cstring(&format!("{} {}", s.name, slot + 1));
+                let title = if SLOTS == 1 { cstring(&s.name) } else { cstring(&format!("{} {}", s.name, slot + 1)) };
                 let g = (api.obs_properties_add_group)(props, group_name(slot, &s.id).as_ptr(), title.as_ptr(), obs::OBS_GROUP_NORMAL, group);
                 (api.obs_property_set_visible)(g, s.id == current[slot]);
             }
