@@ -373,7 +373,7 @@ pub fn load(path: &Path) -> Result<Model, String> {
             m.image = None;
         }
     }
-    let clips = crate::animation::load(&doc, &buffers);
+    let clips = crate::animation::load(&doc, &buffers, &morph_names);
     Ok(Model { primitives, materials, images: images.into_iter().map(rgba).collect(), min, max, nodes, order, skins, morph_names, clips })
 }
 

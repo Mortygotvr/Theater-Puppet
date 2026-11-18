@@ -36,9 +36,12 @@ pub enum Values {
     Translation(Vec<Vec3>),
     Rotation(Vec<Quat>),
     Scale(Vec<Vec3>),
+    /// A mesh's shape keys: each of its targets' key (Model::morph_names'
+    /// place), and every key's weights one after another
+    Weights { targets: Vec<Option<usize>>, values: Vec<f32> },
 }
 
-/// One node's translation, rotation or scale over time
+/// One node's translation, rotation, scale or shape keys over time
 pub struct Channel {
     pub node: usize,
     pub times: Vec<f32>,
@@ -53,8 +56,8 @@ pub struct Clip {
     pub channels: Vec<Channel>,
 }
 
-/// The file's clips (shape key animation is left out)
-pub fn load(doc: &gltf::Document, buffers: &[gltf::buffer::Data]) -> Vec<Clip> {
+/// The file's clips: bones, and shape keys (by name, as `morph_names` has them)
+pub fn load(doc: &gltf::Document, buffers: &[gltf::buffer::Data], morph_names: &[String]) -> Vec<Clip> {
     use gltf::animation::{Interpolation, util::ReadOutputs};
     let mut clips = Vec::new();
     for (i, anim) in doc.animations().enumerate() {
@@ -73,11 +76,36 @@ pub fn load(doc: &gltf::Document, buffers: &[gltf::buffer::Data]) -> Vec<Clip> {
                 Some(ReadOutputs::Translations(it)) => Values::Translation(keep(it.map(Vec3::from).collect(), cubic)),
                 Some(ReadOutputs::Rotations(it)) => Values::Rotation(keep(it.into_f32().map(|q| Quat::from_array(q).normalize()).collect(), cubic)),
                 Some(ReadOutputs::Scales(it)) => Values::Scale(keep(it.map(Vec3::from).collect(), cubic)),
+                Some(ReadOutputs::MorphTargetWeights(it)) => {
+                    // The mesh's targets, named by its extras.targetNames (Blender's exporter)
+                    let Some(mesh) = channel.target().node().mesh() else { continue };
+                    let count = mesh.primitives().next().map(|p| p.morph_targets().count()).unwrap_or(0);
+                    let names: Vec<String> = mesh
+                        .extras()
+                        .as_ref()
+                        .and_then(|e| serde_json::from_str::<Value>(e.get()).ok())
+                        .and_then(|v| Some(v.get("targetNames")?.as_array()?.iter().map(|n| n.as_str().unwrap_or("").to_string()).collect()))
+                        .unwrap_or_default();
+                    let targets: Vec<Option<usize>> = (0..count)
+                        .map(|t| {
+                            let name = names.get(t).cloned().unwrap_or_else(|| format!("target_{t}"));
+                            morph_names.iter().position(|n| *n == name)
+                        })
+                        .collect();
+                    let all: Vec<f32> = it.into_f32().collect();
+                    if count == 0 {
+                        continue;
+                    }
+                    // A cubic spline's keys: in-tangents, values, out-tangents (the middle ones)
+                    let values = if cubic { all.chunks(count).skip(1).step_by(3).flatten().copied().collect() } else { all };
+                    Values::Weights { targets, values }
+                }
                 _ => continue,
             };
             let len = match &values {
                 Values::Translation(v) | Values::Scale(v) => v.len(),
                 Values::Rotation(v) => v.len(),
+                Values::Weights { targets, values } => values.len() / targets.len().max(1),
             };
             if times.is_empty() || len != times.len() {
                 continue;
@@ -126,6 +154,27 @@ impl Clip {
                 Values::Translation(v) => pose.translation[n] = pose.translation[n].lerp(v[a].lerp(v[b], f), weight),
                 Values::Rotation(v) => pose.rotation[n] = pose.rotation[n].slerp(v[a].slerp(v[b], f), weight).normalize(),
                 Values::Scale(v) => pose.scale[n] = pose.scale[n].lerp(v[a].lerp(v[b], f), weight),
+                Values::Weights { .. } => {}
+            }
+        }
+    }
+
+    /// The clip's shape keys at `time`, `weight` of them, over `morph` (the
+    /// stronger wins: a tracked face or a blink isn't undone by a key at 0)
+    pub fn apply_shapes(&self, morph: &mut [f32], time: f32, weight: f32) {
+        if weight <= 0.0 {
+            return;
+        }
+        for c in &self.channels {
+            let Values::Weights { targets, values } = &c.values else { continue };
+            let (a, b, f) = keys(&c.times, time, c.step);
+            let count = targets.len();
+            for (t, m) in targets.iter().enumerate() {
+                let Some(m) = *m else { continue };
+                let (va, vb) = (values[a * count + t], values[b * count + t]);
+                if let Some(w) = morph.get_mut(m) {
+                    *w = w.max((va + (vb - va) * f) * weight);
+                }
             }
         }
     }
@@ -236,10 +285,21 @@ impl Player {
     pub fn apply(&self, model: &Model, pose: &mut Pose) -> f32 {
         let mut shown = 0.0f32;
         for l in [self.old_base, self.base, self.once].into_iter().flatten() {
-            model.clips[l.clip].apply(pose, l.time, l.weight);
-            shown = shown.max(l.weight);
+            let clip = &model.clips[l.clip];
+            clip.apply(pose, l.time, l.weight);
+            // A face-only clip (shape keys) leaves the idle body motion alone
+            if clip.channels.iter().any(|c| !matches!(c.values, Values::Weights { .. })) {
+                shown = shown.max(l.weight);
+            }
         }
         shown
+    }
+
+    /// The clips' shape keys over `morph`
+    pub fn apply_shapes(&self, model: &Model, morph: &mut [f32]) {
+        for l in [self.old_base, self.base, self.once].into_iter().flatten() {
+            model.clips[l.clip].apply_shapes(morph, l.time, l.weight);
+        }
     }
 }
 

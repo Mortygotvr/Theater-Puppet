@@ -103,7 +103,10 @@ MediaPipe notes:
   (the source's "Animation" setting) and one played once over it. Tracking
   still goes over both. **Do not build Mixamo/FBX import or retargeting in
   Puppet**; if retargeting help is ever wanted, it belongs in Theater Rig.
-  Procedure `theater_puppet_animation`. Shape key animation is not played yet.
+  Procedure `theater_puppet_animation`. Shape key clips play too (matched by
+  the key's name, the stronger of clip and tracking wins); a face-only clip
+  leaves the idle body motion on. With Blender's "NLA tracks" export, a
+  clip is named after its NLA track, not its action.
 - The "🧍 Puppet Place" dock (`theater-scripts/puppet_place_dock.rhai`) has
   both. A test with a real clip runs when `THEATER_PUPPET_ANIMATED_GLB` points
   to an export with a "Wave" clip on RightArm.

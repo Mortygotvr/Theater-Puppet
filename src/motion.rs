@@ -444,6 +444,9 @@ impl Rig {
             }
             None => {}
         }
+        // The avatar's own animations' shape keys
+        let model = self.model.clone();
+        self.player.apply_shapes(&model, &mut self.morph);
     }
 }
 
@@ -520,9 +523,9 @@ mod tests {
     fn a_clip_from_blender_plays_and_gives_back_the_idle_pose() {
         let Ok(path) = std::env::var("THEATER_PUPPET_ANIMATED_GLB") else { return };
         let mut rig = Rig::new(Arc::new(crate::model::load(std::path::Path::new(&path)).unwrap()));
-        let names: Vec<&str> = rig.model.clips.iter().map(|c| c.name.as_str()).collect();
+        let names: Vec<String> = rig.model.clips.iter().map(|c| c.name.clone()).collect();
         println!("clips: {names:?}");
-        assert!(names.contains(&"Wave"));
+        assert!(names.iter().any(|n| n == "Wave"));
         let config = tracking::config::Config::default();
         let hand = rig.model.node("RightHand").unwrap();
         rig.step_with(1.0 / 60.0, still(), &Snapshot::default(), &config);
@@ -548,6 +551,20 @@ mod tests {
         assert!((rig.pose.position(hand) - idle).length() < 1e-3);
         rig.player.sync(&model, &mut control);
         assert_eq!(control.playing, "");
+
+        // A shape key clip ("Smile": Fcl_MTH_Fun up and back, if the file has it)
+        if let Some(smile) = names.iter().position(|n| *n == "Smile").map(|_| rig.model.morph("Fcl_MTH_Fun").unwrap()) {
+            control.play = Some("Smile".into());
+            rig.player.sync(&model, &mut control);
+            let mut most = 0.0f32;
+            for _ in 0..90 {
+                rig.step_with(1.0 / 60.0, still(), &Snapshot::default(), &config);
+                most = most.max(rig.morph[smile]);
+            }
+            println!("Fcl_MTH_Fun at most {most}");
+            assert!(most > 0.5, "the smile hardly showed ({most})");
+            assert_eq!(rig.morph[smile], 0.0);
+        }
     }
 
     #[test]
