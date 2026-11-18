@@ -164,21 +164,28 @@ fn write_manifest() -> Option<PathBuf> {
     Some(path)
 }
 
-/// A hand's fingers from SteamVR's summary of them: each joint bent its
-/// share of the finger's curl, the thumb less; the splay as spread
+/// A hand's fingers from SteamVR's summary of them
 fn fingers(s: &SkeletalSummaryData) -> Hand {
+    hand_from_curls(s.curl, Some(s.splay))
+}
+
+/// A hand's fingers from each one's curl (thumb first, 0 straight to 1
+/// closed): each joint bent its share of a fist, the thumb less; the splay
+/// between neighbours (0 together, 1 wide apart), when known, as spread
+pub(super) fn hand_from_curls(curl: [f32; 5], splay: Option<[f32; 4]>) -> Hand {
     let mut hand = Hand::default();
     // A closed fist, radians at each joint: thumb, then the four fingers
     const THUMB: [f32; 3] = [0.6, 0.7, 0.8];
     const FINGER: [f32; 3] = [1.5, 1.7, 1.1];
     for f in 0..5 {
-        let curl = s.curl[f].clamp(0.0, 1.0);
+        let curl = curl[f].clamp(0.0, 1.0);
         let full = if f == 0 { THUMB } else { FINGER };
         hand.bend[f] = full.map(|b| b * curl);
     }
     // Splay: 0 together, 1 wide apart (about 0.2 at rest). Each finger moves
     // away from the middle one by half the gaps on its side opening up
-    let open = s.splay.map(|v| (v.clamp(0.0, 1.0) - 0.2) * 0.35);
+    let Some(splay) = splay else { return hand };
+    let open = splay.map(|v| (v.clamp(0.0, 1.0) - 0.2) * 0.35);
     hand.spread[1] = -open[1];
     hand.spread[3] = open[2] * 0.5;
     hand.spread[4] = open[2] * 0.5 + open[3];
@@ -261,7 +268,7 @@ fn candidates() -> Vec<PathBuf> {
     out
 }
 
-fn rotation(m: &[[f32; 4]; 3]) -> Quat {
+pub(super) fn rotation(m: &[[f32; 4]; 3]) -> Quat {
     Quat::from_mat3(&Mat3::from_cols(Vec3::new(m[0][0], m[1][0], m[2][0]), Vec3::new(m[0][1], m[1][1], m[2][1]), Vec3::new(m[0][2], m[1][2], m[2][2]))).normalize()
 }
 
@@ -272,7 +279,7 @@ fn position(m: &[[f32; 4]; 3]) -> Vec3 {
 /// From SteamVR's room to the avatar's space: where the user stood and
 /// faced when tracking started is the avatar's place, facing +Z
 #[derive(Clone, Copy, Debug)]
-struct Room {
+pub(super) struct Room {
     turn: Quat,
     /// Where the user stood (the floor under the headset), in the room
     origin: Vec3,
@@ -280,7 +287,7 @@ struct Room {
 
 impl Room {
     /// From the headset's pose: it looks along its own -Z
-    fn from_headset(m: &[[f32; 4]; 3]) -> Room {
+    pub(super) fn from_headset(m: &[[f32; 4]; 3]) -> Room {
         let forward = rotation(m) * Vec3::NEG_Z;
         // Turned about Y so that forward becomes +Z
         let turn = Quat::from_rotation_y(-forward.x.atan2(forward.z));
@@ -294,13 +301,13 @@ impl Room {
 
     /// The head: its turn is from looking straight ahead (a headset looks
     /// along -Z, the avatar along +Z: half a turn between them)
-    fn head(&self, m: &[[f32; 4]; 3]) -> Target {
+    pub(super) fn head(&self, m: &[[f32; 4]; 3]) -> Target {
         Target { position: self.place(position(m)), rotation: (self.turn * rotation(m) * Quat::from_rotation_y(std::f32::consts::PI)).normalize() }
     }
 
     /// A hand holding a controller: fingers along it (its -Z), the palm
     /// against its side (facing inward), the wrist a little behind
-    fn hand(&self, m: &[[f32; 4]; 3], left: bool) -> Target {
+    pub(super) fn hand(&self, m: &[[f32; 4]; 3], left: bool) -> Target {
         let r = self.turn * rotation(m);
         let palm = if left { Vec3::X } else { Vec3::NEG_X };
         Target { position: self.place(position(m)) + r * Vec3::new(0.0, 0.0, 0.07), rotation: crate::ik::hand_turn(left, r * Vec3::NEG_Z, r * palm) }
@@ -309,13 +316,13 @@ impl Room {
 
 /// A tracker strapped on: its turn is from how it was when tracking started
 #[derive(Clone, Copy)]
-struct Strapped {
-    device: u32,
-    at_start: Quat,
+pub(super) struct Strapped {
+    pub(super) device: u32,
+    pub(super) at_start: Quat,
 }
 
 impl Strapped {
-    fn target(&self, room: &Room, m: &[[f32; 4]; 3]) -> Target {
+    pub(super) fn target(&self, room: &Room, m: &[[f32; 4]; 3]) -> Target {
         Target { position: room.place(position(m)), rotation: (room.turn * rotation(m) * self.at_start.inverse() * room.turn.inverse()).normalize() }
     }
 }

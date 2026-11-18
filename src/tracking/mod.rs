@@ -22,6 +22,7 @@ pub mod leap;
 pub mod mediapipe;
 pub mod menu;
 pub mod steamvr;
+mod telemetry;
 pub mod vts;
 
 use std::sync::Mutex;
@@ -58,10 +59,12 @@ pub enum Source {
     SteamVr,
     Leap,
     MediaPipe,
+    /// The headset's own telemetry server (as the Unity avatar app reads it)
+    Telemetry,
 }
 
 impl Source {
-    pub const ALL: [Source; 5] = [Source::IFacialMocap, Source::MeowFace, Source::SteamVr, Source::Leap, Source::MediaPipe];
+    pub const ALL: [Source; 6] = [Source::IFacialMocap, Source::MeowFace, Source::SteamVr, Source::Telemetry, Source::Leap, Source::MediaPipe];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -70,6 +73,7 @@ impl Source {
             Source::SteamVr => "SteamVR",
             Source::Leap => "Leap Motion",
             Source::MediaPipe => "MediaPipe",
+            Source::Telemetry => "VR telemetry",
         }
     }
 }
@@ -221,11 +225,11 @@ impl Part {
     pub fn inputs(self) -> &'static [Source] {
         match self {
             Part::Expressions => &[Source::IFacialMocap, Source::MeowFace, Source::MediaPipe],
-            Part::HeadTurn => &[Source::IFacialMocap, Source::MeowFace, Source::MediaPipe, Source::SteamVr],
-            Part::HeadPosition => &[Source::SteamVr, Source::MediaPipe],
-            Part::Arms => &[Source::SteamVr, Source::Leap, Source::MediaPipe],
-            Part::Fingers => &[Source::Leap, Source::MediaPipe, Source::SteamVr],
-            Part::LowerBody => &[Source::SteamVr, Source::MediaPipe],
+            Part::HeadTurn => &[Source::IFacialMocap, Source::MeowFace, Source::MediaPipe, Source::SteamVr, Source::Telemetry],
+            Part::HeadPosition => &[Source::SteamVr, Source::Telemetry, Source::MediaPipe],
+            Part::Arms => &[Source::SteamVr, Source::Telemetry, Source::Leap, Source::MediaPipe],
+            Part::Fingers => &[Source::Leap, Source::MediaPipe, Source::SteamVr, Source::Telemetry],
+            Part::LowerBody => &[Source::SteamVr, Source::Telemetry, Source::MediaPipe],
         }
     }
 }
@@ -362,6 +366,7 @@ pub fn start() {
     ifacialmocap::restart(&cfg);
     vts::restart(&cfg);
     steamvr::restart(&cfg);
+    telemetry::restart(&cfg);
     leap::restart(&cfg);
     mediapipe::restart(&cfg);
 }
