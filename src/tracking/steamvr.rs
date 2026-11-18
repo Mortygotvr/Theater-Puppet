@@ -134,6 +134,18 @@ impl Strapped {
     }
 }
 
+/// What VR_Init's error means for the user (OpenVR's EVRInitError)
+fn init_error(code: i32) -> &'static str {
+    match code {
+        100 | 101 | 102 => "SteamVR isn't installed properly",
+        108 | 126 => "no headset found: connect it (or its streaming app), then start SteamVR",
+        121 => "SteamVR isn't running: start it",
+        117 | 115 | 119 => "SteamVR is starting or closing",
+        137 | 138 | 139 => "the headset is busy (rebooting or updating)",
+        _ => "SteamVR can't be reached",
+    }
+}
+
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 
 pub fn restart(config: &Config) {
@@ -168,10 +180,11 @@ pub fn restart(config: &Config) {
             let mut error = 0;
             unsafe { init(&mut error, APPLICATION_BACKGROUND) };
             if error != 0 {
-                super::set_status(Source::SteamVr, "SteamVR isn't running");
+                let why = init_error(error);
+                super::set_status(Source::SteamVr, why);
                 if !told {
                     told = true;
-                    crate::log(&format!("[Puppet] 🥽 SteamVR: not running (error {error}); waiting for it"));
+                    crate::log(&format!("[Puppet] 🥽 SteamVR: {why} (error {error}); trying again every 3 seconds"));
                 }
                 wait(3);
                 continue;
