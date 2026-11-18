@@ -17,6 +17,25 @@ fn ui(ui) {
         return;
     }
 
+    ui.heading("🥽 VR telemetry");
+    ui.small(s.telemetry_status);
+    if s.telemetry {
+        ui.label(`T-pose: ${s.telemetry_calibration}`);
+        ui.row();
+        if ui.button("Calibrate (press both triggers)") {
+            call_proc("theater_puppet_tracking", #{ action: "telemetry_calibrate", now: false });
+        }
+        if ui.button("Now") {
+            call_proc("theater_puppet_tracking", #{ action: "telemetry_calibrate", now: true });
+        }
+        if ui.button("Reset") {
+            call_proc("theater_puppet_tracking", #{ action: "telemetry_reset" });
+        }
+        ui.end();
+        ui.small("Stand in a T-pose, arms out, palms down, looking ahead.");
+    }
+
+    ui.separator();
     ui.heading("🖐 Leap Motion");
     ui.small(s.leap_status);
     if s.leap {

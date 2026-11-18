@@ -272,7 +272,7 @@ pub(super) fn rotation(m: &[[f32; 4]; 3]) -> Quat {
     Quat::from_mat3(&Mat3::from_cols(Vec3::new(m[0][0], m[1][0], m[2][0]), Vec3::new(m[0][1], m[1][1], m[2][1]), Vec3::new(m[0][2], m[1][2], m[2][2]))).normalize()
 }
 
-fn position(m: &[[f32; 4]; 3]) -> Vec3 {
+pub(super) fn position(m: &[[f32; 4]; 3]) -> Vec3 {
     Vec3::new(m[0][3], m[1][3], m[2][3])
 }
 
@@ -280,7 +280,7 @@ fn position(m: &[[f32; 4]; 3]) -> Vec3 {
 /// faced when tracking started is the avatar's place, facing +Z
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Room {
-    turn: Quat,
+    pub(super) turn: Quat,
     /// Where the user stood (the floor under the headset), in the room
     origin: Vec3,
 }
@@ -295,7 +295,7 @@ impl Room {
         Room { turn, origin: Vec3::new(p.x, 0.0, p.z) }
     }
 
-    fn place(&self, p: Vec3) -> Vec3 {
+    pub(super) fn place(&self, p: Vec3) -> Vec3 {
         self.turn * (p - self.origin)
     }
 

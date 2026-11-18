@@ -8,6 +8,8 @@
 //! - `set`: the settings given (`leap_height`, `leap_forward`, metres);
 //! - `leap_centre`: the Leap's hands where they are now become hands resting
 //!   in front of the avatar (sets `leap_height` and `leap_forward`);
+//! - `telemetry_calibrate` (`now`: at once, else when both triggers are
+//!   pressed), `telemetry_reset`: VR telemetry's T-pose calibration;
 //! - `mediapipe_recentre`: where the face is now becomes the head at rest;
 //! - `mediapipe_restart`: MediaPipe's helper started again.
 //!
@@ -18,7 +20,7 @@ use std::ffi::CStr;
 
 use serde_json::{Value, json};
 
-use super::{Source, config, leap, mediapipe};
+use super::{Source, config, leap, mediapipe, telemetry};
 use crate::obs::{self, Ptr};
 use crate::parts::{Calldata, get_string, set_string};
 
@@ -62,6 +64,14 @@ pub fn answer(args: &str) -> String {
             mediapipe::recentre();
             true
         }
+        "telemetry_calibrate" => {
+            telemetry::calibrate(args.get("now").and_then(|n| n.as_bool()).unwrap_or(false));
+            true
+        }
+        "telemetry_reset" => {
+            telemetry::reset_calibration();
+            true
+        }
         "mediapipe_restart" => {
             mediapipe::restart(&config::get());
             true
@@ -82,6 +92,9 @@ pub fn answer(args: &str) -> String {
         "leap_forward": c.leap_forward,
         "leap_status": status(Source::Leap, c.leap),
         "leap_hands": leap::hands_seen(),
+        "telemetry": c.telemetry.enabled,
+        "telemetry_status": status(Source::Telemetry, c.telemetry.enabled),
+        "telemetry_calibration": telemetry::calibration_state(),
         "mediapipe": c.mediapipe,
         "mediapipe_status": status(Source::MediaPipe, c.mediapipe),
         "done": done,

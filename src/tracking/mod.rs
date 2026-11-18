@@ -22,7 +22,7 @@ pub mod leap;
 pub mod mediapipe;
 pub mod menu;
 pub mod steamvr;
-mod telemetry;
+pub mod telemetry;
 pub mod vts;
 
 use std::sync::Mutex;

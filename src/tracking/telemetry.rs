@@ -14,17 +14,84 @@
 //! ```
 //!
 //! Poses are SteamVR's (metres, Y up, the headset looking along -Z), read as
-//! steamvr.rs reads its own. A finger's curl is how far its base is from its
+//! steamvr.rs reads its own.
+//!
+//! T-pose calibration (as AvatarStreaming's): standing in a T-pose, each
+//! device's turn then is the avatar's rest, the headset's place and facing
+//! the avatar's, its height the user's. Asked from the Puppet Tracking dock:
+//! at once, or when both triggers are pressed (both index fingers curled). A finger's curl is how far its base is from its
 //! tip against the finger's length, as AvatarStreaming measures it.
 
 use std::net::UdpSocket;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use glam::Vec3;
+use glam::{Quat, Vec3};
 
-use super::steamvr::{Room, Strapped, hand_from_curls, rotation};
-use super::{Body, Hands, Source, config::Config};
+use super::steamvr::{Room, Strapped, hand_from_curls, position, rotation};
+use super::{Body, Hands, Source, Target, config::Config};
+
+/// A T-pose calibration: the room as the headset was then, and each role's
+/// turn then (undone, so a device's turn is from how it was in the T-pose)
+#[derive(Clone, Copy)]
+struct Calibration {
+    room: Room,
+    undo: [Option<Quat>; 8],
+}
+
+/// The calibration (kept while OBS runs, whatever restarts the input)
+static CALIBRATION: Mutex<Option<Calibration>> = Mutex::new(None);
+/// 0: nothing asked; 1: calibrate at once; 2: when both triggers are pressed
+static ASKED: AtomicU8 = AtomicU8::new(0);
+/// How far both index fingers must curl to count as the triggers pressed (70 degrees, as AvatarStreaming)
+const TRIGGERS: f32 = 70.0 / 90.0;
+
+/// The dock's buttons: calibrate now, or when both triggers are pressed
+pub fn calibrate(now: bool) {
+    ASKED.store(if now { 1 } else { 2 }, Ordering::SeqCst);
+}
+
+/// Back to no calibration (where you stood when it started is the avatar's place)
+pub fn reset_calibration() {
+    ASKED.store(0, Ordering::SeqCst);
+    *CALIBRATION.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
+/// For the dock: "calibrated", "waiting for both triggers", or "not calibrated"
+pub fn calibration_state() -> &'static str {
+    match ASKED.load(Ordering::SeqCst) {
+        1 => "calibrating…",
+        2 => "stand in a T-pose and press both triggers",
+        _ if CALIBRATION.lock().unwrap_or_else(|e| e.into_inner()).is_some() => "calibrated",
+        _ => "not calibrated",
+    }
+}
+
+/// A device's pose in the avatar's space, before any calibration: the
+/// headset's as a head, a controller's as a hand, any other's as itself
+fn raw(room: &Room, role: usize, m: &[[f32; 4]; 3]) -> Target {
+    match role {
+        1 => room.head(m),
+        2 => room.hand(m, true),
+        3 => room.hand(m, false),
+        _ => Target { position: room.place(position(m)), rotation: (room.turn * rotation(m)).normalize() },
+    }
+}
+
+/// The calibration from the devices' poses now (index: the role), the user
+/// in a T-pose; None without the headset
+fn calibration_from(poses: &[Option<[[f32; 4]; 3]>; 8]) -> Option<Calibration> {
+    let room = Room::from_headset(&poses[1]?);
+    let undo = std::array::from_fn(|role| poses[role].filter(|_| role >= 1).map(|m| raw(&room, role, &m).rotation.inverse()));
+    Some(Calibration { room, undo })
+}
+
+/// A device's pose, calibrated: its turn from how it was in the T-pose
+fn calibrated(c: &Calibration, role: usize, m: &[[f32; 4]; 3]) -> Target {
+    let t = raw(&c.room, role, m);
+    Target { position: t.position, rotation: c.undo[role].map(|u| (t.rotation * u).normalize()).unwrap_or(t.rotation) }
+}
 
 pub const POSE_PORT: u16 = 7500;
 const SKELETON_PORT_OFFSET: u16 = 1;
@@ -139,9 +206,43 @@ pub fn restart(config: &Config) {
                 }
                 continue;
             };
-            // Where you stand and face when it starts is the avatar's place and forward
-            let room = *room.get_or_insert_with(|| Room::from_headset(&head));
             let fresh = |role: usize| seen[role].filter(|(_, at)| at.elapsed() < Duration::from_millis(300)).map(|(m, _)| m);
+            let curl = |i: usize| fingers[i].filter(|(_, at)| at.elapsed() < Duration::from_millis(300)).map(|(c, _)| c);
+            // A T-pose calibration asked for: now, or once both triggers are pressed
+            let asked = ASKED.load(Ordering::SeqCst);
+            let triggers = curl(0).zip(curl(1)).is_some_and(|(l, r)| l[1] > TRIGGERS && r[1] > TRIGGERS);
+            if asked == 1 || (asked == 2 && triggers) {
+                let poses: [Option<[[f32; 4]; 3]>; 8] = std::array::from_fn(fresh);
+                if let Some(c) = calibration_from(&poses) {
+                    *CALIBRATION.lock().unwrap_or_else(|e| e.into_inner()) = Some(c);
+                    ASKED.store(0, Ordering::SeqCst);
+                    // Your height: the headset is at eye height, about 93% of it
+                    let eyes = position(&head).y;
+                    let mut config = super::config::get();
+                    if eyes > 0.8 {
+                        config.user_height = (eyes / 0.93).clamp(1.0, 2.2);
+                    }
+                    let devices = poses.iter().flatten().count();
+                    crate::log(&format!("[Puppet] 🥽 VR telemetry: T-pose calibrated ({devices} device(s), height {:.2} m)", config.user_height));
+                    super::config::set(config);
+                }
+            }
+            if let Some(c) = *CALIBRATION.lock().unwrap_or_else(|e| e.into_inner()) {
+                let at = |role: usize| fresh(role).map(|m| calibrated(&c, role, &m));
+                let body = Body { head: at(1), left_hand: at(2), right_hand: at(3), hips: at(4), left_foot: at(5), right_foot: at(6), ..Default::default() };
+                let hands = Hands { left: curl(0).map(|c| hand_from_curls(c, None)), right: curl(1).map(|c| hand_from_curls(c, None)) };
+                let controllers = body.left_hand.is_some() as u32 + body.right_hand.is_some() as u32;
+                let trackers = [&body.hips, &body.left_foot, &body.right_foot].iter().filter(|t| t.is_some()).count();
+                let with_fingers = hands.left.is_some() as u32 + hands.right.is_some() as u32;
+                super::set_body(Source::Telemetry, body);
+                if with_fingers > 0 {
+                    super::set_hands(Source::Telemetry, hands);
+                }
+                super::set_status(Source::Telemetry, format!("calibrated: the headset, {controllers} controller(s) ({with_fingers} with fingers), {trackers} tracker(s)"));
+                continue;
+            }
+            // Not calibrated: where you stand and face when it starts is the avatar's place and forward
+            let room = *room.get_or_insert_with(|| Room::from_headset(&head));
             for (slot, role) in [4usize, 5, 6].into_iter().enumerate() {
                 match fresh(role) {
                     Some(m) if strapped[slot].is_none() => strapped[slot] = Some(Strapped { device: role as u32, at_start: rotation(&m) }),
@@ -180,6 +281,37 @@ pub fn restart(config: &Config) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A device at `p`, turned `yaw` degrees about Y and `roll` about Z
+    fn device(p: Vec3, yaw: f32, roll: f32) -> [[f32; 4]; 3] {
+        let r = glam::Mat3::from_quat(Quat::from_rotation_y(yaw.to_radians()) * Quat::from_rotation_z(roll.to_radians()));
+        let c = r.to_cols_array_2d();
+        [[c[0][0], c[1][0], c[2][0], p.x], [c[0][1], c[1][1], c[2][1], p.y], [c[0][2], c[1][2], c[2][2], p.z]]
+    }
+
+    #[test]
+    fn a_t_pose_calibration_makes_the_t_pose_the_rest() {
+        // Facing 30 degrees off, controllers held any way round, a hips tracker strapped on sideways
+        let mut poses: [Option<[[f32; 4]; 3]>; 8] = [None; 8];
+        poses[1] = Some(device(Vec3::new(1.0, 1.6, 2.0), 30.0, 0.0));
+        poses[2] = Some(device(Vec3::new(0.3, 1.4, 2.5), 75.0, 40.0));
+        poses[3] = Some(device(Vec3::new(1.6, 1.4, 1.5), -60.0, -25.0));
+        poses[4] = Some(device(Vec3::new(1.0, 1.0, 2.0), 120.0, 90.0));
+        let c = calibration_from(&poses).unwrap();
+        // In the T-pose: every turn is the rest, the head at the avatar's place
+        for role in 1..=4 {
+            let t = calibrated(&c, role, &poses[role].unwrap());
+            assert!(t.rotation.angle_between(Quat::IDENTITY) < 1e-3, "role {role}");
+        }
+        let head = calibrated(&c, 1, &poses[1].unwrap());
+        assert!((head.position - Vec3::new(0.0, 1.6, 0.0)).length() < 1e-4);
+        // Then the left controller turned 20 degrees more about the room's up: the hand turns 20 degrees about the avatar's
+        let moved = calibrated(&c, 2, &device(Vec3::new(0.3, 1.4, 2.5), 95.0, 40.0));
+        let (axis, angle) = moved.rotation.to_axis_angle();
+        assert!((angle.to_degrees() - 20.0).abs() < 0.1 && axis.y.abs() > 0.999, "{axis:?} {}", angle.to_degrees());
+        // Nothing without the headset
+        assert!(calibration_from(&[None; 8]).is_none());
+    }
 
     #[test]
     fn a_pose_packet_is_read() {
