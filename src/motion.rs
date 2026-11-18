@@ -41,11 +41,13 @@ pub struct Motion {
     pub hand_roll: f32,
     /// The hands on it moved forward (+) or back (-) along it (metres)
     pub hand_forward: f32,
+    /// The thumbs on it raised (+) or lowered (-), radians at each joint
+    pub thumb_lift: f32,
 }
 
 impl Default for Motion {
     fn default() -> Self {
-        Motion { arms_down: 65.0, idle: 0.5, yaw: 0.0, springs: true, adjust: Adjust::default(), tracked: true, controller_offset: [0.0, 0.0], hand_offset: [0.0, 0.03], hand_roll: 0.0, hand_forward: 0.0 }
+        Motion { arms_down: 65.0, idle: 0.5, yaw: 0.0, springs: true, adjust: Adjust::default(), tracked: true, controller_offset: [0.0, 0.0], hand_offset: [0.0, 0.03], hand_roll: 0.0, hand_forward: 0.0, thumb_lift: 0.0 }
     }
 }
 
@@ -178,6 +180,8 @@ pub struct Rig {
     /// The chest as the last frame left it (where, how turned from rest):
     /// the controller is bound to it
     chest_last: Option<(Vec3, Quat)>,
+    /// The source's thumb setting (Motion's), for the controller's fingers
+    thumb_lift: f32,
     /// The next blink, when no face is tracked (seconds on `time`)
     next_blink: f32,
     pub points: Vec<Vec<[f32; 4]>>,
@@ -274,6 +278,7 @@ impl Rig {
             prop: None,
             pad: None,
             chest_last: None,
+            thumb_lift: 0.0,
             next_blink: 2.0,
             points,
             normals,
@@ -401,6 +406,7 @@ impl Rig {
             let (chest, chest_turn) = self.chest_last.unwrap_or_else(|| (chest_bone.map(|c| turn * self.rest.position(c)).unwrap_or(rest_head * 0.8), turn));
             prop.hand_roll = motion.hand_roll;
             prop.hand_forward = motion.hand_forward;
+            self.thumb_lift = motion.thumb_lift;
             prop.place(chest, chest_turn, rest_head.y / 1.5, motion.controller_offset, motion.hand_offset, &self.pad.unwrap_or_default());
         }
 
@@ -512,7 +518,7 @@ impl Rig {
             out.right_hand = Some(held(bones.right_hand, r));
             out.left_elbow = None;
             out.right_elbow = None;
-            let [lf, rf] = crate::controller::fingers(&self.pad.unwrap_or_default());
+            let [lf, rf] = crate::controller::fingers(&self.pad.unwrap_or_default(), self.thumb_lift);
             out.left_fingers = Some(mix_hand(Hand::default(), lf, w));
             out.right_fingers = Some(mix_hand(Hand::default(), rf, w));
         }

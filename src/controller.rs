@@ -170,7 +170,8 @@ impl Prop {
 }
 
 /// The fingers holding the controller, pressing what's pressed (left, right)
-pub fn fingers(pad: &Pad) -> [Hand; 2] {
+/// `thumb_lift`: the thumbs raised (+, radians at each joint) or lowered (-)
+pub fn fingers(pad: &Pad, thumb_lift: f32) -> [Hand; 2] {
     // Around the grip: middle, ring and little fingers closed
     let grip = |h: &mut Hand| {
         h.bend[2] = [1.0, 1.2, 0.8];
@@ -209,6 +210,12 @@ pub fn fingers(pad: &Pad) -> [Hand; 2] {
         ([0.3, 0.35, 0.25], 0.0)
     };
     right.bend[0] = bend;
+    // Thumbs higher than their bend says by default (they sank into the
+    // controller), and the slider on top
+    let lift = 0.25 + thumb_lift;
+    for h in [&mut left, &mut right] {
+        h.bend[0] = h.bend[0].map(|b| b - lift);
+    }
     right.spread[0] = spread;
     [left, right]
 }
@@ -268,12 +275,12 @@ mod tests {
 
     #[test]
     fn the_fingers_press() {
-        let rest = fingers(&Pad::default());
-        let a = fingers(&Pad { buttons: button::A, ..Default::default() });
+        let rest = fingers(&Pad::default(), 0.0);
+        let a = fingers(&Pad { buttons: button::A, ..Default::default() }, 0.0);
         assert!(a[1].bend[0][0] > rest[1].bend[0][0]);
-        let lt = fingers(&Pad { left_trigger: 1.0, ..Default::default() });
+        let lt = fingers(&Pad { left_trigger: 1.0, ..Default::default() }, 0.0);
         assert!(lt[0].bend[1][1] > rest[0].bend[1][1]);
-        let lb = fingers(&Pad { buttons: button::LB, ..Default::default() });
+        let lb = fingers(&Pad { buttons: button::LB, ..Default::default() }, 0.0);
         assert!(lb[0].bend[1][1] < rest[0].bend[1][1]);
     }
 }
