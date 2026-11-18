@@ -11,8 +11,11 @@
 //! Shapes are ARKit's with `_L` / `_R` for Left / Right, 0–100 (a newer
 //! format writes `name&value`); the turns are Unity's, in degrees; the head's
 //! tx, ty, tz its place from the phone, metres (Unity's axes, mirrored like
-//! the turns). Its first place is the head at rest (the dock's "Re-centre
-//! head" takes the next one), and the head moves from there.
+//! the turns). That place is the head's middle, above the neck: a nod or a
+//! tilt swings it, so the neck's place is worked out from it and the head's
+//! turn (else every nod would lean the whole spine), steadied, and moved
+//! from its first place (the head at rest; the dock's "Re-centre head" takes
+//! the next one).
 
 use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -20,7 +23,17 @@ use std::time::{Duration, Instant};
 
 use glam::Vec3;
 
+use super::mediapipe::Steady;
 use super::{Body, Face, Source, Target, config::Config};
+
+/// From the neck's pivot to the place iFacialMocap gives (the head's middle),
+/// the head looking ahead: up, a little forward (metres)
+const NECK_TO_HEAD: Vec3 = Vec3::new(0.0, 0.08, 0.01);
+
+/// Where the neck is, from where the head's middle is and how it's turned
+pub fn neck(head_middle: Vec3, turn: glam::Quat) -> Vec3 {
+    head_middle - turn * NECK_TO_HEAD
+}
 
 const START: &[u8] = b"iFacialMocap_sahuasouryya9218sauhuiayeta91555dy3719";
 
@@ -130,8 +143,10 @@ pub fn restart(config: &Config) {
         let mut asked: Option<Instant> = None;
         let mut received = false;
         let mut buf = [0u8; 8192];
-        // The head at rest
+        // The neck at rest; the neck's place steadied, and when it last came
         let mut neutral: Option<Vec3> = None;
+        let mut steady = [Steady::default(); 3];
+        let mut last: Option<Instant> = None;
         while GENERATION.load(Ordering::SeqCst) == generation {
             // The phone sends once asked; asked again now and then, in case the app restarted
             let ip = phone.ip.trim();
@@ -143,6 +158,12 @@ pub fn restart(config: &Config) {
             let Some((face, place)) = std::str::from_utf8(&buf[..len]).ok().and_then(parse_with_place) else { continue };
             // Where the head is: standing at the user's eye height, moved as it moved from rest
             if let Some(at) = place {
+                // The neck, not the head's middle (a nod isn't a lean), steadied:
+                // still at rest, quick on a real move
+                let dt = last.map(|t| t.elapsed().as_secs_f32()).unwrap_or(1.0 / 60.0).clamp(0.001, 0.1);
+                last = Some(Instant::now());
+                let raw = neck(at, face.head);
+                let at = Vec3::from(std::array::from_fn(|i| steady[i].step(raw[i], dt, 1.0, 10.0)));
                 if RECENTRE.swap(false, Ordering::SeqCst) {
                     neutral = None;
                 }
@@ -186,6 +207,17 @@ mod tests {
         let p = place.unwrap();
         assert!((p - Vec3::new(0.030653415, -0.10287084, -0.6584072)).length() < 1e-6, "{p:?}");
         assert!(parse_with_place("jawOpen-12|=head#0,0,0|").unwrap().1.is_none());
+    }
+
+    #[test]
+    fn a_nod_moves_the_head_not_the_neck() {
+        let rest = Vec3::new(0.0, 0.0, -1.0);
+        let still = neck(rest, glam::Quat::IDENTITY);
+        // Nodding 20° down about the neck: the head's middle swings forward and down
+        let nod = glam::Quat::from_rotation_x(0.35);
+        let middle = still + nod * NECK_TO_HEAD;
+        assert!((middle - rest).length() > 0.02, "the middle moved {:?}", middle - rest);
+        assert!((neck(middle, nod) - still).length() < 1e-6, "the neck stays");
     }
 
     #[test]

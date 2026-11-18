@@ -36,7 +36,7 @@ pub struct Seen {
 /// A number followed smoothly: steady when it's still (a camera's guesses
 /// shake), quick when it moves (the "one euro" filter)
 #[derive(Clone, Copy, Default)]
-struct Steady {
+pub(super) struct Steady {
     value: Option<f32>,
     speed: f32,
 }
@@ -50,7 +50,7 @@ fn share(dt: f32, cutoff: f32) -> f32 {
 
 impl Steady {
     /// `still`: what gets through at rest (a second); `quick`: how much more per unit of speed
-    fn step(&mut self, x: f32, dt: f32, still: f32, quick: f32) -> f32 {
+    pub(super) fn step(&mut self, x: f32, dt: f32, still: f32, quick: f32) -> f32 {
         let Some(old) = self.value else {
             self.value = Some(x);
             return x;
