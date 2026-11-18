@@ -8,25 +8,12 @@
 //! after which it goes back. Each fades in and out. What's tracked still
 //! goes over both, part by part.
 //!
-//! Offered on OBS's procedure handler:
-//! `theater_puppet_animation(in string args, out string json)`, `args` being JSON:
-//! - `{"action": "get"}` (or none);
-//! - `{"action": "play", "source", "clip"}`: once ("" source = every Puppet);
-//! - `{"action": "stop", "source"}`: the clip played once stops;
-//! - `{"action": "loop", "source", "clip"}`: the looping clip ("" = none, the
-//!   idle motion), saved in the source's settings.
-//!
-//! It answers `{"puppets": [{"source", "clips": [names], "looping", "playing"}], "done"}`.
-
-use std::ffi::CStr;
-use std::sync::{Arc, Mutex};
+//! Driven by Theater Control Panel and Scene through remote.rs.
 
 use glam::{Quat, Vec3};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::model::Model;
-use crate::obs::{self, Ptr};
-use crate::parts::{Calldata, get_string, set_string};
 use crate::pose::Pose;
 
 /// Seconds a clip takes to fade in, and out
@@ -216,8 +203,6 @@ pub struct Control {
     pub playing: String,
 }
 
-pub type Shared = Arc<Mutex<Control>>;
-
 #[derive(Default)]
 pub struct Player {
     /// The looping clip, and the one it replaced fading out
@@ -303,91 +288,6 @@ impl Player {
     }
 }
 
-// ---------------------------------------------------------------------------
-// The procedure
-
-/// Every Puppet source (OBS's pointer) and its player's control
-static SOURCES: Mutex<Vec<(usize, Shared)>> = Mutex::new(Vec::new());
-
-pub fn add_source(source: Ptr, control: Shared) {
-    SOURCES.lock().unwrap().push((source as usize, control));
-}
-
-pub fn remove_source(source: Ptr) {
-    SOURCES.lock().unwrap().retain(|(s, _)| *s != source as usize);
-}
-
-const DECL: &CStr = c"void theater_puppet_animation(in string args, out string json)";
-
-/// Registers the procedure. Call from obs_module_load.
-pub fn register() {
-    let api = obs::api();
-    unsafe {
-        let handler = (api.obs_get_proc_handler)();
-        if !handler.is_null() {
-            (api.proc_handler_add)(handler, DECL.as_ptr(), animation_proc, std::ptr::null_mut());
-        }
-    }
-}
-
-unsafe extern "C" fn animation_proc(_data: Ptr, cd: *mut Calldata) {
-    let args = get_string(cd, c"args");
-    let json = std::panic::catch_unwind(|| answer(&args)).unwrap_or_else(|_| "{}".into());
-    set_string(cd, c"json", &json);
-}
-
-fn answer(args: &str) -> String {
-    let args: Value = serde_json::from_str(args).unwrap_or(json!({}));
-    let text = |k: &str| args.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let (which, clip) = (text("source"), text("clip"));
-    let names: Vec<(Ptr, String)> = crate::parts::sources();
-    let controls = SOURCES.lock().unwrap().clone();
-    let targets: Vec<(Ptr, String, Shared)> = controls
-        .into_iter()
-        .filter_map(|(s, c)| names.iter().find(|(p, _)| *p as usize == s).map(|(p, n)| (*p, n.clone(), c)))
-        .filter(|(_, n, _)| which.is_empty() || *n == which)
-        .collect();
-    let action = args.get("action").and_then(|a| a.as_str()).unwrap_or("get");
-    let mut done = action == "get" || !targets.is_empty();
-    for (source, _, control) in &targets {
-        match action {
-            "play" => {
-                let mut c = control.lock().unwrap();
-                if c.clips.contains(&clip) {
-                    c.play = Some(clip.clone());
-                } else {
-                    done = false;
-                }
-            }
-            "stop" => control.lock().unwrap().stop = true,
-            // The source's setting: saved with it, and its properties agree
-            "loop" => unsafe {
-                let api = obs::api();
-                let data = (api.obs_data_create)();
-                if !data.is_null() {
-                    let value = std::ffi::CString::new(clip.replace('\0', "")).unwrap_or_default();
-                    (api.obs_data_set_string)(data, crate::source::S_ANIMATION.as_ptr(), value.as_ptr());
-                    (api.obs_source_update)(*source, data);
-                    (api.obs_data_release)(data);
-                }
-            },
-            _ => {}
-        }
-    }
-    let list: Vec<Value> = SOURCES
-        .lock()
-        .unwrap()
-        .iter()
-        .filter_map(|(s, control)| {
-            let name = names.iter().find(|(p, _)| *p as usize == *s)?.1.clone();
-            let c = control.lock().unwrap();
-            // ("looping": `loop` is a Rhai keyword)
-            Some(json!({ "source": name, "clips": c.clips, "looping": c.loop_clip, "playing": c.playing }))
-        })
-        .collect();
-    json!({ "puppets": list, "done": done }).to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -404,6 +304,7 @@ mod tests {
 
     fn model_with(clips: Vec<Clip>) -> Model {
         Model {
+            name: "test".into(),
             primitives: Vec::new(),
             materials: Vec::new(),
             images: Vec::new(),

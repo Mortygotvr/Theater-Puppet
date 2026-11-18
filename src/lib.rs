@@ -10,6 +10,7 @@ pub mod motion;
 pub mod obs;
 pub mod parts;
 pub mod place;
+pub mod remote;
 pub mod pose;
 pub mod render;
 pub mod snapshot;
@@ -125,7 +126,7 @@ pub extern "C" fn obs_module_load() -> bool {
     parts::register_procs();
     tracking::dock::register();
     place::register();
-    animation::register();
+    remote::register();
     // Tracking: its settings window's source, its inputs, its menu item
     tracking::menu::register();
     tracking::start();

@@ -163,8 +163,8 @@ struct Puppet {
     source: Ptr,
     /// Its body parts map, for Theater Scene (parts.rs)
     parts: crate::parts::Shared,
-    /// Its animations' requests and state (animation.rs)
-    animation: crate::animation::Shared,
+    /// What Control Panel and Scene ask of it, and what it tells them (remote.rs)
+    remote: crate::remote::Shared,
     /// Colour slots given a colour (sRGB, 0–1)
     colors: Mutex<HashMap<u32, [f32; 3]>>,
     running: Mutex<[Option<Running>; SLOTS]>,
@@ -466,7 +466,7 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
             (api.obs_properties_add_float_slider)(props, key.as_ptr(), label.as_ptr(), -range, range, 0.01);
         }
         // The avatar's own animations (made in Blender, in its GLB)
-        let clips: Vec<String> = if data.is_null() { Vec::new() } else { (&*(data as *const Puppet)).animation.lock().unwrap().clips.clone() };
+        let clips: Vec<String> = if data.is_null() { Vec::new() } else { (&*(data as *const Puppet)).remote.lock().unwrap().animation.clips.clone() };
         let list = (api.obs_properties_add_list)(props, S_ANIMATION.as_ptr(), c"Animation (loops; made in Blender, in the GLB)".as_ptr(), obs::OBS_COMBO_TYPE_LIST, obs::OBS_COMBO_FORMAT_STRING);
         (api.obs_property_list_add_string)(list, c"(none: idle motion)".as_ptr(), c"".as_ptr());
         for clip in &clips {
@@ -564,13 +564,13 @@ unsafe extern "C" fn style_changed(props: Ptr, _prop: Ptr, settings: Ptr) -> boo
 unsafe extern "C" fn create(settings: Ptr, source: Ptr) -> Ptr {
     let parts: crate::parts::Shared = Default::default();
     crate::parts::add_source(source, parts.clone());
-    let animation: crate::animation::Shared = Default::default();
-    crate::animation::add_source(source, animation.clone());
+    let remote: crate::remote::Shared = Default::default();
+    crate::remote::add_source(source, remote.clone());
     let puppet = Box::new(Puppet {
         styles_read: AtomicU64::new(0),
         source,
         parts,
-        animation,
+        remote,
         colors: Mutex::new(HashMap::new()),
         width: AtomicU32::new(1080),
         height: AtomicU32::new(1080),
@@ -603,7 +603,7 @@ unsafe extern "C" fn create(settings: Ptr, source: Ptr) -> Ptr {
 unsafe extern "C" fn destroy(data: Ptr) {
     let puppet = unsafe { Box::from_raw(data as *mut Puppet) };
     crate::parts::remove_source(puppet.source);
-    crate::animation::remove_source(puppet.source);
+    crate::remote::remove_source(puppet.source);
     puppet.generation.fetch_add(1, Ordering::SeqCst);
     let gpu = puppet.gpu.lock().unwrap().take();
     let shader = puppet.shader.lock().unwrap().take();
@@ -658,7 +658,7 @@ unsafe extern "C" fn update(data: Ptr, settings: Ptr) {
             tracked: (api.obs_data_get_bool)(settings, S_TRACKED.as_ptr()),
         };
     }
-    puppet.animation.lock().unwrap().loop_clip = get_string(settings, S_ANIMATION);
+    puppet.remote.lock().unwrap().animation.loop_clip = get_string(settings, S_ANIMATION);
     *puppet.colors.lock().unwrap() = (0..COLOR_SLOTS)
         .filter(|&s| unsafe { (api.obs_data_get_bool)(settings, color_on_key(s).as_ptr()) })
         .map(|s| (s, obs_to_rgb(unsafe { (api.obs_data_get_int)(settings, color_key(s).as_ptr()) })))
@@ -811,6 +811,56 @@ fn filter_chain(puppet: &Puppet) -> Vec<FilterPass> {
     chain
 }
 
+/// Hands what Control Panel and Scene asked (remote.rs) to the rig, and
+/// tells them what the Puppet has
+fn sync_remote(puppet: &Puppet, rig: &mut Rig) {
+    let mut r = puppet.remote.lock().unwrap();
+    let model = rig.model.clone();
+    rig.player.sync(&model, &mut r.animation);
+    rig.drive_shapes(std::mem::take(&mut r.shapes));
+    for layer in std::mem::take(&mut rig.hide) {
+        r.set_hidden(layer, true);
+    }
+    // Its GLBs (the avatar first) and colour slots, when they changed
+    let models: Vec<&Model> = std::iter::once(&*rig.model).chain(rig.followers.iter().map(|f| &*f.model)).collect();
+    if r.glbs.len() != models.len() || r.glbs.iter().zip(&models).any(|(g, m)| g.name != m.name) {
+        r.glbs = models.iter().map(|m| crate::remote::GlbInfo { name: m.name.clone(), keys: m.morph_names.clone() }).collect();
+        r.slots = color_slots(&models).into_iter().map(|(s, _)| s).collect();
+    }
+}
+
+/// Sets one text setting of a Puppet source (as its properties would)
+pub(crate) fn set_string_setting(source: Ptr, key: &CStr, value: &str) {
+    let api = obs::api();
+    unsafe {
+        let data = (api.obs_data_create)();
+        if data.is_null() {
+            return;
+        }
+        (api.obs_data_set_string)(data, key.as_ptr(), cstring(value).as_ptr());
+        (api.obs_source_update)(source, data);
+        (api.obs_data_release)(data);
+    }
+}
+
+/// Gives colour slot `slot` of a Puppet source a colour (sRGB 0–1), or
+/// gives it back its own (None)
+pub(crate) fn set_color_setting(source: Ptr, slot: u32, rgb: Option<[f32; 3]>) {
+    let api = obs::api();
+    unsafe {
+        let data = (api.obs_data_create)();
+        if data.is_null() {
+            return;
+        }
+        (api.obs_data_set_bool)(data, color_on_key(slot).as_ptr(), rgb.is_some());
+        if let Some(rgb) = rgb {
+            (api.obs_data_set_int)(data, color_key(slot).as_ptr(), rgb_to_obs(rgb));
+        }
+        (api.obs_source_update)(source, data);
+        (api.obs_data_release)(data);
+    }
+}
+
 /// The view with what Puppet Place filters on it add (place.rs)
 fn placed(puppet: &Puppet) -> View {
     let mut view = *puppet.view.lock().unwrap();
@@ -829,7 +879,7 @@ unsafe extern "C" fn video_tick(data: Ptr, dt: f32) {
         let started = std::time::Instant::now();
         let mut motion = *puppet.motion.lock().unwrap();
         motion.yaw = placed(puppet).yaw;
-        rig.player.sync(&rig.model.clone(), &mut puppet.animation.lock().unwrap());
+        sync_remote(puppet, rig);
         rig.step(dt, motion);
         crate::timing::tick(started.elapsed());
     }
@@ -988,6 +1038,7 @@ unsafe extern "C" fn video_render(data: Ptr, _effect: Ptr) {
         }
     }
     *g.colors.lock().unwrap() = puppet.colors.lock().unwrap().clone();
+    *g.hidden.lock().unwrap() = puppet.remote.lock().unwrap().hidden.clone();
     if let Some((_, s)) = shader.as_ref() {
         let view = placed(puppet);
         let (width, height) = (puppet.width.load(Ordering::Relaxed), puppet.height.load(Ordering::Relaxed));

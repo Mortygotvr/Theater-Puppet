@@ -323,6 +323,8 @@ pub struct Gpu {
     /// Colour slots given a colour (sRGB, 0–1), by slot: their materials
     /// show it in place of their own (every layer's)
     pub colors: std::sync::Mutex<std::collections::HashMap<u32, [f32; 3]>>,
+    /// Layers not drawn (by layer; missing: drawn)
+    pub hidden: std::sync::Mutex<Vec<bool>>,
     target: Ptr,
     /// The ink pass: normals and distances, then the picture with its lines
     gbuf: Ptr,
@@ -423,6 +425,7 @@ impl Gpu {
             main_materials: materials.len(),
             main_textures: textures.len(),
             colors: Default::default(),
+            hidden: Default::default(),
             textures,
             materials,
             target,
@@ -821,9 +824,10 @@ impl Gpu {
         let api = obs::api();
         let mut first = true;
         let colors = self.colors.lock().unwrap().clone();
+        let hidden = self.hidden.lock().unwrap().clone();
         for mesh in &self.meshes {
             let m = &self.materials[mesh.material];
-            if !wanted(m) {
+            if !wanted(m) || hidden.get(mesh.layer).copied().unwrap_or(false) {
                 continue;
             }
             // Its colour slot's colour, when the slot has one

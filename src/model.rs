@@ -138,6 +138,8 @@ fn node_parts(doc: &gltf::Document) -> Vec<usize> {
 }
 
 pub struct Model {
+    /// Its file's name, without .glb
+    pub name: String,
     pub primitives: Vec<Primitive>,
     pub materials: Vec<Material>,
     pub images: Vec<Image>,
@@ -377,7 +379,8 @@ pub fn load(path: &Path) -> Result<Model, String> {
         }
     }
     let clips = crate::animation::load(&doc, &buffers, &morph_names);
-    Ok(Model { primitives, materials, images: images.into_iter().map(rgba).collect(), min, max, nodes, order, skins, morph_names, clips })
+    let name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    Ok(Model { name, primitives, materials, images: images.into_iter().map(rgba).collect(), min, max, nodes, order, skins, morph_names, clips })
 }
 
 fn material(m: gltf::Material) -> Material {

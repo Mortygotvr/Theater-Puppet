@@ -138,6 +138,8 @@ api! {
     obs_data_create: fn() -> Ptr;
     obs_data_set_double: fn(Ptr, *const c_char, f64);
     obs_data_set_string: fn(Ptr, *const c_char, *const c_char);
+    obs_data_set_bool: fn(Ptr, *const c_char, bool);
+    obs_data_set_int: fn(Ptr, *const c_char, i64);
     obs_source_update: fn(Ptr, Ptr);
     obs_source_enabled: fn(Ptr) -> bool;
     obs_filter_get_parent: fn(Ptr) -> Ptr;

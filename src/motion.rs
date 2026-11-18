@@ -157,6 +157,10 @@ pub struct Rig {
     pub player: crate::animation::Player,
     /// The GLBs drawn with it, copying its pose
     pub followers: Vec<Follower>,
+    /// Shape keys driven from outside (remote.rs), on any of its GLBs
+    pub overrides: Vec<crate::remote::Override>,
+    /// GLBs (layers) to hide: their shape-key animation ended so
+    pub hide: Vec<usize>,
     /// The next blink, when no face is tracked (seconds on `time`)
     next_blink: f32,
     pub points: Vec<Vec<[f32; 4]>>,
@@ -248,6 +252,8 @@ impl Rig {
             followed: Followed::default(),
             player: Default::default(),
             followers: Vec::new(),
+            overrides: Vec::new(),
+            hide: Vec::new(),
             next_blink: 2.0,
             points,
             normals,
@@ -281,10 +287,38 @@ impl Rig {
         self.step_with(dt, motion, &tracked, &config);
     }
 
+    /// Shape keys driven from outside: each (layer, key) replaces the one
+    /// before it; None lets it go
+    pub fn drive_shapes(&mut self, requests: Vec<(usize, String, Option<crate::remote::Drive>)>) {
+        for (layer, key, drive) in requests {
+            self.overrides.retain(|o| !(o.layer == layer && o.key.eq_ignore_ascii_case(&key)));
+            if let Some(drive) = drive {
+                self.overrides.push(crate::remote::Override { layer, key, drive, time: 0.0 });
+            }
+        }
+    }
+
+    /// The driven shape keys `dt` later: an animation that ended is let go
+    /// (and its GLB hidden, when it asked)
+    fn step_overrides(&mut self, dt: f32) {
+        for o in &mut self.overrides {
+            o.time += dt;
+        }
+        let hide = &mut self.hide;
+        self.overrides.retain(|o| {
+            let going = o.value().is_none();
+            if going && matches!(o.drive, crate::remote::Drive::Once { hide_at_end: true, .. }) {
+                hide.push(o.layer);
+            }
+            !going
+        });
+    }
+
     /// One frame with `tracked` (as the inputs gave it: the user's size, not mirrored)
     pub fn step_with(&mut self, dt: f32, motion: Motion, tracked: &Snapshot, config: &tracking::config::Config) {
         let dt = dt.clamp(0.0, 0.1);
         self.time += dt;
+        self.step_overrides(dt);
         // The body eases into a new turn (a jump of the setting swings the hair)
         if self.yaw.is_nan() {
             self.yaw = motion.yaw;
@@ -355,8 +389,8 @@ impl Rig {
         }
         pose::skin(&model, pose, &self.morph, &mut self.points, &mut self.normals);
         self.dirty = true;
-        for f in &mut self.followers {
-            f.follow(&model, &self.rest, &self.pose, &self.morph, dt, &motion);
+        for (i, f) in self.followers.iter_mut().enumerate() {
+            f.follow(&model, &self.rest, &self.pose, &self.morph, dt, &motion, &self.overrides, i + 1);
         }
     }
 
@@ -458,6 +492,17 @@ impl Rig {
         // The avatar's own animations' shape keys
         let model = self.model.clone();
         self.player.apply_shapes(&model, &mut self.morph);
+        // Then the ones driven from outside, over everything
+        apply_overrides(&model, &self.overrides, 0, &mut self.morph);
+    }
+}
+
+/// The shape keys driven on layer `layer` (its model `model`) over `morph`
+fn apply_overrides(model: &Model, overrides: &[crate::remote::Override], layer: usize, morph: &mut [f32]) {
+    for o in overrides.iter().filter(|o| o.layer == layer) {
+        if let (Some(m), Some(v)) = (model.morph(&o.key), o.value()) {
+            morph[m] = v;
+        }
     }
 }
 
@@ -502,8 +547,10 @@ impl Follower {
         }
     }
 
-    /// Takes the avatar's pose (`main_pose`, from `main_rest`) and shape keys
-    pub fn follow(&mut self, main: &Model, main_rest: &Pose, main_pose: &Pose, main_morph: &[f32], dt: f32, motion: &Motion) {
+    /// Takes the avatar's pose (`main_pose`, from `main_rest`) and shape
+    /// keys, then the ones driven on it (layer `layer`)
+    #[allow(clippy::too_many_arguments)]
+    pub fn follow(&mut self, main: &Model, main_rest: &Pose, main_pose: &Pose, main_morph: &[f32], dt: f32, motion: &Motion, overrides: &[crate::remote::Override], layer: usize) {
         let model = self.model.clone();
         let pose = &mut self.pose;
         pose.reset(&model);
@@ -530,6 +577,7 @@ impl Follower {
         for (k, from) in self.morph_from.iter().enumerate() {
             self.morph[k] = from.and_then(|m| main_morph.get(m).copied()).unwrap_or(0.0);
         }
+        apply_overrides(&model, overrides, layer, &mut self.morph);
         pose::skin(&model, pose, &self.morph, &mut self.points, &mut self.normals);
         self.dirty = true;
     }
@@ -692,6 +740,41 @@ mod tests {
             println!("box from the hand: before {before:?}, after the hand moved {after:?}");
             assert!(before.length() < 0.1 && after.length() < 0.1, "the box isn't in the hand");
         }
+    }
+
+    #[test]
+    fn shape_keys_driven_from_outside() {
+        use crate::remote::{Drive, Shape};
+        let Some(mut rig) = rig() else { return };
+        let extra = rig.model.clone();
+        rig.set_extras(&[extra]);
+        let config = tracking::config::Config::default();
+        let jaw = rig.arkit[tracking::arkit_index("jawOpen").unwrap()].unwrap();
+        let key = rig.model.morph_names[jaw].clone();
+        // On, on the avatar only; ping-pong on the extra GLB
+        rig.drive_shapes(vec![(0, key.clone(), Some(Drive::Hold(0.8))), (1, key.clone(), Some(Drive::PingPong { top: 1.0, period: 1.0 }))]);
+        for _ in 0..30 {
+            rig.step_with(1.0 / 60.0, still(), &Snapshot::default(), &config);
+        }
+        assert!((rig.morph[jaw] - 0.8).abs() < 1e-6);
+        let f = rig.followers[0].model.morph(&key).unwrap();
+        assert!((rig.followers[0].morph[f] - 1.0).abs() < 0.05, "half a period in: {}", rig.followers[0].morph[f]);
+        // Off: back to what tracking gives (nothing)
+        rig.drive_shapes(vec![(0, key.clone(), None)]);
+        rig.step_with(1.0 / 60.0, still(), &Snapshot::default(), &config);
+        assert_eq!(rig.morph[jaw], 0.0);
+        // Once, up, half a second, then its GLB hidden
+        rig.drive_shapes(vec![(1, key.clone(), Some(Drive::Once { from: 0.0, to: 1.0, duration: 0.5, shape: Shape::Up, hide_at_end: true }))]);
+        for _ in 0..15 {
+            rig.step_with(1.0 / 60.0, still(), &Snapshot::default(), &config);
+        }
+        assert!((rig.followers[0].morph[f] - 0.5).abs() < 0.05);
+        assert!(rig.hide.is_empty());
+        for _ in 0..20 {
+            rig.step_with(1.0 / 60.0, still(), &Snapshot::default(), &config);
+        }
+        assert_eq!(rig.hide, vec![1]);
+        assert!(rig.overrides.is_empty());
     }
 
     #[test]
