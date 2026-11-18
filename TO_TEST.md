@@ -3,6 +3,15 @@
 What's built but not yet tried live, newest first. Tick it (or tell Claude
 what went wrong) and it comes off the list.
 
+## iFacialMocap head position
+- [ ] Tracking window: Head position → iFacialMocap. Lean left / right, up /
+      down, toward / away from the phone: the avatar's head follows, the
+      right way and by the right amount (if it's 100× too much or too
+      little, or mirrored, tell Claude: the units and axes were read from a
+      sample, not seen live).
+- [ ] 🎯 Puppet Tracking dock → iFacialMocap → "Re-centre head": where you
+      sit now becomes the rest.
+
 ## Add / remove GLBs
 - [ ] Puppet properties: "➕ Add a GLB" adds an "Also draw" box (GLB, Show,
       Group, Remove); add 4+ and put 3 in one group: one shows at a time.
