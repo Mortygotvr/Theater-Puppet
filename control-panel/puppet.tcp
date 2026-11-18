@@ -1,0 +1,175 @@
+// @theater-tcp-module
+// Theater Puppet for Theater Control Panel: play an avatar's animations, drive
+// its shape keys, show or hide its GLBs, set its colour slots. Each command
+// asks Puppet through its OBS procedure theater_puppet_command
+// (Theater-Puppet/src/remote.rs), with the Control Panel's OBS bridge: it
+// works with the Control Panel inside OBS.
+//
+// Every text field takes the Control Panel's variables ({1}, {username},
+// {global.x}…), every number field its math. "Puppet source" left empty: every
+// Puppet. "GLB": 0 the avatar, 1–3 the source's "Also draw" GLBs, or a GLB's
+// file name.
+(function() {
+    const MODULE_ID = "theater_puppet";
+    const PROC = "theater_puppet_command";
+
+    window.TheaterController.registerModule(MODULE_ID, {
+        name: "Theater Puppet",
+        description: "Animations, shape keys, GLB visibility and colour slots of Theater Puppet avatars (OBS plugin).",
+        configFields: [],
+        onLoad() {
+            // What the Puppets have, in the log: names to type in the commands
+            send({ action: "list" }, null).then(r => {
+                if (!r || !r.ok) return;
+                (r.puppets || []).forEach(p => {
+                    const glbs = (p.glbs || []).map(g => `${g.index} ${g.name} (${(g.keys || []).length} shape keys)`).join(", ");
+                    logMsg(`[Puppet] ${p.source}: GLBs ${glbs || "none"}; animations: ${(p.animations || []).join(", ") || "none"}; colour slots: ${(p.colour_slots || []).join(", ") || "none"}`);
+                });
+            });
+        },
+        onUnload() {}
+    });
+
+    /** Sends one command to Puppet; its answer (null when Puppet isn't there).
+     *  `done`: what to log when it worked (null: nothing) */
+    async function send(args, done) {
+        const tauri = window.__TAURI__;
+        if (!tauri) {
+            logMsg("[Puppet] Needs the Control Panel inside OBS.", true);
+            return null;
+        }
+        try {
+            const out = await tauri.core.invoke("obs_call_proc", {
+                name: PROC,
+                args: { args: JSON.stringify(args) },
+                returns: { json: "string" }
+            });
+            const r = JSON.parse((out && out.json) || "{}");
+            if (r.ok === false) {
+                logMsg(`[Puppet] ${r.error || "failed"}`, true);
+            } else if (done) {
+                logMsg(`[Puppet] ${done}`);
+            }
+            return r;
+        } catch (e) {
+            logMsg(`[Puppet] Theater Puppet not detected: ${e.message || e}`, true);
+            return null;
+        }
+    }
+
+    const text = v => String(v === undefined || v === null ? "" : v).trim();
+    const num = (v, d) => {
+        const n = parseFloat(v);
+        return Number.isFinite(n) ? n : d;
+    };
+
+    const SOURCE = { id: "source", label: "Puppet source (empty: every Puppet)", type: "obs_source", default: "" };
+    const GLB = { id: "glb", label: "GLB (0 = the avatar, 1–3 = Also draw, or its file name)", type: "text", default: "0" };
+    const KEY = { id: "key", label: "Shape key (its name in Blender)", type: "text", default: "" };
+
+    // ─── Animation ───────────────────────────────────────────────────────────
+    window.TheaterController.registerCommand("puppet_animation", async (inputs) => {
+        const clip = text(inputs.clip);
+        const mode = inputs.mode || "once";
+        await send({ action: "animation", source: text(inputs.source), clip, mode },
+            mode === "stop" ? "Animation stopped" : `Animation ${clip || "(idle motion)"}: ${mode}`);
+    }, {
+        label: "Puppet: Play Animation",
+        fields: [
+            SOURCE,
+            { id: "clip", label: "Animation (its name in the GLB; empty with Loop = idle motion)", type: "text", default: "" },
+            { id: "mode", label: "Play", type: "select", default: "once", options: [
+                { value: "once", label: "Once, then back" },
+                { value: "loop", label: "Loop (in place of the idle motion; saved)" },
+                { value: "stop", label: "Stop the one playing once" }
+            ] }
+        ]
+    }, MODULE_ID);
+
+    // ─── Shape key on / off / ping-pong ──────────────────────────────────────
+    window.TheaterController.registerCommand("puppet_shape", async (inputs) => {
+        const key = text(inputs.key);
+        await send({
+            action: "shape", source: text(inputs.source), glb: text(inputs.glb), key,
+            state: inputs.state || "on", value: num(inputs.value, 1), period: num(inputs.period, 1)
+        }, `Shape key ${key}: ${inputs.state || "on"}`);
+    }, {
+        label: "Puppet: Toggle Shape Key",
+        fields: [
+            SOURCE, GLB, KEY,
+            { id: "state", label: "State", type: "select", default: "on", options: [
+                { value: "on", label: "On (held)" },
+                { value: "off", label: "Off (back to normal)" },
+                { value: "pingpong", label: "Ping-pong (until turned off)" }
+            ] },
+            { id: "value", label: "Strength 0–1 (on, and ping-pong's top)", type: "number", default: 1 },
+            { id: "period", label: "Ping-pong: seconds there and back", type: "number", default: 1 }
+        ]
+    }, MODULE_ID);
+
+    // ─── Shape-key animation ─────────────────────────────────────────────────
+    window.TheaterController.registerCommand("puppet_shape_anim", async (inputs) => {
+        const key = text(inputs.key);
+        const vis = inputs.visibility || "none";
+        await send({
+            action: "shape_anim", source: text(inputs.source), glb: text(inputs.glb), key,
+            from: num(inputs.from, 0), to: num(inputs.to, 1), duration: num(inputs.seconds, 1),
+            type: inputs.kind || "up",
+            show_at_start: vis === "show" || vis === "both",
+            hide_at_end: vis === "hide" || vis === "both"
+        }, `Shape key ${key}: ${inputs.kind || "up"} over ${num(inputs.seconds, 1)} s`);
+    }, {
+        label: "Puppet: Animate Shape Key",
+        fields: [
+            SOURCE, GLB, KEY,
+            { id: "from", label: "Range: from (0–1)", type: "number", default: 0 },
+            { id: "to", label: "Range: to (0–1)", type: "number", default: 1 },
+            { id: "seconds", label: "Duration (seconds)", type: "number", default: 1 },
+            { id: "kind", label: "Type", type: "select", default: "up", options: [
+                { value: "up", label: "Increasing (from → to)" },
+                { value: "down", label: "Decreasing (to → from)" },
+                { value: "pingpong", label: "Ping-pong (from → to → from)" }
+            ] },
+            { id: "visibility", label: "GLB visibility", type: "select", default: "none", options: [
+                { value: "none", label: "Leave it" },
+                { value: "show", label: "Show it at the start" },
+                { value: "hide", label: "Hide it at the end" },
+                { value: "both", label: "Show at the start, hide at the end" }
+            ] }
+        ]
+    }, MODULE_ID);
+
+    // ─── GLB visibility ──────────────────────────────────────────────────────
+    window.TheaterController.registerCommand("puppet_glb", async (inputs) => {
+        const v = inputs.visible || "toggle";
+        await send({
+            action: "glb", source: text(inputs.source), glb: text(inputs.glb),
+            visible: v === "toggle" ? "toggle" : v === "on"
+        }, `GLB ${text(inputs.glb)}: ${v === "on" ? "shown" : v === "off" ? "hidden" : "toggled"}`);
+    }, {
+        label: "Puppet: Show / Hide GLB",
+        fields: [
+            SOURCE, GLB,
+            { id: "visible", label: "Visibility", type: "select", default: "toggle", options: [
+                { value: "on", label: "Show" },
+                { value: "off", label: "Hide" },
+                { value: "toggle", label: "Toggle" }
+            ] }
+        ]
+    }, MODULE_ID);
+
+    // ─── Colour slot ─────────────────────────────────────────────────────────
+    window.TheaterController.registerCommand("puppet_color", async (inputs) => {
+        const slot = Math.round(num(inputs.slot, 0));
+        const color = text(inputs.color) || "reset";
+        await send({ action: "color", source: text(inputs.source), slot, color },
+            `Colour slot ${slot}: ${color}`);
+    }, {
+        label: "Puppet: Set Colour Slot",
+        fields: [
+            SOURCE,
+            { id: "slot", label: "Colour slot (Color<N> in Theater Rig)", type: "number", default: 0 },
+            { id: "color", label: "Colour (#rrggbb, or reset for its own)", type: "text", default: "#ff4080" }
+        ]
+    }, MODULE_ID);
+})();

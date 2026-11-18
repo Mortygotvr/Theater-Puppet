@@ -22,6 +22,9 @@ foreach ($root in @("C:\ProgramData\obs-studio\plugins\theater-puppet", "$env:AP
     # Its dock, a Theater Scene Rhai dock (Scene loads every plugin's data\theater-scripts)
     New-Item -ItemType Directory -Path "$root\data\theater-scripts" -Force | Out-Null
     Copy-Item "$PSScriptRoot\theater-scripts\*.rhai" "$root\data\theater-scripts\" -Force
+    # Its Theater Control Panel module (loaded from the Panel's Modules tab)
+    New-Item -ItemType Directory -Path "$root\data\control-panel" -Force | Out-Null
+    Copy-Item "$PSScriptRoot\control-panel\*.tcp" "$root\data\control-panel\" -Force
     # The filters it ships with (Theater Scene's are read from its own folders)
     New-Item -ItemType Directory -Path "$root\data\filters" -Force | Out-Null
     Copy-Item "$PSScriptRoot\filters\*.rhai" "$root\data\filters\" -Force
