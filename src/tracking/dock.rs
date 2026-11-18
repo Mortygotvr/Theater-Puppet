@@ -5,7 +5,8 @@
 //! `theater_puppet_tracking(in string args, out string json)`, `args` being
 //! JSON with an `action`:
 //! - `get` (or none): the state below;
-//! - `set`: the settings given (`leap_height`, `leap_forward`, metres);
+//! - `set`: the settings given (`leap_height`, `leap_forward`, metres;
+//!   `telemetry_scale`);
 //! - `leap_centre`: the Leap's hands where they are now become hands resting
 //!   in front of the avatar (sets `leap_height` and `leap_forward`);
 //! - `telemetry_calibrate` (`now`: at once, else when both triggers are
@@ -56,6 +57,9 @@ pub fn answer(args: &str) -> String {
             if let Some(v) = number("leap_forward") {
                 c.leap_forward = v.clamp(-0.6, 0.6);
             }
+            if let Some(v) = number("telemetry_scale") {
+                c.telemetry_scale = v.clamp(0.2, 5.0);
+            }
             config::set(c);
             true
         }
@@ -95,6 +99,7 @@ pub fn answer(args: &str) -> String {
         "telemetry": c.telemetry.enabled,
         "telemetry_status": status(Source::Telemetry, c.telemetry.enabled),
         "telemetry_calibration": telemetry::calibration_state(),
+        "telemetry_scale": c.telemetry_scale,
         "mediapipe": c.mediapipe,
         "mediapipe_status": status(Source::MediaPipe, c.mediapipe),
         "done": done,

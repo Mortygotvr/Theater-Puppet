@@ -21,6 +21,10 @@ fn ui(ui) {
     ui.small(s.telemetry_status);
     if s.telemetry {
         ui.label(`T-pose: ${s.telemetry_calibration}`);
+        let scale = ui.slider("Scale (reach)", s.telemetry_scale, 0.5, 3.0);
+        if scale != s.telemetry_scale {
+            call_proc("theater_puppet_tracking", #{ action: "set", telemetry_scale: scale });
+        }
         ui.row();
         if ui.button("Calibrate (press both triggers)") {
             call_proc("theater_puppet_tracking", #{ action: "telemetry_calibrate", now: false });

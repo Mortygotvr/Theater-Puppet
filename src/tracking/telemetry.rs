@@ -143,6 +143,17 @@ fn curls(joints: &[Vec3; 31]) -> [f32; 5] {
     })
 }
 
+/// The body with the hands, hips and feet `k` times as far from the head
+/// (the dock's scale: tracked reach to the avatar's)
+fn scaled(mut body: Body, k: f32) -> Body {
+    let k = k.clamp(0.2, 5.0);
+    let Some(head) = body.head.map(|h| h.position) else { return body };
+    for t in [&mut body.left_hand, &mut body.right_hand, &mut body.hips, &mut body.left_foot, &mut body.right_foot].into_iter().flatten() {
+        t.position = head + (t.position - head) * k;
+    }
+    body
+}
+
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 
 pub fn restart(config: &Config) {
@@ -234,7 +245,7 @@ pub fn restart(config: &Config) {
                 let controllers = body.left_hand.is_some() as u32 + body.right_hand.is_some() as u32;
                 let trackers = [&body.hips, &body.left_foot, &body.right_foot].iter().filter(|t| t.is_some()).count();
                 let with_fingers = hands.left.is_some() as u32 + hands.right.is_some() as u32;
-                super::set_body(Source::Telemetry, body);
+                super::set_body(Source::Telemetry, scaled(body, super::config::get().telemetry_scale));
                 if with_fingers > 0 {
                     super::set_hands(Source::Telemetry, hands);
                 }
@@ -265,7 +276,7 @@ pub fn restart(config: &Config) {
             let controllers = body.left_hand.is_some() as u32 + body.right_hand.is_some() as u32;
             let with_fingers = hands.left.is_some() as u32 + hands.right.is_some() as u32;
             let trackers = strapped.iter().flatten().count();
-            super::set_body(Source::Telemetry, body);
+            super::set_body(Source::Telemetry, scaled(body, super::config::get().telemetry_scale));
             if with_fingers > 0 {
                 super::set_hands(Source::Telemetry, hands);
             }
@@ -311,6 +322,16 @@ mod tests {
         assert!((angle.to_degrees() - 20.0).abs() < 0.1 && axis.y.abs() > 0.999, "{axis:?} {}", angle.to_degrees());
         // Nothing without the headset
         assert!(calibration_from(&[None; 8]).is_none());
+    }
+
+    #[test]
+    fn the_scale_spreads_from_the_head() {
+        let at = |p: Vec3| Some(Target { position: p, rotation: Quat::IDENTITY });
+        let body = Body { head: at(Vec3::new(0.0, 1.0, 0.0)), left_hand: at(Vec3::new(0.2, 0.8, 0.3)), ..Default::default() };
+        let twice = scaled(body, 2.0);
+        assert_eq!(twice.head.unwrap().position, Vec3::new(0.0, 1.0, 0.0));
+        assert!((twice.left_hand.unwrap().position - Vec3::new(0.4, 0.6, 0.6)).length() < 1e-6);
+        assert_eq!(scaled(body, 1.0), body);
     }
 
     #[test]
