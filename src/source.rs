@@ -26,6 +26,10 @@ const NAME: &CStr = c"\u{1F3AD} Theater Puppet";
 const S_FILE: &CStr = c"file";
 /// GLBs drawn with the avatar in its picture, copying its pose
 const S_EXTRAS: [&CStr; 3] = [c"extra1", c"extra2", c"extra3"];
+/// Each GLB slot shown (0 the avatar, 1–3 its extras), and the extras' groups
+/// (of a group, only one shows: remote.rs)
+const S_SHOWN: [&CStr; 4] = [c"shown", c"extra1.shown", c"extra2.shown", c"extra3.shown"];
+const S_GROUP: [&CStr; 3] = [c"extra1.group", c"extra2.group", c"extra3.group"];
 const S_WIDTH: &CStr = c"width";
 const S_HEIGHT: &CStr = c"height";
 const S_ZOOM: &CStr = c"zoom";
@@ -173,10 +177,11 @@ struct Puppet {
     loaded: Arc<Mutex<Option<(u64, Result<Model, String>)>>>,
     /// The GLBs drawn with it: their files, the latest load (bumped like
     /// `generation`), what's loaded, and whether the GPU and rig have them yet
-    extra_files: Mutex<Vec<String>>,
+    extra_files: Mutex<Vec<(usize, String)>>,
     extra_generation: Arc<AtomicU64>,
-    extra_loaded: Arc<Mutex<Option<(u64, Vec<Arc<Model>>)>>>,
-    extras: Mutex<Vec<Arc<Model>>>,
+    extra_loaded: Arc<Mutex<Option<(u64, Vec<(usize, Arc<Model>)>)>>>,
+    /// Each loaded extra with its slot (1–3)
+    extras: Mutex<Vec<(usize, Arc<Model>)>>,
     gpu: Mutex<Option<Gpu>>,
     /// Its skeleton, springs and posed vertices (motion.rs)
     rig: Mutex<Option<Rig>>,
@@ -238,6 +243,9 @@ unsafe extern "C" fn get_defaults(settings: Ptr) {
         (api.obs_data_set_default_double)(settings, S_ZOOM.as_ptr(), 1.0);
         (api.obs_data_set_default_double)(settings, S_CENTRE.as_ptr(), 0.0);
         (api.obs_data_set_default_double)(settings, S_YAW.as_ptr(), 0.0);
+        for key in S_SHOWN {
+            (api.obs_data_set_default_bool)(settings, key.as_ptr(), true);
+        }
         for key in S_POSITION {
             (api.obs_data_set_default_double)(settings, key.as_ptr(), 0.0);
         }
@@ -361,6 +369,8 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
         for (i, key) in S_EXTRAS.iter().enumerate() {
             let label = cstring(&format!("Also draw {} (a GLB copying the avatar's pose)", i + 1));
             (api.obs_properties_add_path)(props, key.as_ptr(), label.as_ptr(), obs::OBS_PATH_FILE, c"glTF (*.glb *.gltf)".as_ptr(), std::ptr::null());
+            (api.obs_properties_add_bool)(props, S_SHOWN[i + 1].as_ptr(), cstring(&format!("Show {}", i + 1)).as_ptr());
+            (api.obs_properties_add_text)(props, S_GROUP[i].as_ptr(), cstring(&format!("Group of {} (only one GLB of a group shows; empty: none)", i + 1)).as_ptr(), obs::OBS_TEXT_DEFAULT);
         }
         // Colour slots (Theater Rig's Color<N>): the avatar's and its extras'
         if !data.is_null() {
@@ -670,8 +680,16 @@ unsafe extern "C" fn update(data: Ptr, settings: Ptr) {
     puppet.filters_read.store(filters::generation(), Ordering::SeqCst);
     *puppet.filter_settings.lock().unwrap() = read_filter_settings(settings);
 
+    // Which GLBs show, and the extras' groups
+    {
+        let mut r = puppet.remote.lock().unwrap();
+        r.shown = S_SHOWN.map(|k| unsafe { (api.obs_data_get_bool)(settings, k.as_ptr()) });
+        r.groups = std::array::from_fn(|s| if s == 0 { String::new() } else { get_string(settings, S_GROUP[s - 1]).trim().to_string() });
+        r.update_hidden();
+    }
+
     // The GLBs drawn with it: loaded again when their list changes
-    let extra_files: Vec<String> = S_EXTRAS.iter().map(|k| get_string(settings, k)).filter(|f| !f.is_empty()).collect();
+    let extra_files: Vec<(usize, String)> = S_EXTRAS.iter().enumerate().map(|(i, k)| (i + 1, get_string(settings, k))).filter(|(_, f)| !f.is_empty()).collect();
     let mut current_extras = puppet.extra_files.lock().unwrap();
     if *current_extras != extra_files {
         *current_extras = extra_files.clone();
@@ -680,12 +698,12 @@ unsafe extern "C" fn update(data: Ptr, settings: Ptr) {
         std::thread::Builder::new()
             .name("theater-puppet-load-extras".into())
             .spawn(move || {
-                let models: Vec<Arc<Model>> = extra_files
+                let models: Vec<(usize, Arc<Model>)> = extra_files
                     .iter()
-                    .filter_map(|file| match model::load(&PathBuf::from(file)) {
+                    .filter_map(|(slot, file)| match model::load(&PathBuf::from(file)) {
                         Ok(m) => {
-                            crate::log(&format!("[Puppet] 📦 Also drawn: {file}: {} meshes, {} materials", m.primitives.len(), m.materials.len()));
-                            Some(Arc::new(m))
+                            crate::log(&format!("[Puppet] 📦 Also drawn {slot}: {file}: {} meshes, {} materials", m.primitives.len(), m.materials.len()));
+                            Some((*slot, Arc::new(m)))
                         }
                         Err(e) => {
                             crate::log(&format!("[Puppet] ⚠️ {e}"));
@@ -812,20 +830,40 @@ fn filter_chain(puppet: &Puppet) -> Vec<FilterPass> {
 }
 
 /// Hands what Control Panel and Scene asked (remote.rs) to the rig, and
-/// tells them what the Puppet has
-fn sync_remote(puppet: &Puppet, rig: &mut Rig) {
+/// tells them what the Puppet has. The Show settings to write (a shape-key
+/// animation ended hiding its GLB), once the locks are let go
+fn sync_remote(puppet: &Puppet, rig: &mut Rig) -> Option<[bool; crate::remote::SLOTS]> {
     let mut r = puppet.remote.lock().unwrap();
     let model = rig.model.clone();
     rig.player.sync(&model, &mut r.animation);
     rig.drive_shapes(std::mem::take(&mut r.shapes));
+    let mut shown = None;
     for layer in std::mem::take(&mut rig.hide) {
-        r.set_hidden(layer, true);
+        let now = shown.unwrap_or(r.shown);
+        shown = Some(crate::remote::showing(now, &r.groups, r.slot(layer), false));
     }
     // Its GLBs (the avatar first) and colour slots, when they changed
     let models: Vec<&Model> = std::iter::once(&*rig.model).chain(rig.followers.iter().map(|f| &*f.model)).collect();
     if r.glbs.len() != models.len() || r.glbs.iter().zip(&models).any(|(g, m)| g.name != m.name) {
         r.glbs = models.iter().map(|m| crate::remote::GlbInfo { name: m.name.clone(), keys: m.morph_names.clone() }).collect();
         r.slots = color_slots(&models).into_iter().map(|(s, _)| s).collect();
+    }
+    shown
+}
+
+/// Writes the GLB slots' Show settings of a Puppet source
+pub(crate) fn set_shown(source: Ptr, shown: [bool; crate::remote::SLOTS]) {
+    let api = obs::api();
+    unsafe {
+        let data = (api.obs_data_create)();
+        if data.is_null() {
+            return;
+        }
+        for (key, on) in S_SHOWN.iter().zip(shown) {
+            (api.obs_data_set_bool)(data, key.as_ptr(), on);
+        }
+        (api.obs_source_update)(source, data);
+        (api.obs_data_release)(data);
     }
 }
 
@@ -875,13 +913,17 @@ unsafe extern "C" fn video_tick(data: Ptr, dt: f32) {
     let puppet = unsafe { &*(data as *const Puppet) };
     crate::snapshot::poll();
     // The avatar's pose and springs, skinned (the render uploads them)
+    let mut shown = None;
     if let Some(rig) = puppet.rig.lock().unwrap().as_mut() {
         let started = std::time::Instant::now();
         let mut motion = *puppet.motion.lock().unwrap();
         motion.yaw = placed(puppet).yaw;
-        sync_remote(puppet, rig);
+        shown = sync_remote(puppet, rig);
         rig.step(dt, motion);
         crate::timing::tick(started.elapsed());
+    }
+    if let Some(shown) = shown {
+        set_shown(puppet.source, shown);
     }
     // A style or filter file changed: its settings' defaults may have too
     let generation = styles::generation();
@@ -997,7 +1039,13 @@ unsafe extern "C" fn video_render(data: Ptr, _effect: Ptr) {
     }
     // The GPU and the rig take the GLBs drawn with it (a new avatar too)
     if extras_changed {
-        let extras = puppet.extras.lock().unwrap().clone();
+        let loaded = puppet.extras.lock().unwrap().clone();
+        let extras: Vec<Arc<Model>> = loaded.iter().map(|(_, m)| m.clone()).collect();
+        {
+            let mut r = puppet.remote.lock().unwrap();
+            r.layer_slot = std::iter::once(0).chain(loaded.iter().map(|(s, _)| *s)).collect();
+            r.update_hidden();
+        }
         if let Some(g) = gpu.as_mut() {
             g.set_extras(&extras);
         }

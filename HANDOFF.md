@@ -116,9 +116,13 @@ MediaPipe notes:
   bone lengths and running its own springs. Nothing more (the owner wants
   it simple: a full GLB that mimics the main model). On the GPU they are
   mesh layers 1–3 (`Gpu::set_extras`). Test file: a skeleton with a box in
-  the right hand, `THEATER_PUPPET_EXTRA_GLB`. Each GLB can be shown or
-  hidden (see below). Planned by the owner, not built: GLB groups, only one
-  of a group shown at once.
+  the right hand, `THEATER_PUPPET_EXTRA_GLB`.
+- **Show and groups**: each GLB slot (0 the avatar, 1–3 Also draw) has a
+  Show setting, each Also draw a Group name. Of a group, only one shows:
+  showing one hides the others; with several set, the first wins
+  (`remote::effective` / `remote::showing`). Saved in the source's settings,
+  so they survive a restart. A layer's slot is kept apart (`layer_slot`): an
+  Also draw whose file doesn't load has no layer.
 - Colour slots: the source's "Colours" properties (Recolour slot N + its
   colour), on every GLB; a slot's shade is its colour as much darker as the
   material's own (`shade_ratio`).
@@ -132,9 +136,10 @@ MediaPipe notes:
   json)` (`src/remote.rs`): `list`, `animation`, `shape` (on / off /
   ping-pong, per GLB), `shape_anim` (range, up / down / ping-pong, duration,
   show the GLB at the start, hide it at the end), `glb` (show / hide /
-  toggle), `color` (a slot on every GLB, saved in the source's settings).
+  toggle; saved), `group` (show one GLB of a group, `next`, or `none`),
+  `color` (a slot on every GLB, saved in the source's settings).
   The module comment lists every field. Shape keys driven this way go over
-  tracking and animations; GLB visibility is not saved.
+  tracking and animations.
 - **Theater Control Panel module**: `control-panel/puppet.tcp` ("TCP" is the
   Control Panel's module format, not the network protocol), deployed to
   `data\control-panel\`, loaded from the Panel's Modules tab. It calls the

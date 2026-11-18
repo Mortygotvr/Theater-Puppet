@@ -37,6 +37,7 @@ pub const OBS_SOURCE_CUSTOM_DRAW: u32 = 1 << 3;
 pub const OBS_PATH_FILE: u32 = 0;
 pub const OBS_COMBO_TYPE_LIST: u32 = 2;
 pub const OBS_COMBO_FORMAT_STRING: u32 = 3;
+pub const OBS_TEXT_DEFAULT: u32 = 0;
 pub const OBS_TEXT_INFO: u32 = 3;
 pub const OBS_GROUP_NORMAL: u32 = 1;
 

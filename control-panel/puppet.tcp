@@ -23,7 +23,7 @@
                 if (!r || !r.ok) return;
                 (r.puppets || []).forEach(p => {
                     const glbs = (p.glbs || []).map(g => `${g.index} ${g.name} (${(g.keys || []).length} shape keys)`).join(", ");
-                    logMsg(`[Puppet] ${p.source}: GLBs ${glbs || "none"}; animations: ${(p.animations || []).join(", ") || "none"}; colour slots: ${(p.colour_slots || []).join(", ") || "none"}`);
+                    logMsg(`[Puppet] ${p.source}: GLBs ${glbs || "none"}; groups: ${(p.groups || []).join(", ") || "none"}; animations: ${(p.animations || []).join(", ") || "none"}; colour slots: ${(p.colour_slots || []).join(", ") || "none"}`);
                 });
             });
         },
@@ -155,6 +155,21 @@
                 { value: "off", label: "Hide" },
                 { value: "toggle", label: "Toggle" }
             ] }
+        ]
+    }, MODULE_ID);
+
+    // ─── GLB group ───────────────────────────────────────────────────────────
+    window.TheaterController.registerCommand("puppet_group", async (inputs) => {
+        const group = text(inputs.group);
+        const pick = text(inputs.glb) || "next";
+        await send({ action: "group", source: text(inputs.source), group, glb: pick },
+            `Group ${group}: ${pick}`);
+    }, {
+        label: "Puppet: Show GLB of Group",
+        fields: [
+            SOURCE,
+            { id: "group", label: "Group (as in the Puppet's properties)", type: "text", default: "" },
+            { id: "glb", label: "Show (a GLB's name or number, next, or none)", type: "text", default: "next" }
         ]
     }, MODULE_ID);
 
