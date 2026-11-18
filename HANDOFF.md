@@ -1,4 +1,4 @@
-﻿# Theater Puppet: handoff
+# Theater Puppet: handoff
 
 State of the work on 2026-11-16, for whoever continues it. Theater Puppet is
 an OBS source (Rust, `theater-puppet.dll`) that draws a Theater Rig avatar
@@ -75,7 +75,7 @@ appear there a moment later.
 | MeowFace | VTube Studio phone protocol, asks phone:21412, listens on 50506 | **No** (no Android phone); only the packet reading is tested |
 | Leap Motion | `LeapC.dll` from the Leap software | Yes |
 | SteamVR | `openvr_api.dll` from SteamVR, background then overlay app, `IVRSystem_023`; fingers from `IVRInput_010` skeletons | **No**: the owner's Steam Frame can't stream to this PC (SteamVR's vrlink refuses Intel Arc GPUs, vendor 0x8086) |
-| VR telemetry | The headset's own telemetry server, as the owner's Unity app AvatarStreaming reads it: poses UDP 7500 (roles 1 head â€¦ 7 chest), finger skeletons 7501; T-pose calibration and a reach scale in the dock | Yes (headset, controllers, calibration, scale); fingers not yet confirmed |
+| VR telemetry | The headset's own telemetry server, as the owner's Unity app AvatarStreaming reads it: poses UDP 7500 (roles 1 head … 7 chest), finger skeletons 7501; T-pose calibration and a reach scale in the dock | Yes (headset, controllers, calibration, scale); fingers not yet confirmed |
 | MediaPipe | Python helper `mediapipe/puppet_mediapipe.py`, started by `tracking/mediapipe.rs` | Yes |
 
 Not verified by anyone: whether head turns, hand positions and finger curls
@@ -95,7 +95,7 @@ MediaPipe notes:
 ## Place and animations
 
 - Each Puppet has Turn and Position (X/Y/Z, metres) settings. On top of
-  them, the **"ðŸ§ Puppet Place" filter** (`src/place.rs`) adds its own Turn
+  them, the **"🧍 Puppet Place" filter** (`src/place.rs`) adds its own Turn
   and Position. It's a filter on purpose: Theater Scene's Studio shows a
   source's filters' sliders in its filter part, and its poses save and ease
   them, so the avatar turns and moves with poses without Scene knowing about
@@ -110,16 +110,16 @@ MediaPipe notes:
   the key's name, the stronger of clip and tracking wins); a face-only clip
   leaves the idle body motion on. With Blender's "NLA tracks" export, a
   clip is named after its NLA track, not its action.
-- **Also draw 1â€“3** (source settings): extra GLBs drawn in the same picture,
+- **Also draw 1–3** (source settings): extra GLBs drawn in the same picture,
   so the filters cover them too. Each copies the avatar's pose by bone name
   and its shape keys by name (`Follower` in `motion.rs`), keeping its own
   bone lengths and running its own springs. Nothing more (the owner wants
   it simple: a full GLB that mimics the main model). On the GPU they are
-  mesh layers 1â€“3 (`Gpu::set_extras`). Test file: a skeleton with a box in
+  mesh layers 1–3 (`Gpu::set_extras`). Test file: a skeleton with a box in
   the right hand, `THEATER_PUPPET_EXTRA_GLB`. Planned by the owner, not
   built: Control Panel toggles each extra GLB on and off, and GLBs get
   groups, only one of a group active at once.
-- The "ðŸŽ¬ Puppet Animations" dock (`theater-scripts/puppet_animation_dock.rhai`)
+- The "🎬 Puppet Animations" dock (`theater-scripts/puppet_animation_dock.rhai`)
   picks the loop and plays clips. A test with a real clip runs when `THEATER_PUPPET_ANIMATED_GLB` points
   to an export with a "Wave" clip on RightArm.
 
@@ -136,7 +136,7 @@ MediaPipe notes:
 
 - Theater Scene, branch `puppet-body-parts`: aim redeems at Puppet's body
   parts, report the part hit; Rhai docks' `call_proc`, and other plugins'
-  `data\theater-scripts` loaded. Puppet's "ðŸŽ¯ Puppet Tracking" dock
+  `data\theater-scripts` loaded. Puppet's "🎯 Puppet Tracking" dock
   (`theater-scripts/puppet_tracking_dock.rhai`, procedure
   `theater_puppet_tracking` in `src/tracking/dock.rs`) needs both.
 - Theater Control Panel, branch `fix/reader-moderation-dedup`: the
