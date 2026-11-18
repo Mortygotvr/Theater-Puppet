@@ -146,7 +146,6 @@ MediaPipe notes:
 
 - Switching filters on the fly: preload, crossfade, a `theater_puppet_set_look`
   proc, saved looks.
-- Several GLBs in one picture under one filter chain.
 - Puppet reacting to hits (Scene already emits `theater_scene_impact`).
 - "vrtounity": the owner's own tracking, wanted as another input for
   themselves. Never specified here: ask what it sends and how before
