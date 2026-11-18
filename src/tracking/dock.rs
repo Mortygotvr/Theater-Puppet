@@ -11,7 +11,8 @@
 //!   in front of the avatar (sets `leap_height` and `leap_forward`);
 //! - `telemetry_calibrate` (`now`: at once, else when both triggers are
 //!   pressed), `telemetry_reset`: VR telemetry's T-pose calibration;
-//! - `mediapipe_recentre`: where the face is now becomes the head at rest;
+//! - `mediapipe_recentre`, `ifacialmocap_recentre`: where the head is now
+//!   becomes the head at rest;
 //! - `mediapipe_restart`: MediaPipe's helper started again.
 //!
 //! It answers `{"leap", "leap_height", "leap_forward", "leap_status",
@@ -68,6 +69,10 @@ pub fn answer(args: &str) -> String {
             mediapipe::recentre();
             true
         }
+        "ifacialmocap_recentre" => {
+            super::ifacialmocap::recentre();
+            true
+        }
         "telemetry_calibrate" => {
             telemetry::calibrate(args.get("now").and_then(|n| n.as_bool()).unwrap_or(false));
             true
@@ -100,6 +105,8 @@ pub fn answer(args: &str) -> String {
         "telemetry_status": status(Source::Telemetry, c.telemetry.enabled),
         "telemetry_calibration": telemetry::calibration_state(),
         "telemetry_scale": c.telemetry_scale,
+        "ifacialmocap": c.ifacialmocap.enabled,
+        "ifacialmocap_status": status(Source::IFacialMocap, c.ifacialmocap.enabled),
         "mediapipe": c.mediapipe,
         "mediapipe_status": status(Source::MediaPipe, c.mediapipe),
         "done": done,

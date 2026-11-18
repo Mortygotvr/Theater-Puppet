@@ -64,6 +64,16 @@ fn ui(ui) {
     }
 
     ui.separator();
+    ui.heading("📱 iFacialMocap");
+    ui.small(s.ifacialmocap_status);
+    if s.ifacialmocap {
+        if ui.button("Re-centre head") {
+            call_proc("theater_puppet_tracking", #{ action: "ifacialmocap_recentre" });
+        }
+        ui.small("Sit as you normally do, then click (head position: assign it to iFacialMocap in the Tracking window).");
+    }
+
+    ui.separator();
     ui.heading("📷 MediaPipe");
     ui.small(s.mediapipe_status);
     if s.mediapipe {

@@ -9,13 +9,18 @@
 //! ```
 //!
 //! Shapes are ARKit's with `_L` / `_R` for Left / Right, 0–100 (a newer
-//! format writes `name&value`); the turns are Unity's, in degrees.
+//! format writes `name&value`); the turns are Unity's, in degrees; the head's
+//! tx, ty, tz its place from the phone, metres (Unity's axes, mirrored like
+//! the turns). Its first place is the head at rest (the dock's "Re-centre
+//! head" takes the next one), and the head moves from there.
 
 use std::net::UdpSocket;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use super::{Face, Source, config::Config};
+use glam::Vec3;
+
+use super::{Body, Face, Source, Target, config::Config};
 
 const START: &[u8] = b"iFacialMocap_sahuasouryya9218sauhuiayeta91555dy3719";
 
@@ -35,6 +40,12 @@ fn numbers(text: &str) -> Vec<f32> {
 
 /// A packet's face, or None if it isn't one
 pub fn parse(text: &str) -> Option<Face> {
+    parse_with_place(text).map(|(face, _)| face)
+}
+
+/// A packet's face, and where the head is (the avatar's axes: X its left,
+/// Y up, Z toward the phone; metres) when the packet says
+pub fn parse_with_place(text: &str) -> Option<(Face, Option<Vec3>)> {
     let (shapes, rest) = text.split_once('=').unwrap_or((text, ""));
     let mut face = Face::default();
     let mut found = 0;
@@ -49,6 +60,7 @@ pub fn parse(text: &str) -> Option<Face> {
         return None;
     }
     let (mut left, mut right) = (None, None);
+    let mut place = None;
     for part in rest.split('|') {
         let Some((key, values)) = part.split_once('#') else { continue };
         let v = numbers(values);
@@ -57,7 +69,13 @@ pub fn parse(text: &str) -> Option<Face> {
         }
         let turn = super::from_unity_euler(v[0], v[1], v[2]);
         match key.trim() {
-            "head" => face.head = turn,
+            "head" => {
+                face.head = turn;
+                if v.len() >= 6 {
+                    // Mirrored across X, like the turn
+                    place = Some(Vec3::new(-v[3], v[4], v[5]));
+                }
+            }
             "leftEye" => left = Some(turn),
             "rightEye" => right = Some(turn),
             _ => {}
@@ -66,7 +84,14 @@ pub fn parse(text: &str) -> Option<Face> {
     if let (Some(l), Some(r)) = (left, right) {
         face.eyes = Some([l, r]);
     }
-    Some(face)
+    Some((face, place.filter(|p: &Vec3| p.is_finite())))
+}
+
+/// The next place seen is the head at rest again (the dock's "Re-centre head")
+static RECENTRE: AtomicBool = AtomicBool::new(false);
+
+pub fn recentre() {
+    RECENTRE.store(true, Ordering::SeqCst);
 }
 
 /// Bumped at each restart: a listener stops when it's no longer its own
@@ -105,6 +130,8 @@ pub fn restart(config: &Config) {
         let mut asked: Option<Instant> = None;
         let mut received = false;
         let mut buf = [0u8; 8192];
+        // The head at rest
+        let mut neutral: Option<Vec3> = None;
         while GENERATION.load(Ordering::SeqCst) == generation {
             // The phone sends once asked; asked again now and then, in case the app restarted
             let ip = phone.ip.trim();
@@ -113,7 +140,17 @@ pub fn restart(config: &Config) {
                 asked = Some(Instant::now());
             }
             let Ok((len, _)) = socket.recv_from(&mut buf) else { continue };
-            let Some(face) = std::str::from_utf8(&buf[..len]).ok().and_then(parse) else { continue };
+            let Some((face, place)) = std::str::from_utf8(&buf[..len]).ok().and_then(parse_with_place) else { continue };
+            // Where the head is: standing at the user's eye height, moved as it moved from rest
+            if let Some(at) = place {
+                if RECENTRE.swap(false, Ordering::SeqCst) {
+                    neutral = None;
+                }
+                let rest = *neutral.get_or_insert(at);
+                let height = super::config::get().user_height.clamp(0.5, 2.5);
+                let head = Target { position: Vec3::new(0.0, height * 0.93, 0.0) + (at - rest), rotation: face.head };
+                super::set_body(Source::IFacialMocap, Body { head: Some(head), ..Default::default() });
+            }
             super::set_face(Source::IFacialMocap, face);
             super::set_status(Source::IFacialMocap, "receiving");
             if !received {
@@ -144,6 +181,11 @@ mod tests {
         let forward = face.head * glam::Vec3::Z;
         assert!(forward.y > 0.3, "{forward:?}");
         assert!(face.eyes.is_some());
+        // The head's place: tx mirrored, metres
+        let (_, place) = parse_with_place(SAMPLE).unwrap();
+        let p = place.unwrap();
+        assert!((p - Vec3::new(0.030653415, -0.10287084, -0.6584072)).length() < 1e-6, "{p:?}");
+        assert!(parse_with_place("jawOpen-12|=head#0,0,0|").unwrap().1.is_none());
     }
 
     #[test]

@@ -226,7 +226,7 @@ impl Part {
         match self {
             Part::Expressions => &[Source::IFacialMocap, Source::MeowFace, Source::MediaPipe],
             Part::HeadTurn => &[Source::IFacialMocap, Source::MeowFace, Source::MediaPipe, Source::SteamVr, Source::Telemetry],
-            Part::HeadPosition => &[Source::SteamVr, Source::Telemetry, Source::MediaPipe],
+            Part::HeadPosition => &[Source::SteamVr, Source::Telemetry, Source::IFacialMocap, Source::MediaPipe],
             Part::Arms => &[Source::SteamVr, Source::Telemetry, Source::Leap, Source::MediaPipe],
             Part::Fingers => &[Source::Leap, Source::MediaPipe, Source::SteamVr, Source::Telemetry],
             Part::LowerBody => &[Source::SteamVr, Source::Telemetry, Source::MediaPipe],
