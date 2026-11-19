@@ -69,6 +69,25 @@ fn cfg_check(ui, c, key, label) {
     }
 }
 
+/// A VR input's feel (`group`: telemetry_feel or steamvr_feel): how much of
+/// each part's movement the avatar copies, and its own smoothing
+fn feel_sliders(ui, c, group) {
+    ui.separator();
+    ui.strong("How much of your movement the avatar copies");
+    ui.small("1: all of it; 0: none (the idle pose). VR follows every lean and step: lower keeps the avatar calmer.");
+    let f = c[group];
+    for pair in [["head_turn", "Head turn"], ["head_move", "Head position"], ["hands", "Hands"], ["hips", "Hips"], ["feet", "Feet"], ["smoothing", "Smoothing (on top of General's)"]] {
+        let v = ui.slider(pair[1], f[pair[0]], 0.0, 1.0);
+        if v != f[pair[0]] {
+            let inner = #{};
+            inner[pair[0]] = v;
+            let m = #{};
+            m[group] = inner;
+            set_cfg(m);
+        }
+    }
+}
+
 /// An input's on / off (its object's `enabled`, or the setting itself)
 fn input_on(ui, c, key, label) {
     let obj = type_of(c[key]) == "map";
@@ -219,6 +238,7 @@ fn ui(ui) {
         "SteamVr" => {
             input_on(ui, c, "steamvr", "SteamVR (headset, controllers, trackers)");
             status_line(ui, s, "SteamVr");
+            feel_sliders(ui, c, "steamvr_feel");
         },
         "Telemetry" => {
             input_on(ui, c, "telemetry", "VR telemetry (the headset's own server, no SteamVR here)");
@@ -232,6 +252,7 @@ fn ui(ui) {
             if ui.button("Reset") { tracking(#{ action: "telemetry_reset" }); }
             ui.end();
             ui.small("Stand in a T-pose, arms out, palms down, looking ahead.");
+            feel_sliders(ui, c, "telemetry_feel");
         },
         "Leap" => {
             input_on(ui, c, "leap", "Leap Motion (hands)");

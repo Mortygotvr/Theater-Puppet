@@ -16,7 +16,7 @@ use crate::ik::Skeleton;
 use crate::model::Model;
 use crate::pose::{self, Pose};
 use crate::springs::{Adjust, Springs};
-use crate::tracking::{self, ARKIT, Hand, Snapshot, Target};
+use crate::tracking::{self, ARKIT, Hand, Part, Snapshot, Target};
 
 /// How the avatar moves, from the source's settings
 #[derive(Clone, Copy, Debug)]
@@ -190,6 +190,8 @@ pub struct Rig {
     arkit: [Option<usize>; 52],
     /// The face this frame (for extra GLBs' keys the avatar doesn't have)
     pub face: Face,
+    /// How much of the hands', hips' and feet's tracked movement shows (a VR input's feel)
+    shares: [f32; 3],
     followed: Followed,
     /// The avatar's own animations (animation.rs)
     pub player: crate::animation::Player,
@@ -303,6 +305,7 @@ impl Rig {
             followers: Vec::new(),
             follow: Vec::new(),
             face: Face::default(),
+            shares: [1.0; 3],
             overrides: Vec::new(),
             hide: Vec::new(),
             prop: None,
@@ -490,27 +493,46 @@ impl Rig {
 
     /// Follows what's tracked: smoothed, each part fading in and out
     fn follow(&mut self, s: &Snapshot, dt: f32, config: &tracking::config::Config) {
+        // A VR input driving a part: its share of the movement and its smoothing
+        let feel = |part: Part| -> Option<&tracking::config::VrFeel> {
+            match s.from.iter().find(|(p, _)| *p == part).map(|(_, src)| *src) {
+                Some(tracking::Source::Telemetry) => Some(&config.telemetry_feel),
+                Some(tracking::Source::SteamVr) => Some(&config.steamvr_feel),
+                _ => None,
+            }
+        };
+        let share = |part: Part, pick: fn(&tracking::config::VrFeel) -> f32| feel(part).map_or(1.0, |f| pick(f).clamp(0.0, 1.0));
+        self.shares = [share(Part::Arms, |f| f.hands), share(Part::LowerBody, |f| f.hips), share(Part::LowerBody, |f| f.feet)];
         // The avatar's size to the user's (the head bone is about 87% of a body's height)
         let scale = (self.skeleton.rest_head().y / 0.87) / config.user_height.clamp(0.5, 2.5);
         let rest_head = self.skeleton.rest_head();
         // Where the user's head is when standing straight (eye height)
         let user_head = Vec3::new(0.0, config.user_height.clamp(0.5, 2.5) * 0.93, 0.0);
         let sized = |t: Target| Target { position: t.position * scale, rotation: t.rotation };
-        // How much of the way this frame: none of the lag at smoothing 0
-        let tau = config.smoothing.clamp(0.0, 1.0) * 0.12;
-        let ease = if tau <= 1e-4 { 1.0 } else { 1.0 - (-dt / tau).exp() };
+        // How much of the way this frame: none of the lag at smoothing 0; a VR
+        // input's own smoothing on top, for the parts it drives
+        let ease_of = |part: Part| {
+            let extra = feel(part).map_or(0.0, |f| f.smoothing.clamp(0.0, 1.0) * 0.3);
+            let tau = (config.smoothing.clamp(0.0, 1.0) * 0.12).max(extra);
+            if tau <= 1e-4 { 1.0 } else { 1.0 - (-dt / tau).exp() }
+        };
+        let ease = ease_of(Part::Expressions);
+        let (turn_share, move_share) = (share(Part::HeadTurn, |f| f.head_turn), share(Part::HeadPosition, |f| f.head_move));
         let f = &mut self.followed;
         f.shapes.step(s.shapes, ease, dt, |a, b, t| std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t));
-        f.head_turn.step(s.head_turn, ease, dt, |a, b, t| a.slerp(b, t));
-        f.head_position.step(s.head_position.map(|p| rest_head + (p - user_head) * scale), ease, dt, |a, b, t| a.lerp(b, t));
-        f.hands[0].step(s.left_hand.map(sized), ease, dt, mix_target);
-        f.hands[1].step(s.right_hand.map(sized), ease, dt, mix_target);
+        f.head_turn.step(s.head_turn.map(|q| Quat::IDENTITY.slerp(q, turn_share)), ease_of(Part::HeadTurn), dt, |a, b, t| a.slerp(b, t));
+        f.head_position.step(s.head_position.map(|p| rest_head + (p - user_head) * scale * move_share), ease_of(Part::HeadPosition), dt, |a, b, t| a.lerp(b, t));
+        let arms = ease_of(Part::Arms);
+        f.hands[0].step(s.left_hand.map(sized), arms, dt, mix_target);
+        f.hands[1].step(s.right_hand.map(sized), arms, dt, mix_target);
         f.elbows = [s.left_elbow.map(|p| p * scale), s.right_elbow.map(|p| p * scale)];
-        f.fingers[0].step(s.left_fingers, ease, dt, mix_hand);
-        f.fingers[1].step(s.right_fingers, ease, dt, mix_hand);
-        f.hips.step(s.hips.map(sized), ease, dt, mix_target);
-        f.feet[0].step(s.left_foot.map(sized), ease, dt, mix_target);
-        f.feet[1].step(s.right_foot.map(sized), ease, dt, mix_target);
+        let fingers = ease_of(Part::Fingers);
+        f.fingers[0].step(s.left_fingers, fingers, dt, mix_hand);
+        f.fingers[1].step(s.right_fingers, fingers, dt, mix_hand);
+        let lower = ease_of(Part::LowerBody);
+        f.hips.step(s.hips.map(sized), lower, dt, mix_target);
+        f.feet[0].step(s.left_foot.map(sized), lower, dt, mix_target);
+        f.feet[1].step(s.right_foot.map(sized), lower, dt, mix_target);
     }
 
     /// The IK's targets this frame: what's followed, turned with the body
@@ -536,16 +558,17 @@ impl Rig {
         out.shapes = f.shapes.get().map(|(s, w)| s.map(|v| v * w));
         out.head_turn = f.head_turn.get().map(|(q, w)| Quat::IDENTITY.slerp(q, w));
         out.head_position = f.head_position.get().map(|(p, w)| rest_head + turn * ((p - rest_head) * w));
-        out.left_hand = f.hands[0].get().map(|(t, w)| blend(bones.left_hand, t, w));
-        out.right_hand = f.hands[1].get().map(|(t, w)| blend(bones.right_hand, t, w));
+        let [hands, hips, feet] = self.shares;
+        out.left_hand = f.hands[0].get().map(|(t, w)| blend(bones.left_hand, t, w * hands));
+        out.right_hand = f.hands[1].get().map(|(t, w)| blend(bones.right_hand, t, w * hands));
         out.left_elbow = f.elbows[0].filter(|_| out.left_hand.is_some()).map(|p| turn * p);
         out.right_elbow = f.elbows[1].filter(|_| out.right_hand.is_some()).map(|p| turn * p);
         let fade_hand = |(h, w): (Hand, f32)| mix_hand(Hand::default(), h, w);
         out.left_fingers = f.fingers[0].get().map(fade_hand);
         out.right_fingers = f.fingers[1].get().map(fade_hand);
-        out.hips = f.hips.get().map(|(t, w)| blend(bones.hips, t, w));
-        out.left_foot = f.feet[0].get().map(|(t, w)| blend(self.model.node("LeftFoot"), t, w));
-        out.right_foot = f.feet[1].get().map(|(t, w)| blend(self.model.node("RightFoot"), t, w));
+        out.hips = f.hips.get().map(|(t, w)| blend(bones.hips, t, w * hips));
+        out.left_foot = f.feet[0].get().map(|(t, w)| blend(self.model.node("LeftFoot"), t, w * feet));
+        out.right_foot = f.feet[1].get().map(|(t, w)| blend(self.model.node("RightFoot"), t, w * feet));
         // Holding the controller: the hands on it, the fingers on its buttons
         if let Some(prop) = self.prop.as_ref().filter(|p| p.weight > 0.0) {
             let w = prop.weight;
@@ -1113,6 +1136,50 @@ mod tests {
         // Copy shape keys off: none of it
         f.follow(&bare, &bare_rest, &bare_rest, &[], &face, 1.0 / 60.0, &motion, &[], 1, &FollowSettings { shapes: false, ..Default::default() });
         assert_eq!(f.morph[jaw_key], 0.0);
+    }
+
+    #[test]
+    fn a_vr_input_copies_its_share_of_each_part() {
+        let Some(base) = rig() else { return };
+        let model = base.model.clone();
+        let hips = model.node("Hips").unwrap();
+        let head = model.node("Head").unwrap();
+        // VR telemetry tracks the hips well off to the side, the head turned
+        let tracked = Snapshot {
+            hips: Some(Target { position: Vec3::new(0.25, 0.95, 0.1), rotation: Quat::IDENTITY }),
+            head_turn: Some(Quat::from_rotation_y(0.8)),
+            from: vec![(Part::LowerBody, tracking::Source::Telemetry), (Part::HeadTurn, tracking::Source::Telemetry)],
+            ..Default::default()
+        };
+        let run = |share: f32| {
+            let mut rig = Rig::new(model.clone());
+            let mut config = tracking::config::Config { smoothing: 0.0, ..Default::default() };
+            config.telemetry_feel.hips = share;
+            config.telemetry_feel.head_turn = share;
+            for _ in 0..40 {
+                rig.step_with(1.0 / 60.0, still(), &tracked, &config);
+            }
+            (rig.pose.position(hips), rig.pose.world_rotation(head))
+        };
+        let (none, none_head) = run(0.0);
+        let (half, half_head) = run(0.5);
+        let (all, all_head) = run(1.0);
+        let (moved_half, moved_all) = ((half - none).length(), (all - none).length());
+        println!("hips moved: half {moved_half:.3} m, all {moved_all:.3} m");
+        assert!(moved_all > 0.05, "the hips don't follow at all: {moved_all}");
+        assert!(moved_half > moved_all * 0.25 && moved_half < moved_all * 0.75, "half isn't about half: {moved_half} of {moved_all}");
+        let (turn_half, turn_all) = (half_head.angle_between(none_head), all_head.angle_between(none_head));
+        println!("head turned: half {turn_half:.3}, all {turn_all:.3} rad");
+        assert!(turn_all > 0.3 && turn_half > turn_all * 0.3 && turn_half < turn_all * 0.7);
+        // Another input (not VR): all of it, whatever VR's feel says
+        let mut config = tracking::config::Config { smoothing: 0.0, ..Default::default() };
+        config.telemetry_feel.hips = 0.0;
+        let other = Snapshot { from: vec![(Part::LowerBody, tracking::Source::MediaPipe)], ..tracked.clone() };
+        let mut rig = Rig::new(model.clone());
+        for _ in 0..40 {
+            rig.step_with(1.0 / 60.0, still(), &other, &config);
+        }
+        assert!((rig.pose.position(hips) - all).length() < 0.02, "another input's hips are cut too");
     }
 
     #[test]

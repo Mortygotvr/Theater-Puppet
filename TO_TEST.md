@@ -3,6 +3,14 @@
 What's built but not yet tried live, newest first. Tick it (or tell Claude
 what went wrong) and it comes off the list.
 
+## VR: how much of your movement the avatar copies
+- [ ] ⚙ Puppet Configuration → VR telemetry (and SteamVR): "How much of your
+      movement the avatar copies": Head turn, Head position, Hands, Hips,
+      Feet (1 all, 0 none: the idle pose), and Smoothing on top.
+- [ ] Hips at 0.3: leaning and stepping barely move the avatar's hips.
+- [ ] Smoothing up: calmer, a little late; only the parts VR drives.
+- [ ] They change live (no input restart, no hiccup).
+
 ## Also draw: what each GLB copies
 - [ ] Puppet properties → each Also draw box: Copy movement / Copy rotation
       (from the armature or a bone), Copy shape keys. All on: as before.

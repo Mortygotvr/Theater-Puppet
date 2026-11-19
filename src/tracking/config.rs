@@ -70,6 +70,9 @@ pub struct Config {
     pub telemetry: Phone,
     /// VR telemetry's hands, hips and feet moved this much farther from the head (1 = as tracked)
     pub telemetry_scale: f32,
+    /// How much of what VR telemetry and SteamVR track the avatar copies, part by part
+    pub telemetry_feel: VrFeel,
+    pub steamvr_feel: VrFeel,
     pub leap: bool,
     /// The Leap is on the headset (looking where you look), not on the desk
     pub leap_on_head: bool,
@@ -111,6 +114,8 @@ impl Default for Config {
             steamvr: false,
             telemetry: Phone { enabled: false, ip: String::new(), port: super::telemetry::POSE_PORT },
             telemetry_scale: 1.0,
+            telemetry_feel: VrFeel::default(),
+            steamvr_feel: VrFeel::default(),
             leap: false,
             leap_on_head: false,
             leap_height: 0.0,
@@ -152,8 +157,30 @@ pub fn get() -> Config {
 
 /// The settings that only change how what's tracked is used, read every
 /// frame: a change of them alone doesn't restart the inputs
+/// A VR input's feel: how much of each part's movement the avatar copies (1
+/// all of it, 0 none: the idle pose there), and smoothing on top of the
+/// general one, while that input drives the part. VR follows every lean and
+/// step: this keeps an avatar calmer than its user.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct VrFeel {
+    pub head_turn: f32,
+    pub head_move: f32,
+    pub hands: f32,
+    pub hips: f32,
+    pub feet: f32,
+    /// 0 none (the general smoothing alone) .. 1 very smooth
+    pub smoothing: f32,
+}
+
+impl Default for VrFeel {
+    fn default() -> Self {
+        VrFeel { head_turn: 1.0, head_move: 1.0, hands: 1.0, hips: 1.0, feet: 1.0, smoothing: 0.0 }
+    }
+}
+
 fn without_live(c: &Config) -> Config {
-    Config { leap_height: 0.0, leap_forward: 0.0, telemetry_scale: 0.0, mirror: false, head_strength: 0.0, spine_lean: 0.0, torso_follow: 0.0, smoothing: 0.0, ..c.clone() }
+    Config { leap_height: 0.0, leap_forward: 0.0, telemetry_scale: 0.0, telemetry_feel: VrFeel::default(), steamvr_feel: VrFeel::default(), mirror: false, head_strength: 0.0, spine_lean: 0.0, torso_follow: 0.0, smoothing: 0.0, ..c.clone() }
 }
 
 /// New settings: kept, saved, and the inputs restarted with them (when
