@@ -3,6 +3,16 @@
 What's built but not yet tried live, newest first. Tick it (or tell Claude
 what went wrong) and it comes off the list.
 
+## Theater Rig: Make Tiles
+- [ ] Reinstall Theater Rig from `Documents\theater_rig-0.1.0.zip` (both computers).
+- [ ] Panel → Tile textures: pick a sheet texture (Pick from Selected), set
+      columns / rows, names (`Open, Closed, Star…`, across then down), Make
+      Tiles. The report says which materials were "moved" (UVs on one cell)
+      or "over the whole sheet" (they now show the default cell in Blender).
+- [ ] Export, load in Puppet: the tiles show by name in the Control Panel /
+      Scene tile list and switch the texture.
+- [ ] A VRM with its own tile expressions plus tiles you made: both kept.
+
 ## Timers and a tile's shape key
 - [ ] Reload `puppet.tcp` in the Control Panel (Modules) so the new fields show.
 - [ ] Tile with "Shape key with it" (e.g. a blush key) and Timer 10: the tile
