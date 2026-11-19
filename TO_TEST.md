@@ -3,6 +3,16 @@
 What's built but not yet tried live, newest first. Tick it (or tell Claude
 what went wrong) and it comes off the list.
 
+## Theater Rig: Spring preview
+- [ ] Reinstall the Rig zip. After Rename Springs: Spring preview → Start.
+      Move the armature (G), rotate it, pose the head, or play an animation:
+      the hair / skirt swings, and the orange capsules (colliders) push it out.
+- [ ] "Sway the body": the hips turn back and forth by themselves.
+- [ ] Change a chain's Stiffness / Gravity / Drag / Radius while it runs: it
+      changes at once; Export, load in Puppet: it swings the same way there.
+- [ ] Stop: every bone back as it was. Ctrl+Z or opening a file while it
+      runs doesn't break anything.
+
 ## ⚙ Puppet Configuration window
 - [ ] 🎭 Theater menu: Puppet's part (its icon) has "🎬 Puppet Animations"
       and "⚙ Puppet Configuration…"; no "Tracking…" any more.
