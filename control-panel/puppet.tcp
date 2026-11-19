@@ -23,7 +23,7 @@
             send({ action: "list" }, null).then(r => {
                 if (!r || !r.ok) return;
                 (r.puppets || []).forEach(p => {
-                    const glbs = (p.glbs || []).map(g => `${g.index} ${g.name} (${(g.keys || []).length} shape keys${(g.tiles || []).length ? `, tiles: ${g.tiles.join(" / ")}` : ""})`).join(", ");
+                    const glbs = (p.glbs || []).map(g => `${g.index} ${g.name} (${(g.keys || []).length} shape keys${Object.keys(g.tile_sets || {}).length ? `, tiles: ${Object.entries(g.tile_sets).map(([set, names]) => `${set || "(no set)"}: ${names.join(" / ")}`).join("; ")}` : ""})`).join(", ");
                     logMsg(`[Puppet] ${p.source}: GLBs ${glbs || "none"}; groups: ${(p.groups || []).join(", ") || "none"}; animations: ${(p.animations || []).join(", ") || "none"}; colour slots: ${(p.colour_slots || []).join(", ") || "none"}`);
                 });
             });
@@ -174,21 +174,15 @@
         const args = { action: "tile", source: text(inputs.source), glb: text(inputs.glb), state: inputs.state || "on", fade: num(inputs.fade, 0), timer: timer(inputs) };
         // A shape key held while the tile shows
         if (text(inputs.key)) Object.assign(args, { key: text(inputs.key), key_value: num(inputs.key_value, 1) });
-        if (name) {
-            args.name = name;
-        } else {
-            Object.assign(args, { material: text(inputs.material), columns: num(inputs.columns, 1), rows: num(inputs.rows, 1), cell: text(inputs.cell) || "0" });
-        }
-        await send(args, name ? `Tile ${name}: ${args.state}` : `Tile ${args.material} ${args.columns}x${args.rows} cell ${args.cell}: ${args.state}`);
+        args.name = name || "next";
+        args.set = text(inputs.set);
+        await send(args, `Tile ${args.name}${args.set ? ` (${args.set})` : ""}: ${args.state}`);
     }, {
         label: "Puppet: Tile Texture",
         fields: [
             SOURCE, GLB,
-            { id: "name", label: "Tile name (a VRM expression moving textures; empty: the grid below)", type: "text", default: "" },
-            { id: "material", label: "Grid: material", type: "text", default: "" },
-            { id: "columns", label: "Grid: columns", type: "number", default: 2 },
-            { id: "rows", label: "Grid: rows", type: "number", default: 2 },
-            { id: "cell", label: "Grid: cell (0 = top left, across then down; next; random)", type: "text", default: "0" },
+            { id: "name", label: "Tile (its name, next or random; made in Theater Rig, listed in the log)", type: "text", default: "next" },
+            { id: "set", label: "Set, for next / random (empty: all the GLB's tiles)", type: "text", default: "" },
             { id: "state", label: "State", type: "select", default: "on", options: [
                 { value: "on", label: "On" },
                 { value: "off", label: "Off (back to its own)" },

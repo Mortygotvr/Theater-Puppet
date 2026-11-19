@@ -66,15 +66,26 @@ pub struct Mouth {
 /// The newest mouth, and when (from whichever Lipsync filter heard last)
 static LATEST: Mutex<Option<(Mouth, Instant)>> = Mutex::new(None);
 
-/// What a Lipsync filter hears (the tests: as if heard now)
+// The tests' mouth: each test's own (tests run side by side, one per thread;
+// a shared one opened the jaw of another test's avatar)
+#[cfg(test)]
+thread_local! {
+    static HEARD: std::cell::RefCell<Option<(Mouth, Instant)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// What a Lipsync filter hears (the tests: as if heard now, on this thread)
 #[cfg(test)]
 pub fn hear(mouth: Mouth) {
-    *LATEST.lock().unwrap() = Some((mouth, Instant::now()));
+    HEARD.with(|h| *h.borrow_mut() = Some((mouth, Instant::now())));
 }
 
 /// The mouth now; None when no Lipsync filter is hearing anything
 pub fn mouth() -> Option<Mouth> {
-    LATEST.lock().unwrap().as_ref().filter(|(_, at)| at.elapsed() < Duration::from_millis(300)).map(|(m, _)| m.clone())
+    #[cfg(test)]
+    let latest = HEARD.with(|h| h.borrow().clone());
+    #[cfg(not(test))]
+    let latest = LATEST.lock().unwrap().clone();
+    latest.filter(|(_, at)| at.elapsed() < Duration::from_millis(300)).map(|(m, _)| m)
 }
 
 #[derive(Clone)]

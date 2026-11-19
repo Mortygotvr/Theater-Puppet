@@ -21,11 +21,11 @@
 //!   group hides the others);
 //! - `group` {group, glb: a GLB of it | "next" | "none"}: shows that one of
 //!   the group (the others hidden), the next one, or none;
-//! - `tile` {glb, state: "on" | "off" | "toggle"} and either
-//!   `name` (a tile the GLB has: a VRM expression moving textures, kept by
-//!   Theater Rig) or `material` + `columns` + `rows` + `cell` (a number, 0 the
-//!   top left, across then down; "next"; "random"): its texture shows that
-//!   tile of a grid of any size. One tile per material at a time;
+//! - `tile` {glb, state: "on" | "off" | "toggle", name, set}: `name` is a
+//!   tile the GLB has (made by Theater Rig: Make Tiles, or a VRM's
+//!   expressions converted), or "next" / "random" in the set `set` (none: all
+//!   its tiles). One tile per material at a time. (Old redeems' `material` +
+//!   `columns` + `rows` + `cell` grid still works);
 //! - `color` {slot, color: "#rrggbb" | "reset"}: that colour slot on every
 //!   GLB of the Puppet (saved in the source's settings).
 //!
@@ -593,7 +593,27 @@ fn ask(args: &Value, source: Ptr, remote: &Shared, shown: &mut Option<Vec<bool>>
             let state = text("state");
             let weight = number(args, "value", 1.0, 0.0, 1.0);
             let glb = r.glbs.get(layer).cloned().unwrap_or_default();
-            let name = text("name");
+            let mut name = text("name");
+            // "next" / "random": a tile of the set, from the one showing
+            if matches!(name.to_ascii_lowercase().as_str(), "next" | "random") {
+                let set = text("set");
+                let pool: Vec<&crate::model::Tile> = glb.tiles.iter().filter(|t| set.is_empty() || t.set.eq_ignore_ascii_case(&set)).collect();
+                if pool.is_empty() {
+                    return Err(format!("GLB {layer} has no tile in set \"{set}\""));
+                }
+                let now = pool.iter().position(|t| r.tiles.iter().any(|a| a.layer == layer && a.name == t.name));
+                let i = if name.eq_ignore_ascii_case("next") {
+                    now.map_or(0, |i| (i + 1) % pool.len())
+                } else {
+                    let roll = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos() as usize / 7).unwrap_or(0);
+                    // Another one than the one showing, when there's a choice
+                    match now {
+                        Some(n) if pool.len() > 1 => (n + 1 + roll % (pool.len() - 1)) % pool.len(),
+                        _ => roll % pool.len(),
+                    }
+                };
+                name = pool[i].name.clone();
+            }
             let mut tile = if !name.is_empty() {
                 let t = glb.tiles.iter().find(|t| t.name.eq_ignore_ascii_case(&name)).ok_or_else(|| format!("GLB {layer} has no tile \"{name}\""))?;
                 ActiveTile { layer, name: t.name.clone(), binds: t.binds.clone(), weight, grid: None, key: None }
@@ -688,12 +708,20 @@ pub fn answer(args: &str) -> String {
                 let r = remote.lock().unwrap();
                 // The groups its loaded GLBs are in
                 let mut groups: Vec<String> = (0..r.glbs.len()).map(|l| group_of(&r.groups, r.slot(l)).to_string()).filter(|g| !g.is_empty()).collect();
+                // Each GLB's tile sets: {set: [names, in order]}
+                let tile_sets = |g: &GlbInfo| {
+                    let mut m = serde_json::Map::new();
+                    for t in &g.tiles {
+                        m.entry(t.set.clone()).or_insert_with(|| json!([])).as_array_mut().unwrap().push(json!(t.name));
+                    }
+                    Value::Object(m)
+                };
                 groups.sort();
                 groups.dedup();
                 json!({
                     "source": name,
                     "glbs": r.glbs.iter().enumerate().map(|(i, g)| json!({ "index": i, "name": g.name, "keys": g.keys, "visible": !r.is_hidden(i), "group": group_of(&r.groups, r.slot(i)),
-                        "materials": g.materials, "tiles": g.tiles.iter().map(|t| t.name.clone()).collect::<Vec<_>>(),
+                        "materials": g.materials, "tiles": g.tiles.iter().map(|t| t.name.clone()).collect::<Vec<_>>(), "tile_sets": tile_sets(g),
                         "tiles_on": r.tiles.iter().filter(|t| t.layer == i).map(|t| if t.name.is_empty() { t.grid.map(|(c, rr, cell)| format!("{}x{} cell {cell}", c, rr)).unwrap_or_default() } else { t.name.clone() }).collect::<Vec<_>>() })).collect::<Vec<_>>(),
                     "groups": groups,
                     "animations": r.animation.clips,
@@ -722,7 +750,7 @@ fn previews(args: &Value, remote: &Shared) -> Result<Vec<Value>, String> {
         Ok(model
             .tiles
             .iter()
-            .filter_map(|t| crate::thumbs::thumbs(&model, &t.binds, size).map(|png| json!({ "name": t.name, "png": crate::thumbs::base64(&png) })))
+            .filter_map(|t| crate::thumbs::thumbs(&model, &t.binds, size).map(|png| json!({ "name": t.name, "set": t.set, "png": crate::thumbs::base64(&png) })))
             .collect())
     } else {
         let m = model.materials.iter().position(|x| x.name.eq_ignore_ascii_case(material)).ok_or_else(|| format!("GLB {layer} has no material \"{material}\""))?;
@@ -862,7 +890,7 @@ mod tests {
 
     #[test]
     fn a_tile_holds_its_key_and_its_timer_puts_back_the_one_before() {
-        let tile = |n: &str| crate::model::Tile { name: n.into(), binds: vec![(0, [0.5, 0.5, 0.0, 0.0])] };
+        let tile = |n: &str| crate::model::Tile { name: n.into(), set: "eyes".into(), order: 0, binds: vec![(0, [0.5, 0.5, 0.0, 0.0])] };
         let remote: Shared = Arc::new(Mutex::new(Remote {
             glbs: vec![GlbInfo { model: None, name: "Armature".into(), keys: vec!["Blush".into(), "Fcl_MTH_A".into()], materials: vec!["Skin".into()], tiles: vec![tile("Red"), tile("Blue")] }],
             ..Default::default()
@@ -893,6 +921,33 @@ mod tests {
         assert_eq!(r.tiles.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["Red"]);
         assert_eq!(r.shapes, vec![(0, "Blush".to_string(), None)]);
         assert!(r.timers.is_empty());
+    }
+
+    #[test]
+    fn next_and_random_go_through_a_set() {
+        let tile = |n: &str, set: &str, order: i64, m: usize| crate::model::Tile { name: n.into(), set: set.into(), order, binds: vec![(m, [0.5, 0.5, order as f32 * 0.5, 0.0])] };
+        let remote: Shared = Arc::new(Mutex::new(Remote {
+            glbs: vec![GlbInfo { materials: vec!["Eye".into(), "Mouth".into()], tiles: vec![tile("Open", "eyes", 0, 0), tile("Shut", "eyes", 1, 0), tile("Smile", "mouths", 0, 1)], ..Default::default() }],
+            ..Default::default()
+        }));
+        let on = |r: &Shared| r.lock().unwrap().tiles.iter().map(|t| t.name.clone()).collect::<Vec<_>>();
+        let go = |args: Value| apply_at(&args, std::ptr::null_mut(), &remote, Instant::now()).unwrap();
+        go(json!({ "action": "tile", "name": "next", "set": "eyes" }));
+        assert_eq!(on(&remote), ["Open"]);
+        go(json!({ "action": "tile", "name": "next", "set": "Eyes" }));
+        assert_eq!(on(&remote), ["Shut"]);
+        go(json!({ "action": "tile", "name": "next", "set": "eyes" }));
+        assert_eq!(on(&remote), ["Open"]);
+        // Random, with a choice: never the one showing
+        for _ in 0..5 {
+            go(json!({ "action": "tile", "name": "random", "set": "eyes" }));
+            assert_eq!(on(&remote), ["Shut"]);
+            go(json!({ "action": "tile", "name": "Open" }));
+        }
+        // Another set: its own material, both show
+        go(json!({ "action": "tile", "name": "next", "set": "mouths" }));
+        assert_eq!(on(&remote), ["Open", "Smile"]);
+        assert!(apply_at(&json!({ "action": "tile", "name": "next", "set": "hats" }), std::ptr::null_mut(), &remote, Instant::now()).is_err());
     }
 
     #[test]

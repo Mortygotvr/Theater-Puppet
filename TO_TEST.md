@@ -3,6 +3,18 @@
 What's built but not yet tried live, newest first. Tick it (or tell Claude
 what went wrong) and it comes off the list.
 
+## One tile standard (sets)
+- [ ] Theater Rig (reinstall the zip): Tile textures → **Convert VRM Tiles**
+      on HavocFFT: the box lists the set `expressions` with its 8 tiles.
+- [ ] Make Tiles with a **Set** name: the box lists that set; ✕ removes it.
+- [ ] Export, load in Puppet: Control Panel log lists the tiles by set.
+- [ ] Control Panel "Puppet: Tile Texture": a name; `next` with a set
+      (goes through it in the sheet's order); `random` (never the same twice).
+- [ ] Scene: the tile pictures are grouped by set, each with ▶ next and
+      🎲 random buttons.
+- [ ] An old grid redeem (material / columns / rows) still fires; the form
+      says so, and picking a tile switches it.
+
 ## Tile pictures in Scene
 - [ ] Scene Studio → a Puppet redeem → "🧩 Tile texture": under "Tile:", a
       picture of each tile (every material it changes, side by side: face +

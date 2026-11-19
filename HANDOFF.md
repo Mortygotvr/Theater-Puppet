@@ -206,6 +206,11 @@ MediaPipe notes:
   replaces the pending timer but keeps its undo, so it still goes back to how
   it was before the first. Glb / group undo restores the whole Show array
   (an internal `shown` action).
+- **Tiles, one standard**: `theater_tiles` = {name: {set, order, binds}}
+  (the old {name: binds} reads as set `expressions`). Theater Rig makes
+  them (Make Tiles; Convert VRM Tiles, also done by Export). `tile` takes a
+  name, or `next` / `random` in `set`; the grid form (material / columns /
+  rows / cell) is kept only for old redeems.
 - **Tile pictures**: `tile_previews` (`src/thumbs.rs`) cuts what each tile
   shows out of the texture (the material's mesh UV bounds, placed by the
   tile), every material side by side, as base64 PNGs. `GlbInfo.model` keeps

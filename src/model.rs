@@ -44,17 +44,20 @@ pub struct Material {
 /// No texture placement: the texture as it is
 pub const UV_IDENTITY: [f32; 4] = [1.0, 1.0, 0.0, 0.0];
 
-/// A tile texture: a VRM expression moving textures to another tile (Theater
-/// Rig keeps them as the armature's `theater_tiles`), each material's
-/// placement when it shows
+/// A tile texture: a named picture of a texture sheet (Theater Rig's Make
+/// Tiles, or a VRM expression it converted), each material's placement when
+/// it shows. Tiles of a set go together ("next", "random"), in their order
 #[derive(Clone, Debug, PartialEq)]
 pub struct Tile {
     pub name: String,
+    pub set: String,
+    pub order: i64,
     pub binds: Vec<(usize, [f32; 4])>,
 }
 
 /// The tiles in Theater Rig's `theater_tiles` (JSON, in a node's extras),
-/// their materials found by name
+/// their materials found by name: {name: {set, order, binds}}, or the old
+/// form {name: binds} (the set "expressions")
 pub fn read_tiles(extras: &serde_json::Value, materials: &[Material]) -> Vec<Tile> {
     let data = match extras.get("theater_tiles") {
         Some(serde_json::Value::String(s)) => serde_json::from_str(s).unwrap_or_default(),
@@ -68,8 +71,17 @@ pub fn read_tiles(extras: &serde_json::Value, materials: &[Material]) -> Vec<Til
     };
     let mut out: Vec<Tile> = map
         .iter()
-        .map(|(name, binds)| Tile {
+        .map(|(name, v)| {
+            let (set, order, binds) = match v.get("binds") {
+                Some(b) => (v.get("set").and_then(|s| s.as_str()).unwrap_or("").to_string(), v.get("order").and_then(|o| o.as_i64()).unwrap_or(0), b),
+                None => ("expressions".to_string(), 0, v),
+            };
+            (name, set, order, binds)
+        })
+        .map(|(name, set, order, binds)| Tile {
             name: name.clone(),
+            set,
+            order,
             binds: binds
                 .as_array()
                 .into_iter()
@@ -84,7 +96,7 @@ pub fn read_tiles(extras: &serde_json::Value, materials: &[Material]) -> Vec<Til
         })
         .filter(|t| !t.binds.is_empty())
         .collect();
-    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out.sort_by(|a, b| (&a.set, a.order, &a.name).cmp(&(&b.set, b.order, &b.name)));
     out
 }
 
