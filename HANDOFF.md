@@ -165,6 +165,18 @@ MediaPipe notes:
   `controller/make_gamepad.py` (Blender), which documents the node names a
   user's own controller GLB needs (source setting "Controller it holds").
 
+## Microphone lipsync
+
+- The "🎤 Puppet Lipsync" **audio filter** (`src/lipsync.rs`), put on the
+  mic source: it reads the samples going through (`filter_audio`; the
+  struct extends `SourceInfo` with `filter_video` / `filter_audio`, which
+  follow `video_render` in libobs's `obs_source_info`), lets them through,
+  and publishes a mouth: open (loudness over the noise gate, intensity),
+  and vowel weights (A I U E O from the two formant peaks, Goertzel).
+- The rig (`Rig::mic_mouth`) puts it on each vowel's shape key: the
+  filter's own, else VRoid's `Fcl_MTH_<vowel>`, else ARKit mouth shapes.
+  Modes with a tracked face: add (max), replace the mouth, only when untracked.
+
 ## Driven from outside: Control Panel and Scene
 
 - **One procedure**, `theater_puppet_command(in string args, out string

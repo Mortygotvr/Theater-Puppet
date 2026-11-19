@@ -3,6 +3,16 @@
 What's built but not yet tried live, newest first. Tick it (or tell Claude
 what went wrong) and it comes off the list.
 
+## Microphone lipsync
+- [ ] Your mic source → Filters → add "🎤 Puppet Lipsync" (after noise
+      suppression). Talking opens the avatar's mouth; silence keeps it shut
+      (raise the noise gate if keyboard / fan noise moves it).
+- [ ] Vowels: A, I, U, E, O look different (the vowel detection is tuned on
+      synthetic voices, not yours yet: say which vowels it mixes up).
+- [ ] Intensity, smoothing.
+- [ ] "Shape key for A…O": your own keys; empty uses Fcl_MTH_A… (or ARKit).
+- [ ] With iFacialMocap on: Add / Replace the mouth / Only when no face.
+
 ## Controller (the avatar holds one)
 - [ ] Tracking window: turn on "Controller", "read through" Auto, then set
       **Arms** to "Controller (held)". The avatar holds the built-in gamepad

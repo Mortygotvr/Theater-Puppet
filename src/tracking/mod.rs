@@ -14,6 +14,11 @@
 //! from the Leap… Auto takes whichever capable input sent last.
 
 pub mod config;
+
+/// A libobs function found by name (obs.dll is loaded: Puppet runs in it)
+pub fn obs_function<T>(name: &std::ffi::CStr) -> Option<T> {
+    menu::function("obs.dll", name)
+}
 mod dll;
 pub mod dock;
 mod fingers;

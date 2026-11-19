@@ -33,6 +33,7 @@ unsafe impl Sync for SourceInfo {}
 pub const OBS_SOURCE_TYPE_INPUT: u32 = 0;
 pub const OBS_SOURCE_TYPE_FILTER: u32 = 1;
 pub const OBS_SOURCE_VIDEO: u32 = 1 << 0;
+pub const OBS_SOURCE_AUDIO: u32 = 1 << 1;
 pub const OBS_SOURCE_CUSTOM_DRAW: u32 = 1 << 3;
 pub const OBS_PATH_FILE: u32 = 0;
 pub const OBS_COMBO_TYPE_LIST: u32 = 2;

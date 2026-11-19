@@ -4,6 +4,7 @@
 
 pub mod animation;
 pub mod controller;
+pub mod lipsync;
 pub mod filters;
 pub mod ik;
 pub mod model;
@@ -128,6 +129,7 @@ pub extern "C" fn obs_module_load() -> bool {
     tracking::dock::register();
     place::register();
     remote::register();
+    lipsync::register();
     // Tracking: its settings window's source, its inputs, its menu item
     tracking::menu::register();
     tracking::start();

@@ -35,7 +35,7 @@ fn wide(s: &str) -> Vec<u16> {
 }
 
 /// `name` from the loaded DLL `lib`, as the function pointer type `T`
-fn function<T>(lib: &str, name: &CStr) -> Option<T> {
+pub(super) fn function<T>(lib: &str, name: &CStr) -> Option<T> {
     let module = unsafe { GetModuleHandleW(wide(lib).as_ptr()) };
     if module.is_null() {
         return None;

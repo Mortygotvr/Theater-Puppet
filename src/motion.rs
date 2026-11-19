@@ -554,11 +554,65 @@ impl Rig {
             }
             None => {}
         }
+        // The microphone's mouth (the Lipsync filter), as its mode says
+        if let Some(mouth) = crate::lipsync::mouth() {
+            use crate::lipsync::Mode;
+            let tracked = targets.shapes.is_some();
+            if !(mouth.mode == Mode::Fallback && tracked) {
+                if mouth.mode == Mode::Replace && tracked {
+                    // The face app's mouth goes; its eyes, brows… stay
+                    for (i, name) in ARKIT.iter().enumerate() {
+                        if name.starts_with("mouth") || name.starts_with("jaw") {
+                            if let Some(m) = self.arkit[i] {
+                                self.morph[m] = 0.0;
+                            }
+                        }
+                    }
+                }
+                self.mic_mouth(&mouth);
+            }
+        }
         // The avatar's own animations' shape keys
         let model = self.model.clone();
         self.player.apply_shapes(&model, &mut self.morph);
         // Then the ones driven from outside, over everything
         apply_overrides(&model, &self.overrides, 0, &mut self.morph);
+    }
+}
+
+impl Rig {
+    /// The microphone's mouth on the shape keys: each vowel's (the filter's
+    /// own key; else VRoid's Fcl_MTH_<vowel>; else ARKit's mouth shapes),
+    /// by how open the mouth is and how much it's that vowel; the more open wins
+    fn mic_mouth(&mut self, mouth: &crate::lipsync::Mouth) {
+        // ARKit's shapes for each vowel when the avatar has no vowel keys: A, I, U, E, O
+        const ARKIT_VOWELS: [&[(&str, f32)]; 5] = [
+            &[("jawOpen", 0.9)],
+            &[("jawOpen", 0.25), ("mouthStretchLeft", 0.6), ("mouthStretchRight", 0.6), ("mouthSmileLeft", 0.3), ("mouthSmileRight", 0.3)],
+            &[("jawOpen", 0.15), ("mouthPucker", 0.9), ("mouthFunnel", 0.3)],
+            &[("jawOpen", 0.4), ("mouthStretchLeft", 0.4), ("mouthStretchRight", 0.4), ("mouthSmileLeft", 0.2), ("mouthSmileRight", 0.2)],
+            &[("jawOpen", 0.5), ("mouthFunnel", 0.8)],
+        ];
+        const NAMES: [&str; 5] = ["A", "I", "U", "E", "O"];
+        let model = self.model.clone();
+        for v in 0..5 {
+            let w = (mouth.vowels[v] * mouth.open).clamp(0.0, 1.0);
+            if w <= 0.0 {
+                continue;
+            }
+            let own = Some(mouth.keys[v].as_str()).filter(|k| !k.is_empty()).and_then(|k| model.morph(k));
+            let key = own.or_else(|| model.morph(&format!("Fcl_MTH_{}", NAMES[v])));
+            match key {
+                Some(m) => self.morph[m] = self.morph[m].max(w),
+                None => {
+                    for (name, k) in ARKIT_VOWELS[v] {
+                        if let Some(m) = tracking::arkit_index(name).and_then(|i| self.arkit[i]) {
+                            self.morph[m] = self.morph[m].max(w * k);
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -875,6 +929,32 @@ mod tests {
             rig.step_with(1.0 / 60.0, still(), &Snapshot::default(), &config);
         }
         assert_eq!(rig.prop.as_ref().unwrap().weight, 0.0);
+    }
+
+    #[test]
+    fn the_microphone_opens_the_mouth() {
+        use crate::lipsync::{Mode, Mouth, hear};
+        let Some(mut rig) = rig() else { return };
+        let config = tracking::config::Config::default();
+        let a = rig.model.morph("Fcl_MTH_A").expect("a VRoid avatar");
+        let o = rig.model.morph("Fcl_MTH_O").unwrap();
+        // "A", fully open: its key opens
+        hear(Mouth { open: 1.0, vowels: [1.0, 0.0, 0.0, 0.0, 0.0], ..Default::default() });
+        rig.step_with(1.0 / 60.0, still(), &Snapshot::default(), &config);
+        assert!((rig.morph[a] - 1.0).abs() < 1e-6 && rig.morph[o] == 0.0);
+        // The filter's own key for A: that one opens instead
+        let mut keys: [String; 5] = Default::default();
+        keys[0] = "Fcl_MTH_O".into();
+        hear(Mouth { open: 0.6, vowels: [1.0, 0.0, 0.0, 0.0, 0.0], keys, ..Default::default() });
+        rig.step_with(1.0 / 60.0, still(), &Snapshot::default(), &config);
+        assert!((rig.morph[o] - 0.6).abs() < 1e-6 && rig.morph[a] == 0.0);
+        // Fallback with a tracked face: the microphone stays out of it
+        hear(Mouth { open: 1.0, vowels: [1.0, 0.0, 0.0, 0.0, 0.0], mode: Mode::Fallback, ..Default::default() });
+        let face = Snapshot { shapes: Some([0.0; 52]), ..Default::default() };
+        for _ in 0..30 {
+            rig.step_with(1.0 / 60.0, still(), &face, &config);
+        }
+        assert_eq!(rig.morph[a], 0.0);
     }
 
     #[test]
