@@ -67,6 +67,8 @@ pub struct Look {
     pub hands: HandMode,
     /// The mouse on the left, the right hand on the keys (the arrows, gaming)
     pub left_handed: bool,
+    /// The hands raised (+) or lowered (-) over the keys and mouse, metres
+    pub hand_up: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -295,12 +297,13 @@ pub fn wrists(layout: &Layout, state: &State, look: &Look, input: &Desk) -> [Wri
         let on_keys = home(layout, look, hand).map(|h| {
             let hp = layout.key_at(h, look);
             Wrist {
-                at: hp + Vec3::new(s * 0.5 * U, 0.04, -0.10) + state.shift[hand],
+                // (Seen live: 4 cm over the keys was too low)
+                at: hp + Vec3::new(s * 0.5 * U, 0.07 + look.hand_up, -0.10) + state.shift[hand],
                 fingers: Vec3::new(-s * 0.12, -0.35, 1.0),
                 palm: Vec3::new(0.0, -1.0, 0.15),
             }
         });
-        let on_mouse = Wrist { at: layout.mouse_now(look, input) + Vec3::new(0.0, 0.035, -0.10), fingers: Vec3::new(0.0, -0.25, 1.0), palm: Vec3::new(0.0, -1.0, 0.1) };
+        let on_mouse = Wrist { at: layout.mouse_now(look, input) + Vec3::new(0.0, 0.065 + look.hand_up, -0.10), fingers: Vec3::new(0.0, -0.25, 1.0), palm: Vec3::new(0.0, -1.0, 0.1) };
         let keys = on_keys.unwrap_or(on_mouse);
         let t = if hand == mh { state.on_mouse } else { 0.0 };
         if t <= 0.0 {
