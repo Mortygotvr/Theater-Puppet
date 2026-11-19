@@ -178,9 +178,11 @@ pub fn fingers(pad: &Pad, thumb_lift: f32) -> [Hand; 2] {
         h.bend[3] = [1.1, 1.25, 0.85];
         h.bend[4] = [1.2, 1.3, 0.9];
     };
-    // The index on its trigger (pulled with it), or up on its bumper
+    // The index on its trigger (pulled with it), or pressing its bumper:
+    // a little lifted at the knuckle (the bumper is above), the end joints
+    // curled down onto it
     let index = |h: &mut Hand, trigger: f32, bumper: bool| {
-        h.bend[1] = if bumper { [0.15, 0.2, 0.1] } else { [0.55 + trigger * 0.35, 0.6 + trigger * 0.45, 0.45 + trigger * 0.3] };
+        h.bend[1] = if bumper { [0.35, 0.85, 0.65] } else { [0.55 + trigger * 0.35, 0.6 + trigger * 0.45, 0.45 + trigger * 0.3] };
     };
 
     let mut left = Hand::default();
@@ -280,6 +282,7 @@ mod tests {
         let lt = fingers(&Pad { left_trigger: 1.0, ..Default::default() }, 0.0);
         assert!(lt[0].bend[1][1] > rest[0].bend[1][1]);
         let lb = fingers(&Pad { buttons: button::LB, ..Default::default() }, 0.0);
-        assert!(lb[0].bend[1][1] < rest[0].bend[1][1]);
+        // A bumper: the knuckle lifts, the end joints curl onto it (not pointing)
+        assert!(lb[0].bend[1][0] < rest[0].bend[1][0] && lb[0].bend[1][1] > rest[0].bend[1][1]);
     }
 }
