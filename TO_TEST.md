@@ -3,6 +3,16 @@
 What's built but not yet tried live, newest first. Tick it (or tell Claude
 what went wrong) and it comes off the list.
 
+## Also draw: what each GLB copies
+- [ ] Puppet properties → each Also draw box: Copy movement / Copy rotation
+      (from the armature or a bone), Copy shape keys. All on: as before.
+- [ ] A part that mustn't move: all three off → it stays still.
+- [ ] Copy rotation from a bone (e.g. Head), movement off: the GLB turns
+      with that bone; from the armature: bone by bone as before.
+- [ ] A GLB with expression keys the main avatar doesn't have (ARKit names
+      or Fcl_…): they follow iFacialMocap / blinks / the microphone.
+- [ ] Remove a middle GLB: the ones after it keep their copy settings.
+
 ## Theater Rig: Make Cloth Bones
 - [ ] Reinstall the Rig zip. On an avatar with a skirt (not pants: a ring
       around both legs tears): Edit Mode, select the skirt's faces (or pick

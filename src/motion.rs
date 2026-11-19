@@ -82,6 +82,27 @@ const VROID: [(&str, &str); 21] = [
     ("browOuterUpRight", "Fcl_BRW_Surprised"),
 ];
 
+/// Each ARKit shape's key in `model`: its own, or the VRoid key nearest to it
+fn arkit_keys(model: &Model) -> [Option<usize>; 52] {
+    std::array::from_fn(|i| model.morph(ARKIT[i]).or_else(|| VROID.iter().find(|(a, _)| *a == ARKIT[i]).and_then(|(_, v)| model.morph(v))))
+}
+
+/// The face the avatar shows this frame, whatever keys it has: ARKit's 52
+/// (tracked, blinking, the microphone's ARKit vowels) and the keys the
+/// microphone names (its VRM vowels). An extra GLB's keys the avatar doesn't
+/// have follow this.
+#[derive(Clone, Debug)]
+pub struct Face {
+    pub arkit: [f32; 52],
+    pub named: Vec<(String, f32)>,
+}
+
+impl Default for Face {
+    fn default() -> Self {
+        Face { arkit: [0.0; 52], named: Vec::new() }
+    }
+}
+
 /// Seconds a part takes to fade in when its input starts, out when it stops
 const FADE: f32 = 0.25;
 
@@ -167,11 +188,15 @@ pub struct Rig {
     morph: Vec<f32>,
     /// Where each ARKit shape is among the model's shape keys
     arkit: [Option<usize>; 52],
+    /// The face this frame (for extra GLBs' keys the avatar doesn't have)
+    pub face: Face,
     followed: Followed,
     /// The avatar's own animations (animation.rs)
     pub player: crate::animation::Player,
     /// The GLBs drawn with it, copying its pose
     pub followers: Vec<Follower>,
+    /// What each of them copies (the source's settings, the followers' order)
+    pub follow: Vec<FollowSettings>,
     /// Shape keys driven from outside (remote.rs), on any of its GLBs
     pub overrides: Vec<crate::remote::Override>,
     /// GLBs (layers) to hide, and the fade they take: their shape-key
@@ -250,10 +275,7 @@ impl Rig {
         let pose = Pose::rest(&model);
         let springs = Springs::new(&model, &pose);
         let skeleton = Skeleton::new(&model, &pose);
-        // Each ARKit shape's key: its own, or the VRoid key nearest to it
-        let arkit: [Option<usize>; 52] = std::array::from_fn(|i| {
-            model.morph(ARKIT[i]).or_else(|| VROID.iter().find(|(a, _)| *a == ARKIT[i]).and_then(|(_, v)| model.morph(v)))
-        });
+        let arkit = arkit_keys(&model);
         crate::log(&format!(
             "[Puppet] 🪢 Springs: {} chain(s), {} bone(s), {} collider(s); {} shape key(s), {} of ARKit's 52",
             springs.chains,
@@ -279,6 +301,8 @@ impl Rig {
             followed: Followed::default(),
             player: Default::default(),
             followers: Vec::new(),
+            follow: Vec::new(),
+            face: Face::default(),
             overrides: Vec::new(),
             hide: Vec::new(),
             prop: None,
@@ -444,7 +468,8 @@ impl Rig {
         pose::skin(&model, pose, &self.morph, &mut self.points, &mut self.normals);
         self.dirty = true;
         for (i, f) in self.followers.iter_mut().enumerate() {
-            f.follow(&model, &self.rest, &self.pose, &self.morph, dt, &motion, &self.overrides, i + 1);
+            let how = self.follow.get(i).cloned().unwrap_or_default();
+            f.follow(&model, &self.rest, &self.pose, &self.morph, &self.face, dt, &motion, &self.overrides, i + 1, &how);
         }
         if let Some(prop) = self.prop.as_mut().filter(|p| p.weight > 0.0) {
             prop.pose_parts(&self.pad.unwrap_or_default());
@@ -543,8 +568,10 @@ impl Rig {
     /// The face's shape keys: tracked, or a blink now and then
     fn shapes(&mut self, targets: &Snapshot, idle: f32) {
         self.morph.iter_mut().for_each(|w| *w = 0.0);
+        self.face = Face::default();
         match targets.shapes {
             Some(shapes) => {
+                self.face.arkit = shapes;
                 for (i, slot) in self.arkit.iter().enumerate() {
                     if let Some(m) = slot {
                         self.morph[*m] = self.morph[*m].max(shapes[i]);
@@ -561,6 +588,9 @@ impl Rig {
                 } else if since >= 0.0 {
                     let closed = if since < 0.06 { since / 0.06 } else { 1.0 - (since - 0.06) / 0.12 };
                     for name in ["eyeBlinkLeft", "eyeBlinkRight"] {
+                        if let Some(i) = tracking::arkit_index(name) {
+                            self.face.arkit[i] = closed.clamp(0.0, 1.0);
+                        }
                         if let Some(m) = tracking::arkit_index(name).and_then(|i| self.arkit[i]) {
                             self.morph[m] = closed.clamp(0.0, 1.0);
                         }
@@ -578,6 +608,7 @@ impl Rig {
                     // The face app's mouth goes; its eyes, brows… stay
                     for (i, name) in ARKIT.iter().enumerate() {
                         if name.starts_with("mouth") || name.starts_with("jaw") {
+                            self.face.arkit[i] = 0.0;
                             if let Some(m) = self.arkit[i] {
                                 self.morph[m] = 0.0;
                             }
@@ -622,9 +653,13 @@ impl Rig {
                     if let Some(m) = model.morph(&name) {
                         self.morph[m] = self.morph[m].max(w);
                     }
+                    self.face.named.push((name, w));
                 }
                 crate::lipsync::Shapes::Arkit => {
                     for (name, k) in ARKIT_VOWELS[v] {
+                        if let Some(i) = tracking::arkit_index(name) {
+                            self.face.arkit[i] = self.face.arkit[i].max(w * k);
+                        }
                         if let Some(m) = tracking::arkit_index(name).and_then(|i| self.arkit[i]) {
                             self.morph[m] = self.morph[m].max(w * k);
                         }
@@ -648,6 +683,7 @@ fn apply_overrides(model: &Model, overrides: &[crate::remote::Override], layer: 
 /// filters), copying its pose: each bone turns as the avatar's bone of the
 /// same name turns, each shape key follows the avatar's of the same name.
 /// Its own bone lengths are kept; its spring bones swing by themselves.
+/// What it copies is the source's choice (FollowSettings).
 pub struct Follower {
     pub model: Arc<Model>,
     pose: Pose,
@@ -656,6 +692,8 @@ pub struct Follower {
     from: Vec<Option<usize>>,
     /// Each of its shape keys' in the avatar
     morph_from: Vec<Option<usize>>,
+    /// Its own keys for ARKit's shapes (for those the avatar doesn't have)
+    arkit: [Option<usize>; 52],
     morph: Vec<f32>,
     springs: Springs,
     settled: bool,
@@ -664,13 +702,35 @@ pub struct Follower {
     pub dirty: bool,
 }
 
+/// What an Also draw GLB copies from the avatar (the source's settings for it):
+/// its movement and its rotation, each from the whole armature (each bone
+/// from the avatar's of the same name) or from one bone (the whole GLB moves
+/// or turns with it), and its shape keys. All off: it doesn't move at all.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FollowSettings {
+    pub move_on: bool,
+    /// "" the armature, else a bone's name
+    pub move_from: String,
+    pub rotate_on: bool,
+    pub rotate_from: String,
+    pub shapes: bool,
+}
+
+impl Default for FollowSettings {
+    fn default() -> Self {
+        FollowSettings { move_on: true, move_from: String::new(), rotate_on: true, rotate_from: String::new(), shapes: true }
+    }
+}
+
 impl Follower {
     pub fn new(model: Arc<Model>, main: &Model) -> Follower {
         let pose = Pose::rest(&model);
         let from = model.nodes.iter().map(|n| main.node(n.name.strip_prefix("mixamorig:").unwrap_or(&n.name))).collect();
         let morph_from = model.morph_names.iter().map(|n| main.morph(n)).collect();
+        let arkit = arkit_keys(&model);
         let springs = Springs::new(&model, &pose);
         Follower {
+            arkit,
             points: model.primitives.iter().map(|p| vec![[0.0; 4]; p.positions.len()]).collect(),
             normals: model.primitives.iter().map(|p| vec![[0.0; 4]; p.positions.len()]).collect(),
             morph: vec![0.0; model.morph_names.len()],
@@ -688,19 +748,43 @@ impl Follower {
     /// Takes the avatar's pose (`main_pose`, from `main_rest`) and shape
     /// keys, then the ones driven on it (layer `layer`)
     #[allow(clippy::too_many_arguments)]
-    pub fn follow(&mut self, main: &Model, main_rest: &Pose, main_pose: &Pose, main_morph: &[f32], dt: f32, motion: &Motion, overrides: &[crate::remote::Override], layer: usize) {
+    #[allow(clippy::too_many_arguments)]
+    pub fn follow(&mut self, main: &Model, main_rest: &Pose, main_pose: &Pose, main_morph: &[f32], face: &Face, dt: f32, motion: &Motion, overrides: &[crate::remote::Override], layer: usize, how: &FollowSettings) {
         let model = self.model.clone();
         let pose = &mut self.pose;
         pose.reset(&model);
+        // From one bone (a name the avatar has), or from the armature
+        let bone = |name: &str| if name.trim().is_empty() { None } else { main.node(name.trim()) };
+        let (move_bone, rotate_bone) = (bone(&how.move_from), bone(&how.rotate_from));
+        let (copy_move, copy_rotate) = (how.move_on && move_bone.is_none(), how.rotate_on && rotate_bone.is_none());
         for (i, from) in self.from.iter().enumerate() {
             let Some(j) = *from else { continue };
             if j >= main.nodes.len() {
                 continue;
             }
             // How the avatar's bone moved from its rest, on this one's rest
-            pose.rotation[i] = (main_pose.rotation[j] * main_rest.rotation[j].inverse() * self.rest.rotation[i]).normalize();
-            pose.translation[i] = self.rest.translation[i] + (main_pose.translation[j] - main_rest.translation[j]);
-            pose.scale[i] = self.rest.scale[i] * main_pose.scale[j] / main_rest.scale[j].max(Vec3::splat(1e-6));
+            if copy_rotate {
+                pose.rotation[i] = (main_pose.rotation[j] * main_rest.rotation[j].inverse() * self.rest.rotation[i]).normalize();
+            }
+            if copy_move {
+                pose.translation[i] = self.rest.translation[i] + (main_pose.translation[j] - main_rest.translation[j]);
+            }
+            if copy_move || copy_rotate {
+                pose.scale[i] = self.rest.scale[i] * main_pose.scale[j] / main_rest.scale[j].max(Vec3::splat(1e-6));
+            }
+        }
+        // The whole GLB with one bone: turned about it as it turned, moved as it moved
+        let turned = rotate_bone.filter(|_| how.rotate_on);
+        let moved = move_bone.filter(|_| how.move_on);
+        if turned.is_some() || moved.is_some() {
+            let (turn, pivot) = turned.map_or((Quat::IDENTITY, Vec3::ZERO), |b| (main_pose.world_rotation(b) * main_rest.world_rotation(b).inverse(), main_rest.position(b)));
+            let shift = moved.map_or(Vec3::ZERO, |b| main_pose.position(b) - main_rest.position(b));
+            for n in 0..model.nodes.len() {
+                if model.nodes[n].parent.is_none() {
+                    pose.rotation[n] = (turn * pose.rotation[n]).normalize();
+                    pose.translation[n] = pivot + turn * (pose.translation[n] - pivot) + shift;
+                }
+            }
         }
         pose.update_world(&model);
         if motion.springs {
@@ -712,8 +796,27 @@ impl Follower {
         } else {
             self.settled = false;
         }
-        for (k, from) in self.morph_from.iter().enumerate() {
-            self.morph[k] = from.and_then(|m| main_morph.get(m).copied()).unwrap_or(0.0);
+        // Its keys: the avatar's of the same name, or (one the avatar doesn't
+        // have) the face itself: tracked ARKit shapes, blinks, the microphone
+        self.morph.iter_mut().for_each(|w| *w = 0.0);
+        if how.shapes {
+            for (k, from) in self.morph_from.iter().enumerate() {
+                if let Some(m) = from {
+                    self.morph[k] = main_morph.get(*m).copied().unwrap_or(0.0);
+                }
+            }
+            for (i, slot) in self.arkit.iter().enumerate() {
+                if let Some(k) = *slot {
+                    if self.morph_from[k].is_none() {
+                        self.morph[k] = self.morph[k].max(face.arkit[i]);
+                    }
+                }
+            }
+            for (name, w) in &face.named {
+                if let Some(k) = model.morph(name).filter(|k| self.morph_from[*k].is_none()) {
+                    self.morph[k] = self.morph[k].max(*w);
+                }
+            }
         }
         apply_overrides(&model, overrides, layer, &mut self.morph);
         pose::skin(&model, pose, &self.morph, &mut self.points, &mut self.normals);
@@ -948,6 +1051,68 @@ mod tests {
             rig.step_with(1.0 / 60.0, still(), &Snapshot::default(), &config);
         }
         assert_eq!(rig.prop.as_ref().unwrap().weight, 0.0);
+    }
+
+    #[test]
+    fn an_extra_glb_copies_what_its_settings_say() {
+        let Ok(path) = std::env::var("THEATER_PUPPET_GLB") else { return };
+        let main = Arc::new(crate::model::load(std::path::Path::new(&path)).unwrap());
+        let rest = Pose::rest(&main);
+        // The avatar: its head turned, its hips moved
+        let mut moved = rest.clone();
+        let (head, hips) = (main.node("Head").unwrap(), main.node("Hips").unwrap());
+        moved.rotation[head] = Quat::from_rotation_y(0.6) * moved.rotation[head];
+        moved.translation[hips] += Vec3::new(0.1, 0.0, 0.0);
+        moved.update_world(&main);
+        let mut morph = vec![0.0; main.morph_names.len()];
+        morph[0] = 1.0;
+        let motion = Motion { springs: false, ..Motion::default() };
+        let run = |how: FollowSettings| {
+            let mut f = Follower::new(main.clone(), &main);
+            f.follow(&main, &rest, &moved, &morph, &Face::default(), 1.0 / 60.0, &motion, &[], 1, &how);
+            f
+        };
+        let close = |a: Vec3, b: Vec3| (a - b).length() < 1e-4;
+        // All on (as always): its head and hips where the avatar's are
+        let all = run(FollowSettings::default());
+        assert!(close(all.pose.position(head), moved.position(head)) && close(all.pose.position(hips), moved.position(hips)));
+        assert!(all.pose.world_rotation(head).angle_between(moved.world_rotation(head)) < 1e-3);
+        assert_eq!(all.morph[0], 1.0);
+        // All off: still, at rest
+        let still = run(FollowSettings { move_on: false, rotate_on: false, shapes: false, ..Default::default() });
+        assert!(close(still.pose.position(hips), rest.position(hips)) && close(still.pose.position(head), rest.position(head)));
+        assert_eq!(still.morph[0], 0.0);
+        // Rotation from the head only: the whole GLB turns about the head as it
+        // turned (its own head bone stays at rest in it), nothing moves with the hips
+        let turned = run(FollowSettings { move_on: false, rotate_from: "Head".into(), ..Default::default() });
+        let turn = moved.world_rotation(head) * rest.world_rotation(head).inverse();
+        assert!(turned.pose.world_rotation(head).angle_between(turn * rest.world_rotation(head)) < 1e-3);
+        assert!(close(turned.pose.position(head), rest.position(head)), "turned about the head: it stays where it was");
+        let feet = main.node("LeftFoot").unwrap();
+        assert!(!close(turned.pose.position(feet), rest.position(feet)), "the rest of it swings round with the head");
+        // Movement from the hips only: shifted with them, not turned
+        let shifted = run(FollowSettings { rotate_on: false, move_from: "Hips".into(), ..Default::default() });
+        assert!(close(shifted.pose.position(head), rest.position(head) + Vec3::new(0.1, 0.0, 0.0)));
+        assert!(shifted.pose.world_rotation(head).angle_between(rest.world_rotation(head)) < 1e-3);
+
+        // Keys the avatar doesn't have: the face drives them anyway (here the
+        // "avatar" has no shape keys at all: the built-in gamepad)
+        let bare = Arc::new(crate::model::load(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("controller").join("gamepad.glb")).unwrap());
+        let bare_rest = Pose::rest(&bare);
+        let mut face = Face::default();
+        let jaw = tracking::arkit_index("jawOpen").unwrap();
+        face.arkit[jaw] = 1.0;
+        face.named.push(("Fcl_MTH_I".into(), 0.7));
+        let mut f = Follower::new(main.clone(), &bare);
+        f.follow(&bare, &bare_rest, &bare_rest, &[], &face, 1.0 / 60.0, &motion, &[], 1, &FollowSettings::default());
+        let jaw_key = f.arkit[jaw].expect("the test avatar has a key for jawOpen");
+        assert_eq!(f.morph[jaw_key], 1.0, "tracked jawOpen on {}", main.morph_names[jaw_key]);
+        if let Some(i) = main.morph("Fcl_MTH_I") {
+            assert!((f.morph[i] - 0.7).abs() < 1e-6, "the microphone's I");
+        }
+        // Copy shape keys off: none of it
+        f.follow(&bare, &bare_rest, &bare_rest, &[], &face, 1.0 / 60.0, &motion, &[], 1, &FollowSettings { shapes: false, ..Default::default() });
+        assert_eq!(f.morph[jaw_key], 0.0);
     }
 
     #[test]

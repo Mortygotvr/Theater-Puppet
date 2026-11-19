@@ -46,6 +46,26 @@ fn group_key(n: usize) -> CString {
     cstring(&format!("extra{n}.group"))
 }
 
+/// Also draw `n`'s follow settings: (copy movement, from, copy rotation, from, copy shape keys)
+fn follow_keys(n: usize) -> [CString; 5] {
+    ["copy_move", "move_from", "copy_rotate", "rotate_from", "copy_shapes"].map(|k| cstring(&format!("extra{n}.{k}")))
+}
+
+/// Also draw `n`'s follow settings, read
+unsafe fn follow_of(settings: Ptr, n: usize) -> crate::motion::FollowSettings {
+    let api = obs::api();
+    let [mv, mf, rt, rf, sh] = follow_keys(n);
+    unsafe {
+        crate::motion::FollowSettings {
+            move_on: (api.obs_data_get_bool)(settings, mv.as_ptr()),
+            move_from: get_string(settings, &mf),
+            rotate_on: (api.obs_data_get_bool)(settings, rt.as_ptr()),
+            rotate_from: get_string(settings, &rf),
+            shapes: (api.obs_data_get_bool)(settings, sh.as_ptr()),
+        }
+    }
+}
+
 /// How many Also draw GLBs a source has: its count, or (a source from
 /// before the Add button) its last of extra1–3 with a file
 fn extra_count(settings: Ptr) -> usize {
@@ -283,6 +303,8 @@ struct Puppet {
     extra_loaded: Arc<Mutex<Option<(u64, Vec<(usize, Arc<Model>)>)>>>,
     /// Each loaded extra with its slot (1, 2…)
     extras: Mutex<Vec<(usize, Arc<Model>)>>,
+    /// Each Also draw slot's follow settings
+    extra_follow: Mutex<Vec<(usize, crate::motion::FollowSettings)>>,
     /// The controller's file, its latest load (bumped like `generation`),
     /// and the model loaded
     prop_file: Mutex<String>,
@@ -350,6 +372,13 @@ unsafe extern "C" fn get_defaults(settings: Ptr) {
     unsafe {
         (api.obs_data_set_default_string)(settings, slot_setting(0).as_ptr(), first.as_ptr());
         (api.obs_data_set_default_bool)(settings, S_CANVAS.as_ptr(), true);
+        // Also draw GLBs copy everything by default (as they always did)
+        for n in 1..=MAX_EXTRAS {
+            let [mv, _, rt, _, sh] = follow_keys(n);
+            for k in [mv, rt, sh] {
+                (api.obs_data_set_default_bool)(settings, k.as_ptr(), true);
+            }
+        }
         (api.obs_data_set_default_int)(settings, S_WIDTH.as_ptr(), 1080);
         (api.obs_data_set_default_int)(settings, S_HEIGHT.as_ptr(), 1080);
         (api.obs_data_set_default_double)(settings, S_ZOOM.as_ptr(), 1.0);
@@ -532,8 +561,15 @@ unsafe extern "C" fn remove_extra(props: Ptr, _button: Ptr, data: Ptr) -> bool {
                 (api.obs_data_set_string)(settings, extra_key(m).as_ptr(), cstring(&file).as_ptr());
                 (api.obs_data_set_string)(settings, group_key(m).as_ptr(), cstring(&group).as_ptr());
                 (api.obs_data_set_bool)(settings, shown_key(m).as_ptr(), (api.obs_data_get_bool)(settings, shown_key(m + 1).as_ptr()));
+                let (to, from) = (follow_keys(m), follow_keys(m + 1));
+                for k in [0, 2, 4] {
+                    (api.obs_data_set_bool)(settings, to[k].as_ptr(), (api.obs_data_get_bool)(settings, from[k].as_ptr()));
+                }
+                for k in [1, 3] {
+                    (api.obs_data_set_string)(settings, to[k].as_ptr(), cstring(&get_string(settings, &from[k])).as_ptr());
+                }
             }
-            for key in [extra_key(count), group_key(count), shown_key(count)] {
+            for key in [extra_key(count), group_key(count), shown_key(count)].into_iter().chain(follow_keys(count)) {
                 (api.obs_data_erase)(settings, key.as_ptr());
             }
             let last = (api.obs_properties_get)(props, extra_box(count).as_ptr());
@@ -573,12 +609,35 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
             if !settings.is_null() {
                 (api.obs_data_release)(settings);
             }
+            // The avatar's bones, for "from" (its skeleton's joints)
+            let bones: Vec<String> = puppet.rig.lock().unwrap().as_ref().map(|r| {
+                let mut names: Vec<String> = Vec::new();
+                for j in r.model.skins.iter().flat_map(|s| s.joints.iter()) {
+                    let name = r.model.nodes[*j].name.clone();
+                    if !names.contains(&name) {
+                        names.push(name);
+                    }
+                }
+                names
+            }).unwrap_or_default();
             // Every box, hidden past the last GLB (Add shows the next)
             for n in 1..=MAX_EXTRAS {
                 let group = (api.obs_properties_create)();
-                (api.obs_properties_add_path)(group, extra_key(n).as_ptr(), c"GLB (copies the avatar's pose)".as_ptr(), obs::OBS_PATH_FILE, c"glTF (*.glb *.gltf)".as_ptr(), std::ptr::null());
+                (api.obs_properties_add_path)(group, extra_key(n).as_ptr(), c"GLB".as_ptr(), obs::OBS_PATH_FILE, c"glTF (*.glb *.gltf)".as_ptr(), std::ptr::null());
                 (api.obs_properties_add_bool)(group, shown_key(n).as_ptr(), c"Show".as_ptr());
                 (api.obs_properties_add_text)(group, group_key(n).as_ptr(), c"Group (only one GLB of a group shows; empty: none)".as_ptr(), obs::OBS_TEXT_DEFAULT);
+                // What it copies from the avatar (all off: it doesn't move)
+                let [mv, mf, rt, rf, sh] = follow_keys(n);
+                for (check, label, from) in [(&mv, c"Copy movement", &mf), (&rt, c"Copy rotation", &rf)] {
+                    (api.obs_properties_add_bool)(group, check.as_ptr(), label.as_ptr());
+                    let list = (api.obs_properties_add_list)(group, from.as_ptr(), c"  from".as_ptr(), obs::OBS_COMBO_TYPE_LIST, obs::OBS_COMBO_FORMAT_STRING);
+                    (api.obs_property_list_add_string)(list, c"The armature (each bone from the avatar's of the same name)".as_ptr(), c"".as_ptr());
+                    for b in &bones {
+                        let name = cstring(b);
+                        (api.obs_property_list_add_string)(list, name.as_ptr(), name.as_ptr());
+                    }
+                }
+                (api.obs_properties_add_bool)(group, sh.as_ptr(), c"Copy shape keys".as_ptr());
                 (api.obs_properties_add_button2)(group, cstring(&format!("extra{n}.remove")).as_ptr(), c"Remove".as_ptr(), remove_extra, n as Ptr);
                 let b = (api.obs_properties_add_group)(props, extra_box(n).as_ptr(), cstring(&format!("Also draw {n}")).as_ptr(), obs::OBS_GROUP_NORMAL, group);
                 (api.obs_property_set_visible)(b, n <= count);
@@ -824,6 +883,7 @@ unsafe extern "C" fn create(settings: Ptr, source: Ptr) -> Ptr {
         extra_generation: Arc::new(AtomicU64::new(0)),
         extra_loaded: Arc::new(Mutex::new(None)),
         extras: Mutex::new(Vec::new()),
+        extra_follow: Mutex::new(Vec::new()),
         prop_file: Mutex::new(String::new()),
         prop_generation: Arc::new(AtomicU64::new(0)),
         prop_loaded: Arc::new(Mutex::new(None)),
@@ -982,6 +1042,7 @@ unsafe extern "C" fn update(data: Ptr, settings: Ptr) {
 
     // The GLBs drawn with it: loaded again when their list changes
     let extra_files: Vec<(usize, String)> = (1..=extra_count(settings)).map(|n| (n, get_string(settings, &extra_key(n)))).filter(|(_, f)| !f.is_empty()).collect();
+    *puppet.extra_follow.lock().unwrap() = (1..=extra_count(settings)).map(|n| (n, unsafe { follow_of(settings, n) })).collect();
     let mut current_extras = puppet.extra_files.lock().unwrap();
     if *current_extras != extra_files {
         *current_extras = extra_files.clone();
@@ -1354,6 +1415,10 @@ unsafe extern "C" fn video_tick(data: Ptr, dt: f32) {
         let mut motion = *puppet.motion.lock().unwrap();
         motion.yaw = placed(puppet).yaw;
         shown = sync_remote(puppet, rig);
+        {
+            let follow = puppet.extra_follow.lock().unwrap();
+            rig.follow = puppet.extras.lock().unwrap().iter().map(|(slot, _)| follow.iter().find(|(s, _)| s == slot).map(|(_, f)| f.clone()).unwrap_or_default()).collect();
+        }
         puppet.remote.lock().unwrap().step_fade(dt);
         rig.step(dt, motion);
         crate::timing::tick(started.elapsed());
