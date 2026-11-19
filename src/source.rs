@@ -57,6 +57,27 @@ fn extra_count(settings: Ptr) -> usize {
 }
 const S_WIDTH: &CStr = c"width";
 const S_HEIGHT: &CStr = c"height";
+/// The source the canvas's size (OBS's Base resolution); off: width and height
+const S_CANVAS: &CStr = c"canvas_size";
+
+/// libobs's obs_video_info, up to the canvas's size (the rest left alone)
+#[repr(C)]
+struct VideoInfo {
+    graphics_module: *const std::ffi::c_char,
+    fps_num: u32,
+    fps_den: u32,
+    base_width: u32,
+    base_height: u32,
+    rest: [u8; 128],
+}
+
+/// OBS's canvas: its width and height
+fn canvas() -> Option<(u32, u32)> {
+    type GetVideoInfo = unsafe extern "C" fn(*mut VideoInfo) -> bool;
+    let get = crate::tracking::obs_function::<GetVideoInfo>(c"obs_get_video_info")?;
+    let mut info = VideoInfo { graphics_module: std::ptr::null(), fps_num: 0, fps_den: 0, base_width: 0, base_height: 0, rest: [0; 128] };
+    (unsafe { get(&mut info) } && info.base_width > 0 && info.base_height > 0).then_some((info.base_width, info.base_height))
+}
 const S_ZOOM: &CStr = c"zoom";
 const S_CENTRE: &CStr = c"centre";
 pub(crate) const S_YAW: &CStr = c"yaw";
@@ -316,6 +337,7 @@ unsafe extern "C" fn get_defaults(settings: Ptr) {
     let first = cstring(DEFAULT_STYLE);
     unsafe {
         (api.obs_data_set_default_string)(settings, slot_setting(0).as_ptr(), first.as_ptr());
+        (api.obs_data_set_default_bool)(settings, S_CANVAS.as_ptr(), true);
         (api.obs_data_set_default_int)(settings, S_WIDTH.as_ptr(), 1080);
         (api.obs_data_set_default_int)(settings, S_HEIGHT.as_ptr(), 1080);
         (api.obs_data_set_default_double)(settings, S_ZOOM.as_ptr(), 1.0);
@@ -637,6 +659,7 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
         let folder = cstring(&format!("Your own filters (.rhai) go in {} (Theater Scene's are listed too)", crate::config_dir().join("filters").display()));
         (api.obs_properties_add_text)(props, c"filters_info".as_ptr(), folder.as_ptr(), obs::OBS_TEXT_INFO);
 
+        (api.obs_properties_add_bool)(props, S_CANVAS.as_ptr(), c"Canvas size (as OBS's canvas; off: the width and height below)".as_ptr());
         (api.obs_properties_add_int)(props, S_WIDTH.as_ptr(), c"Width".as_ptr(), 16, 8192, 1);
         (api.obs_properties_add_int)(props, S_HEIGHT.as_ptr(), c"Height".as_ptr(), 16, 8192, 1);
         (api.obs_properties_add_float_slider)(props, S_ZOOM.as_ptr(), c"Zoom".as_ptr(), 0.2, 8.0, 0.05);
@@ -840,8 +863,13 @@ unsafe extern "C" fn update(data: Ptr, settings: Ptr) {
     let puppet = unsafe { &*(data as *const Puppet) };
     let api = obs::api();
     unsafe {
-        puppet.width.store((api.obs_data_get_int)(settings, S_WIDTH.as_ptr()).clamp(16, 8192) as u32, Ordering::Relaxed);
-        puppet.height.store((api.obs_data_get_int)(settings, S_HEIGHT.as_ptr()).clamp(16, 8192) as u32, Ordering::Relaxed);
+        // The canvas's size, or the width and height given
+        let (w, h) = match canvas().filter(|_| (api.obs_data_get_bool)(settings, S_CANVAS.as_ptr())) {
+            Some(size) => size,
+            None => ((api.obs_data_get_int)(settings, S_WIDTH.as_ptr()).clamp(16, 8192) as u32, (api.obs_data_get_int)(settings, S_HEIGHT.as_ptr()).clamp(16, 8192) as u32),
+        };
+        puppet.width.store(w.clamp(16, 8192), Ordering::Relaxed);
+        puppet.height.store(h.clamp(16, 8192), Ordering::Relaxed);
         *puppet.view.lock().unwrap() = View {
             zoom: (api.obs_data_get_double)(settings, S_ZOOM.as_ptr()) as f32,
             height: (api.obs_data_get_double)(settings, S_CENTRE.as_ptr()) as f32,
