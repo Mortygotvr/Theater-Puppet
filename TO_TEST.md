@@ -3,6 +3,16 @@
 What's built but not yet tried live, newest first. Tick it (or tell Claude
 what went wrong) and it comes off the list.
 
+## Theater Rig: Make Cloth Bones
+- [ ] Reinstall the Rig zip. On an avatar with a skirt (not pants: a ring
+      around both legs tears): Edit Mode, select the skirt's faces (or pick
+      its material), Chains 8, Bones each 4, Kind Skirt → Make Cloth Bones.
+      A ring of chains from the hips; Spring Preview swings it.
+- [ ] A cape: a row of chains from the chest.
+- [ ] Weight paint after: the waist stays on the hips, no seam between chains.
+- [ ] Chains / Bones each changed, Make again (same name): replaced, nothing
+      else touched. The ✕ removes it.
+
 ## Theater Rig: Spring preview
 - [ ] Reinstall the Rig zip. After Rename Springs: Spring preview → Start.
       Move the armature (G), rotate it, pose the head, or play an animation:
