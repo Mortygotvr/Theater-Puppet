@@ -206,6 +206,10 @@ MediaPipe notes:
   replaces the pending timer but keeps its undo, so it still goes back to how
   it was before the first. Glb / group undo restores the whole Show array
   (an internal `shown` action).
+- **Tile pictures**: `tile_previews` (`src/thumbs.rs`) cuts what each tile
+  shows out of the texture (the material's mesh UV bounds, placed by the
+  tile), every material side by side, as base64 PNGs. `GlbInfo.model` keeps
+  the loaded model for it. Scene's form shows them as clickable pictures.
 - **A tile's shape key**: `tile` takes `key` / `key_value`; the key is held
   while that tile shows and let go when it goes (`put_tiles`).
 - **Theater Control Panel module**: `control-panel/puppet.tcp` ("TCP" is the

@@ -42,7 +42,13 @@
 //! the same thing before then takes the timer's place, still going back to
 //! how it was before the first.
 //!
-//! It answers `{"ok", "error"?, "puppets"?}`.
+//! - `tile_previews` {glb, size (pixels, 64 if not given)} and, for a grid,
+//!   `material` + `columns` + `rows`: a picture of each tile (what it shows on
+//!   each material it moves, side by side; a PNG in
+//!   base64), as `previews`: [{name, png}] (a grid's names are its cells).
+//!   Only the first Puppet (or `source`'s).
+//!
+//! It answers `{"ok", "error"?, "puppets"?, "previews"?}`.
 
 use std::ffi::CStr;
 use std::sync::{Arc, Mutex};
@@ -108,8 +114,10 @@ impl Override {
 }
 
 /// One GLB of a Puppet, as the list shows it
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct GlbInfo {
+    /// The model itself (for its tiles' pictures)
+    pub model: Option<Arc<crate::model::Model>>,
     pub name: String,
     pub keys: Vec<String>,
     /// Its materials' names, and its tiles
@@ -650,6 +658,16 @@ pub fn answer(args: &str) -> String {
         .collect();
     let targets: Vec<&(Ptr, String, Shared)> = puppets.iter().filter(|(_, n, _)| which.is_empty() || *n == which).collect();
     let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("list");
+    if action == "tile_previews" {
+        return match targets.first() {
+            None => json!({ "ok": false, "error": "no Puppet source" }),
+            Some((_, _, remote)) => match previews(&args, remote) {
+                Ok(p) => json!({ "ok": true, "previews": p }),
+                Err(e) => json!({ "ok": false, "error": e }),
+            },
+        }
+        .to_string();
+    }
     let mut errors = Vec::new();
     if targets.is_empty() && action != "list" {
         errors.push(if which.is_empty() { "no Puppet source".to_string() } else { format!("no Puppet \"{which}\"") });
@@ -689,9 +707,55 @@ pub fn answer(args: &str) -> String {
     out.to_string()
 }
 
+/// `tile_previews`: each tile's picture (every material it moves, side by side), or each cell of a grid
+fn previews(args: &Value, remote: &Shared) -> Result<Vec<Value>, String> {
+    let (layer, glb) = {
+        let r = remote.lock().unwrap();
+        let layer = r.layer(args.get("glb"))?;
+        (layer, r.glbs.get(layer).cloned().unwrap_or_default())
+    };
+    let model = glb.model.ok_or_else(|| format!("GLB {layer} isn't loaded"))?;
+    let size = number(args, "size", 64.0, 8.0, 256.0) as u32;
+    let entry = |name: String, material: usize, st: [f32; 4]| crate::thumbs::thumb(&model, material, st, size).map(|png| json!({ "name": name, "png": crate::thumbs::base64(&png) }));
+    let material = args.get("material").and_then(|v| v.as_str()).unwrap_or("").trim();
+    if material.is_empty() {
+        Ok(model
+            .tiles
+            .iter()
+            .filter_map(|t| crate::thumbs::thumbs(&model, &t.binds, size).map(|png| json!({ "name": t.name, "png": crate::thumbs::base64(&png) })))
+            .collect())
+    } else {
+        let m = model.materials.iter().position(|x| x.name.eq_ignore_ascii_case(material)).ok_or_else(|| format!("GLB {layer} has no material \"{material}\""))?;
+        let whole = |k: &str| number(args, k, 1.0, 1.0, 64.0).round() as u32;
+        let (columns, rows) = (whole("columns"), whole("rows"));
+        Ok((0..columns * rows).filter_map(|cell| entry(cell.to_string(), m, grid_cell(columns, rows, cell))).collect())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_tile_has_a_picture() {
+        // THEATER_PUPPET_TILED_GLB: HavocFFT.vrm through Theater Rig's Export
+        let Ok(path) = std::env::var("THEATER_PUPPET_TILED_GLB") else { return };
+        let model = Arc::new(crate::model::load(std::path::Path::new(&path)).unwrap());
+        let remote: Shared = Arc::new(Mutex::new(Remote { glbs: vec![GlbInfo { model: Some(model.clone()), ..Default::default() }], ..Default::default() }));
+        let named = previews(&json!({}), &remote).unwrap();
+        assert_eq!(named.len(), model.tiles.len());
+        let grid = previews(&json!({ "material": "Wolf3D_Eye", "columns": 2, "rows": 2, "size": 32 }), &remote).unwrap();
+        assert_eq!(grid.len(), 4);
+        // Real PNGs ("\x89PNG" in base64)
+        assert!(named.iter().chain(&grid).all(|p| p["png"].as_str().unwrap().starts_with("iVBORw0KGgo")));
+        // THEATER_PUPPET_THUMBS_OUT: a folder to save them in, to look at
+        if let Ok(dir) = std::env::var("THEATER_PUPPET_THUMBS_OUT") {
+            for (i, p) in named.iter().chain(&grid).enumerate() {
+                let png = crate::thumbs::base64_decode(p["png"].as_str().unwrap());
+                std::fs::write(std::path::Path::new(&dir).join(format!("{i}_{}.png", p["name"].as_str().unwrap())), png).unwrap();
+            }
+        }
+    }
 
     fn at(drive: Drive, time: f32) -> Option<f32> {
         Override { layer: 0, key: "k".into(), drive, time }.value()
@@ -800,7 +864,7 @@ mod tests {
     fn a_tile_holds_its_key_and_its_timer_puts_back_the_one_before() {
         let tile = |n: &str| crate::model::Tile { name: n.into(), binds: vec![(0, [0.5, 0.5, 0.0, 0.0])] };
         let remote: Shared = Arc::new(Mutex::new(Remote {
-            glbs: vec![GlbInfo { name: "Armature".into(), keys: vec!["Blush".into(), "Fcl_MTH_A".into()], materials: vec!["Skin".into()], tiles: vec![tile("Red"), tile("Blue")] }],
+            glbs: vec![GlbInfo { model: None, name: "Armature".into(), keys: vec!["Blush".into(), "Fcl_MTH_A".into()], materials: vec!["Skin".into()], tiles: vec![tile("Red"), tile("Blue")] }],
             ..Default::default()
         }));
         let source = std::ptr::null_mut();

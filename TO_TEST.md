@@ -3,6 +3,14 @@
 What's built but not yet tried live, newest first. Tick it (or tell Claude
 what went wrong) and it comes off the list.
 
+## Tile pictures in Scene
+- [ ] Scene Studio → a Puppet redeem → "🧩 Tile texture": under "Tile:", a
+      picture of each tile (every material it changes, side by side: face +
+      eyes); click one to pick it, the picked one is lit.
+- [ ] "A cell of a grid": pick the material, columns, rows: a picture of
+      each cell; click to pick it.
+- [ ] A GLB from Make Tiles (Theater Rig) shows its tiles the same way.
+
 ## Theater Rig: Make Tiles
 - [ ] Reinstall Theater Rig from `Documents\theater_rig-0.1.0.zip` (both computers).
 - [ ] Panel → Tile textures: pick a sheet texture (Pick from Selected), set

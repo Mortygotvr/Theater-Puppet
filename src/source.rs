@@ -1132,7 +1132,9 @@ fn sync_remote(puppet: &Puppet, rig: &mut Rig) -> Option<Vec<bool>> {
     if r.glbs.len() != models.len() || r.glbs.iter().zip(&models).any(|(g, m)| g.name != m.name) {
         r.glbs = models
             .iter()
-            .map(|m| crate::remote::GlbInfo {
+            .zip(std::iter::once(&rig.model).chain(rig.followers.iter().map(|f| &f.model)))
+            .map(|(m, arc)| crate::remote::GlbInfo {
+                model: Some(arc.clone()),
                 name: m.name.clone(),
                 keys: m.morph_names.clone(),
                 materials: m.materials.iter().map(|x| x.name.clone()).collect(),

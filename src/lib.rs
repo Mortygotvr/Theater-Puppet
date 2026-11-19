@@ -19,6 +19,7 @@ pub mod snapshot;
 pub mod source;
 pub mod springs;
 pub mod styles;
+pub mod thumbs;
 pub mod timing;
 pub mod tracking;
 
