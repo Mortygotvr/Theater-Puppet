@@ -26,6 +26,18 @@ const S_MODE: &CStr = c"mode";
 /// Each vowel's shape key (A, I, U, E, O)
 const S_KEYS: [&CStr; 5] = [c"key_a", c"key_i", c"key_u", c"key_e", c"key_o"];
 const VOWEL_NAMES: [&str; 5] = ["A", "I", "U", "E", "O"];
+/// Which shapes the vowels open: VRM's vowel keys, or ARKit's mouth
+const S_SHAPES: &CStr = c"shapes";
+
+/// The shapes the vowels open
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Shapes {
+    /// Each vowel its VRM shape key (Fcl_MTH_A… or the filter's own name)
+    #[default]
+    Vrm,
+    /// Each vowel a mix of ARKit's mouth shapes
+    Arkit,
+}
 
 /// How the microphone's mouth goes with a face that's tracked
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -47,6 +59,7 @@ pub struct Mouth {
     pub open: f32,
     pub vowels: [f32; 5],
     pub mode: Mode,
+    pub shapes: Shapes,
     pub keys: [String; 5],
 }
 
@@ -71,6 +84,7 @@ struct Settings {
     smoothing: f32,
     vowels: bool,
     mode: Mode,
+    shapes: Shapes,
     keys: [String; 5],
 }
 
@@ -232,6 +246,7 @@ unsafe extern "C" fn get_defaults(settings: Ptr) {
         (api.obs_data_set_default_double)(settings, S_SMOOTHING.as_ptr(), 0.5);
         (api.obs_data_set_default_bool)(settings, S_VOWELS.as_ptr(), true);
         (api.obs_data_set_default_string)(settings, S_MODE.as_ptr(), c"add".as_ptr());
+        (api.obs_data_set_default_string)(settings, S_SHAPES.as_ptr(), c"vrm".as_ptr());
     }
 }
 
@@ -251,8 +266,11 @@ unsafe extern "C" fn get_properties(_: Ptr) -> Ptr {
         ] {
             (api.obs_property_list_add_string)(list, label.as_ptr(), value.as_ptr());
         }
+        let shapes = (api.obs_properties_add_list)(props, S_SHAPES.as_ptr(), c"Vowel shapes".as_ptr(), obs::OBS_COMBO_TYPE_LIST, obs::OBS_COMBO_FORMAT_STRING);
+        (api.obs_property_list_add_string)(shapes, c"VRM (Fcl_MTH_A, I, U, E, O, or the keys below)".as_ptr(), c"vrm".as_ptr());
+        (api.obs_property_list_add_string)(shapes, c"ARKit (jawOpen, mouthFunnel, mouthPucker…)".as_ptr(), c"arkit".as_ptr());
         for (i, key) in S_KEYS.iter().enumerate() {
-            let label = std::ffi::CString::new(format!("Shape key for {} (empty: automatic)", VOWEL_NAMES[i])).unwrap_or_default();
+            let label = std::ffi::CString::new(format!("VRM: shape key for {} (empty: Fcl_MTH_{})", VOWEL_NAMES[i], VOWEL_NAMES[i])).unwrap_or_default();
             (api.obs_properties_add_text)(props, key.as_ptr(), label.as_ptr(), obs::OBS_TEXT_DEFAULT);
         }
         (api.obs_properties_add_text)(props, c"lipsync_info".as_ptr(), c"Every Theater Puppet hears it. The sound goes through untouched.".as_ptr(), obs::OBS_TEXT_INFO);
@@ -278,6 +296,10 @@ fn read(settings: Ptr) -> Settings {
             smoothing: (api.obs_data_get_double)(settings, S_SMOOTHING.as_ptr()) as f32,
             vowels: (api.obs_data_get_bool)(settings, S_VOWELS.as_ptr()),
             mode,
+            shapes: {
+                let p = (api.obs_data_get_string)(settings, S_SHAPES.as_ptr());
+                if !p.is_null() && CStr::from_ptr(p).to_bytes() == b"arkit" { Shapes::Arkit } else { Shapes::Vrm }
+            },
             keys: S_KEYS.map(|k| {
                 let p = (api.obs_data_get_string)(settings, k.as_ptr());
                 if p.is_null() { String::new() } else { CStr::from_ptr(p).to_string_lossy().trim().to_string() }
@@ -337,7 +359,7 @@ unsafe extern "C" fn filter_audio(data: Ptr, audio: *mut AudioData) -> *mut Audi
     } else if !settings.vowels {
         state.vowels = [1.0, 0.0, 0.0, 0.0, 0.0];
     }
-    let mouth = Mouth { open: (state.open * settings.intensity).clamp(0.0, 1.0), vowels: state.vowels, mode: settings.mode, keys: settings.keys };
+    let mouth = Mouth { open: (state.open * settings.intensity).clamp(0.0, 1.0), vowels: state.vowels, mode: settings.mode, shapes: settings.shapes, keys: settings.keys };
     *LATEST.lock().unwrap() = Some((mouth, Instant::now()));
     audio
 }
