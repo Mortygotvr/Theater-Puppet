@@ -11,7 +11,8 @@
 //! Shapes are ARKit's with `_L` / `_R` for Left / Right, 0–100 (a newer
 //! format writes `name&value`); the turns are Unity's, in degrees; the head's
 //! tx, ty, tz its place from the phone, metres (Unity's axes, mirrored like
-//! the turns). That place is the head's middle, above the neck: a nod or a
+//! the turns). A packet whose trackingStatus is 0 (the phone lost the face)
+//! counts as nothing. That place is the head's middle, above the neck: a nod or a
 //! tilt swings it, so the neck's place is worked out from it and the head's
 //! turn (else every nod would lean the whole spine), steadied, and moved
 //! from its first place (the head at rest; the dock's "Re-centre head" takes
@@ -65,6 +66,12 @@ pub fn parse_with_place(text: &str) -> Option<(Face, Option<Vec3>)> {
     for item in shapes.split('|') {
         // name&value, or name-value (the name has no '-')
         let Some((name, value)) = item.split_once('&').or_else(|| item.rsplit_once('-')) else { continue };
+        // The phone still sending, but it lost the face (newer versions say
+        // so): as if nothing came, so the face counts as lost (the
+        // microphone's "only when no face" mouth takes over)
+        if name.trim() == "trackingStatus" && value.trim().parse::<f32>().is_ok_and(|v| v == 0.0) {
+            return None;
+        }
         let (Some(i), Ok(v)) = (shape_index(name.trim()), value.trim().parse::<f32>()) else { continue };
         face.shapes[i] = (v / 100.0).clamp(0.0, 1.0);
         found += 1;
@@ -226,6 +233,9 @@ mod tests {
         assert_eq!(face.shapes[arkit_index("eyeBlinkLeft").unwrap()], 0.5);
         assert_eq!(face.shapes[arkit_index("jawOpen").unwrap()], 0.25);
         assert!(parse("hello").is_none());
+        // It lost the face: nothing
+        assert!(parse("trackingStatus-0|eyeBlink_L&50|jawOpen&25|=head#0,10,0,0,0,0|").is_none());
+        assert!(parse("trackingStatus&0|eyeBlink_L&50|=head#0,10,0,0,0,0|").is_none());
         assert!(parse("").is_none());
     }
 }
