@@ -138,6 +138,8 @@ const S_DESK_LEFT: &CStr = c"desk_left_handed";
 const S_DESK_UP: &CStr = c"desk_up";
 const S_DESK_FORWARD: &CStr = c"desk_forward";
 const S_DESK_HAND_UP: &CStr = c"desk_hand_up";
+const S_DESK_HAND_TILT: &CStr = c"desk_hand_tilt";
+const S_DESK_CURL: &CStr = c"desk_curl";
 
 /// Colour slots (Theater Rig's Color<N>) a source can set
 const COLOR_SLOTS: u32 = 100;
@@ -608,6 +610,8 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
             (api.obs_properties_add_float_slider)(props, S_DESK_UP.as_ptr(), c"Keyboard & mouse: desk lower (-) or higher (+), metres".as_ptr(), -0.25, 0.3, 0.01);
             (api.obs_properties_add_float_slider)(props, S_DESK_FORWARD.as_ptr(), c"Keyboard & mouse: desk closer (-) or farther (+), metres".as_ptr(), -0.2, 0.3, 0.01);
             (api.obs_properties_add_float_slider)(props, S_DESK_HAND_UP.as_ptr(), c"Keyboard & mouse: hands lower (-) or higher (+), metres".as_ptr(), -0.1, 0.15, 0.005);
+            (api.obs_properties_add_float_slider)(props, S_DESK_HAND_TILT.as_ptr(), c"Keyboard & mouse: hands tilted back (-) or forward (+), degrees".as_ptr(), -45.0, 45.0, 1.0);
+            (api.obs_properties_add_float_slider)(props, S_DESK_CURL.as_ptr(), c"Keyboard & mouse: fingers straighter (-) or more curled (+)".as_ptr(), -0.6, 0.8, 0.02);
             // A reflection: another source's picture on the avatar
             let own = get_string_of(puppet.source);
             let group = (api.obs_properties_create)();
@@ -960,6 +964,8 @@ unsafe extern "C" fn update(data: Ptr, settings: Ptr) {
                 },
                 left_handed: (api.obs_data_get_bool)(settings, S_DESK_LEFT.as_ptr()),
                 hand_up: (api.obs_data_get_double)(settings, S_DESK_HAND_UP.as_ptr()) as f32,
+                hand_tilt: (api.obs_data_get_double)(settings, S_DESK_HAND_TILT.as_ptr()) as f32,
+                curl: (api.obs_data_get_double)(settings, S_DESK_CURL.as_ptr()) as f32,
             },
             desk_offset: [(api.obs_data_get_double)(settings, S_DESK_UP.as_ptr()) as f32, (api.obs_data_get_double)(settings, S_DESK_FORWARD.as_ptr()) as f32],
         };

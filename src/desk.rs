@@ -69,6 +69,10 @@ pub struct Look {
     pub left_handed: bool,
     /// The hands raised (+) or lowered (-) over the keys and mouse, metres
     pub hand_up: f32,
+    /// The hands tilted forward (+, fingertips down) or back (-), degrees
+    pub hand_tilt: f32,
+    /// The fingers curled more (+) or less (-), radians at each joint
+    pub curl: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -292,6 +296,8 @@ pub struct Wrist {
 /// Both wrists now
 pub fn wrists(layout: &Layout, state: &State, look: &Look, input: &Desk) -> [Wrist; 2] {
     let mh = mouse_hand(look);
+    // The tilt slider: about the hands' side-to-side axis
+    let tilt = glam::Quat::from_rotation_x(look.hand_tilt.to_radians());
     [0, 1].map(|hand| {
         let s = if hand == 0 { 1.0 } else { -1.0 };
         let on_keys = home(layout, look, hand).map(|h| {
@@ -306,7 +312,7 @@ pub fn wrists(layout: &Layout, state: &State, look: &Look, input: &Desk) -> [Wri
         let on_mouse = Wrist { at: layout.mouse_now(look, input) + Vec3::new(0.0, 0.065 + look.hand_up, -0.10), fingers: Vec3::new(0.0, -0.25, 1.0), palm: Vec3::new(0.0, -1.0, 0.1) };
         let keys = on_keys.unwrap_or(on_mouse);
         let t = if hand == mh { state.on_mouse } else { 0.0 };
-        if t <= 0.0 {
+        let w = if t <= 0.0 {
             keys
         } else if t >= 1.0 {
             on_mouse
@@ -314,12 +320,14 @@ pub fn wrists(layout: &Layout, state: &State, look: &Look, input: &Desk) -> [Wri
             // Lifted on the way over
             let lift = Vec3::Y * 0.05 * (t * std::f32::consts::PI).sin();
             Wrist { at: keys.at.lerp(on_mouse.at, t) + lift, fingers: keys.fingers.lerp(on_mouse.fingers, t), palm: keys.palm.lerp(on_mouse.palm, t) }
-        }
+        };
+        Wrist { at: w.at, fingers: tilt * w.fingers, palm: tilt * w.palm }
     })
 }
 
-const REST: [f32; 3] = [0.5, 0.65, 0.4];
-const PRESS: [f32; 3] = [0.8, 0.85, 0.5];
+// (Seen live: 0.5 / 0.65 / 0.4 looked too straight)
+const REST: [f32; 3] = [0.75, 0.9, 0.6];
+const PRESS: [f32; 3] = [1.0, 1.05, 0.7];
 
 /// Both hands' fingers now (left, right)
 pub fn fingers(layout: &Layout, state: &State, look: &Look, input: &Desk) -> [Hand; 2] {
@@ -330,7 +338,7 @@ pub fn fingers(layout: &Layout, state: &State, look: &Look, input: &Desk) -> [Ha
         for f in 1..5 {
             h.bend[f] = REST;
         }
-        h.bend[0] = [0.2, 0.15, 0.1];
+        h.bend[0] = [0.3, 0.25, 0.15];
         // Pressing: the key's finger down, exactly shown keys only
         for k in layout.keys.iter().filter(|k| input.down(k.vk) && exact(look, k)) {
             if hand_for(layout, look, &hands, k) == hand {
@@ -348,10 +356,10 @@ pub fn fingers(layout: &Layout, state: &State, look: &Look, input: &Desk) -> [Ha
     let mousing = || {
         let mut h = Hand::default();
         let click = |b: u8| input.buttons & b != 0;
-        h.bend[1] = if click(1) { [0.45, 0.55, 0.35] } else { [0.3, 0.35, 0.25] };
-        h.bend[2] = if click(2) { [0.45, 0.55, 0.35] } else { [0.3, 0.35, 0.25] };
-        h.bend[3] = [0.6, 0.7, 0.5];
-        h.bend[4] = [0.65, 0.75, 0.5];
+        h.bend[1] = if click(1) { [0.6, 0.7, 0.5] } else { [0.45, 0.55, 0.4] };
+        h.bend[2] = if click(2) { [0.6, 0.7, 0.5] } else { [0.45, 0.55, 0.4] };
+        h.bend[3] = [0.85, 0.95, 0.65];
+        h.bend[4] = [0.9, 1.0, 0.65];
         h.bend[0] = [0.15, 0.1, 0.05];
         h.spread[0] = -0.3;
         h
@@ -359,13 +367,18 @@ pub fn fingers(layout: &Layout, state: &State, look: &Look, input: &Desk) -> [Ha
     [0, 1].map(|hand| {
         let t = if hand == mh { state.on_mouse } else { 0.0 };
         let (a, b) = (typing(hand), mousing());
-        if t <= 0.0 {
+        let mut h = if t <= 0.0 {
             a
         } else if t >= 1.0 {
             b
         } else {
             crate::motion::mix_hand(a, b, t)
+        };
+        // The curl slider, on the four fingers
+        for f in 1..5 {
+            h.bend[f] = h.bend[f].map(|v| (v + look.curl).max(0.0));
         }
+        h
     })
 }
 
@@ -521,5 +534,28 @@ mod tests {
         assert_eq!(w[1], rest[1]);
         let click = fingers(&layout, &state, &look, &Desk { buttons: 1, ..pressed(&[]) });
         assert!(click[1].bend[1][0] > rest[1].bend[1][0]);
+    }
+
+    #[test]
+    fn the_hands_tilt_and_the_fingers_curl() {
+        let Some((_, layout)) = desk() else { return };
+        let state = State::default();
+        let still = pressed(&[]);
+        let flat = wrists(&layout, &state, &Look::default(), &still);
+        let forward = wrists(&layout, &state, &Look { hand_tilt: 20.0, ..Default::default() }, &still);
+        // Forward: the fingertips point lower, the wrist stays where it was
+        for h in 0..2 {
+            assert!(forward[h].fingers.normalize().y < flat[h].fingers.normalize().y - 0.2);
+            assert_eq!(forward[h].at, flat[h].at);
+        }
+        let back = wrists(&layout, &state, &Look { hand_tilt: -20.0, ..Default::default() }, &still);
+        assert!(back[0].fingers.normalize().y > flat[0].fingers.normalize().y);
+        // Curl: every joint of the four fingers bends more, the thumb doesn't
+        let rest = fingers(&layout, &state, &Look::default(), &still);
+        let curled = fingers(&layout, &state, &Look { curl: 0.3, ..Default::default() }, &still);
+        for f in 1..5 {
+            assert!((curled[0].bend[f][1] - rest[0].bend[f][1] - 0.3).abs() < 1e-6);
+        }
+        assert_eq!(curled[0].bend[0], rest[0].bend[0]);
     }
 }
