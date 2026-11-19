@@ -3,6 +3,20 @@
 What's built but not yet tried live, newest first. Tick it (or tell Claude
 what went wrong) and it comes off the list.
 
+## Timers and a tile's shape key
+- [ ] Reload `puppet.tcp` in the Control Panel (Modules) so the new fields show.
+- [ ] Tile with "Shape key with it" (e.g. a blush key) and Timer 10: the tile
+      and the key come on, and both go back after 10 s.
+- [ ] The same tile fired again before the 10 s run out: the timer restarts,
+      and at the end you're back to the tile you had *before the first one*.
+- [ ] Timer on a colour: the slot goes back to its colour before (or its own).
+- [ ] Timer on Show GLB / Show GLB of group: the GLBs go back as they were
+      (with the fade you set).
+- [ ] Timer on a shape key: it turns off. On an animation loop: the loop
+      before comes back.
+- [ ] The same in a Scene Puppet redeem (Timer slider, and "Shape key with
+      it" on a tile).
+
 ## Reflection
 - [ ] Puppet properties → Reflection: pick your 360 background, strength
       ~0.3, "360": the avatar picks up its colours, more at the edges.

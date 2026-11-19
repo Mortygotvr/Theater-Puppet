@@ -1194,6 +1194,24 @@ pub(crate) fn set_color_setting(source: Ptr, slot: u32, rgb: Option<[f32; 3]>) {
     }
 }
 
+/// Colour slot `slot`'s colour on a Puppet source (None: its own)
+pub(crate) fn get_color_setting(source: Ptr, slot: u32) -> Option<[f32; 3]> {
+    let api = obs::api();
+    if source.is_null() {
+        return None;
+    }
+    unsafe {
+        let settings = (api.obs_source_get_settings)(source);
+        if settings.is_null() {
+            return None;
+        }
+        let on = (api.obs_data_get_bool)(settings, color_on_key(slot).as_ptr());
+        let c = (api.obs_data_get_int)(settings, color_key(slot).as_ptr());
+        (api.obs_data_release)(settings);
+        on.then(|| obs_to_rgb(c))
+    }
+}
+
 /// The view with what Puppet Place filters on it add (place.rs)
 fn placed(puppet: &Puppet) -> View {
     let mut view = *puppet.view.lock().unwrap();
@@ -1221,6 +1239,8 @@ unsafe extern "C" fn video_tick(data: Ptr, dt: f32) {
     if let Some(shown) = shown {
         set_shown(puppet.source, shown);
     }
+    // Timed commands (remote.rs) whose time is up
+    crate::remote::run_due(puppet.source, &puppet.remote);
     // A style or filter file changed: its settings' defaults may have too
     let generation = styles::generation();
     let filters_generation = filters::generation();

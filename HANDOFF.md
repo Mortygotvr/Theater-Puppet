@@ -199,6 +199,15 @@ MediaPipe notes:
   `color` (a slot on every GLB, saved in the source's settings).
   The module comment lists every field. Shape keys driven this way go over
   tracking and animations.
+- **Timers**: every action but `shape_anim` takes `timer` (seconds). Before
+  it acts, `ask` records how to undo it (`Undo::Args`, a command, or
+  `Undo::Tiles`, the tiles that were there); `video_tick` calls `run_due`,
+  which undoes what's due. A new command on the same thing (`Timer.target`)
+  replaces the pending timer but keeps its undo, so it still goes back to how
+  it was before the first. Glb / group undo restores the whole Show array
+  (an internal `shown` action).
+- **A tile's shape key**: `tile` takes `key` / `key_value`; the key is held
+  while that tile shows and let go when it goes (`put_tiles`).
 - **Theater Control Panel module**: `control-panel/puppet.tcp` ("TCP" is the
   Control Panel's module format, not the network protocol), deployed to
   `data\control-panel\`, loaded from the Panel's Modules tab. It calls the

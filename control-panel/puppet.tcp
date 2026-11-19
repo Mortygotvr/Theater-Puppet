@@ -8,7 +8,8 @@
 // Every text field takes the Control Panel's variables ({1}, {username},
 // {global.x}…), every number field its math. "Puppet source" left empty: every
 // Puppet. "GLB": 0 the avatar, 1, 2… the source's "Also draw" GLBs, or a GLB's
-// file name.
+// file name. "Timer": after that many seconds what the command changed goes
+// back to how it was (0: it stays).
 (function() {
     const MODULE_ID = "theater_puppet";
     const PROC = "theater_puppet_command";
@@ -67,12 +68,14 @@
     const GLB = { id: "glb", label: "GLB (0 = the avatar, 1, 2… = Also draw, or its file name)", type: "text", default: "0" };
     const KEY = { id: "key", label: "Shape key (its name in Blender)", type: "text", default: "" };
     const FADE = { id: "fade", label: "Fade (seconds; 0 = at once)", type: "number", default: 0 };
+    const TIMER = { id: "timer", label: "Timer (seconds, then back as it was; 0 = it stays)", type: "number", default: 0 };
+    const timer = inputs => num(inputs.timer, 0);
 
     // ─── Animation ───────────────────────────────────────────────────────────
     window.TheaterController.registerCommand("puppet_animation", async (inputs) => {
         const clip = text(inputs.clip);
         const mode = inputs.mode || "once";
-        await send({ action: "animation", source: text(inputs.source), clip, mode },
+        await send({ action: "animation", source: text(inputs.source), clip, mode, timer: timer(inputs) },
             mode === "stop" ? "Animation stopped" : `Animation ${clip || "(idle motion)"}: ${mode}`);
     }, {
         label: "Puppet: Play Animation",
@@ -83,7 +86,8 @@
                 { value: "once", label: "Once, then back" },
                 { value: "loop", label: "Loop (in place of the idle motion; saved)" },
                 { value: "stop", label: "Stop the one playing once" }
-            ] }
+            ] },
+            TIMER
         ]
     }, MODULE_ID);
 
@@ -92,7 +96,7 @@
         const key = text(inputs.key);
         await send({
             action: "shape", source: text(inputs.source), glb: text(inputs.glb), key,
-            state: inputs.state || "on", value: num(inputs.value, 1), period: num(inputs.period, 1)
+            state: inputs.state || "on", value: num(inputs.value, 1), period: num(inputs.period, 1), timer: timer(inputs)
         }, `Shape key ${key}: ${inputs.state || "on"}`);
     }, {
         label: "Puppet: Toggle Shape Key",
@@ -104,7 +108,8 @@
                 { value: "pingpong", label: "Ping-pong (until turned off)" }
             ] },
             { id: "value", label: "Strength 0–1 (on, and ping-pong's top)", type: "number", default: 1 },
-            { id: "period", label: "Ping-pong: seconds there and back", type: "number", default: 1 }
+            { id: "period", label: "Ping-pong: seconds there and back", type: "number", default: 1 },
+            TIMER
         ]
     }, MODULE_ID);
 
@@ -148,7 +153,7 @@
         await send({
             action: "glb", source: text(inputs.source), glb: text(inputs.glb),
             visible: v === "toggle" ? "toggle" : v === "on",
-            fade: num(inputs.fade, 0)
+            fade: num(inputs.fade, 0), timer: timer(inputs)
         }, `GLB ${text(inputs.glb)}: ${v === "on" ? "shown" : v === "off" ? "hidden" : "toggled"}`);
     }, {
         label: "Puppet: Show / Hide GLB",
@@ -159,14 +164,16 @@
                 { value: "off", label: "Hide" },
                 { value: "toggle", label: "Toggle" }
             ] },
-            FADE
+            FADE, TIMER
         ]
     }, MODULE_ID);
 
     // ─── Tile texture ────────────────────────────────────────────────────────
     window.TheaterController.registerCommand("puppet_tile", async (inputs) => {
         const name = text(inputs.name);
-        const args = { action: "tile", source: text(inputs.source), glb: text(inputs.glb), state: inputs.state || "on", fade: num(inputs.fade, 0) };
+        const args = { action: "tile", source: text(inputs.source), glb: text(inputs.glb), state: inputs.state || "on", fade: num(inputs.fade, 0), timer: timer(inputs) };
+        // A shape key held while the tile shows
+        if (text(inputs.key)) Object.assign(args, { key: text(inputs.key), key_value: num(inputs.key_value, 1) });
         if (name) {
             args.name = name;
         } else {
@@ -187,7 +194,10 @@
                 { value: "off", label: "Off (back to its own)" },
                 { value: "toggle", label: "Toggle" }
             ] },
-            { id: "fade", label: "Crossfade (seconds; 0 = at once)", type: "number", default: 0 }
+            { id: "fade", label: "Crossfade (seconds; 0 = at once)", type: "number", default: 0 },
+            { id: "key", label: "Shape key with it (held while the tile shows; empty: none)", type: "text", default: "" },
+            { id: "key_value", label: "That shape key's strength 0–1", type: "number", default: 1 },
+            TIMER
         ]
     }, MODULE_ID);
 
@@ -195,7 +205,7 @@
     window.TheaterController.registerCommand("puppet_group", async (inputs) => {
         const group = text(inputs.group);
         const pick = text(inputs.glb) || "next";
-        await send({ action: "group", source: text(inputs.source), group, glb: pick, fade: num(inputs.fade, 0) },
+        await send({ action: "group", source: text(inputs.source), group, glb: pick, fade: num(inputs.fade, 0), timer: timer(inputs) },
             `Group ${group}: ${pick}`);
     }, {
         label: "Puppet: Show GLB of Group",
@@ -203,7 +213,7 @@
             SOURCE,
             { id: "group", label: "Group (as in the Puppet's properties)", type: "text", default: "" },
             { id: "glb", label: "Show (a GLB's name or number, next, or none)", type: "text", default: "next" },
-            FADE
+            FADE, TIMER
         ]
     }, MODULE_ID);
 
@@ -211,14 +221,15 @@
     window.TheaterController.registerCommand("puppet_color", async (inputs) => {
         const slot = Math.round(num(inputs.slot, 0));
         const color = text(inputs.color) || "reset";
-        await send({ action: "color", source: text(inputs.source), slot, color },
+        await send({ action: "color", source: text(inputs.source), slot, color, timer: timer(inputs) },
             `Colour slot ${slot}: ${color}`);
     }, {
         label: "Puppet: Set Colour Slot",
         fields: [
             SOURCE,
             { id: "slot", label: "Colour slot (Color<N> in Theater Rig)", type: "number", default: 0 },
-            { id: "color", label: "Colour (#rrggbb, or reset for its own)", type: "text", default: "#ff4080" }
+            { id: "color", label: "Colour (#rrggbb, or reset for its own)", type: "text", default: "#ff4080" },
+            TIMER
         ]
     }, MODULE_ID);
 })();

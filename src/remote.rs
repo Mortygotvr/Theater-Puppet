@@ -32,10 +32,21 @@
 //! `glb`, `group`, `shape_anim` (its show and hide) and `tile` take `fade`
 //! (seconds, 0 at once): a GLB dissolves in or out, a tile crossfades.
 //!
+//! `tile` can also hold a shape key while it shows: `key` (one of that GLB's)
+//! and `key_value` (0–1, 1 if not given); it's let go when the tile goes.
+//!
+//! Every action but `shape_anim` and `list` takes `timer` (seconds, 0 or
+//! none: it stays): when it runs out, what the command changed goes back to
+//! how it was (a GLB's or group's Show, a tile and its key, a shape key off,
+//! a colour, an animation: the loop before, or a once stopped). A command on
+//! the same thing before then takes the timer's place, still going back to
+//! how it was before the first.
+//!
 //! It answers `{"ok", "error"?, "puppets"?}`.
 
 use std::ffi::CStr;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
@@ -117,6 +128,26 @@ pub struct ActiveTile {
     pub weight: f32,
     /// A grid's columns, rows and cell
     pub grid: Option<(u32, u32, u32)>,
+    /// A shape key held while it shows, and its value
+    pub key: Option<(String, f32)>,
+}
+
+/// How a timed command is undone
+#[derive(Clone, Debug)]
+pub enum Undo {
+    /// Another command
+    Args(Value),
+    /// The tiles that were on those materials of a layer (none: no tile)
+    Tiles { layer: usize, materials: Vec<usize>, before: Vec<ActiveTile>, fade: f32 },
+}
+
+/// A timed command: when it's undone, and what it changed (`target`: a
+/// later command on the same thing takes its place)
+#[derive(Clone, Debug)]
+pub struct Timer {
+    pub due: Instant,
+    pub target: String,
+    pub undo: Undo,
 }
 
 /// Where cell `cell` of a `columns` x `rows` grid is (scale x, y, offset x, y),
@@ -211,6 +242,8 @@ pub struct Remote {
     pub pending_fade: f32,
     /// Each (layer, material)'s crossfade, seconds (the last tile command's)
     pub tile_fade: Vec<((usize, usize), f32)>,
+    /// Timed commands, to undo
+    pub timers: Vec<Timer>,
 }
 
 impl Remote {
@@ -290,6 +323,33 @@ impl Remote {
             let f = &mut self.fade[l];
             *f = if secs <= 0.0 { target } else if *f < target { (*f + dt / secs).min(target) } else { (*f - dt / secs).max(target) };
         }
+    }
+
+    /// The tiles on `materials` of `layer` replaced by `add` (with their
+    /// crossfade): the keys of the ones going are let go, theirs held
+    fn put_tiles(&mut self, layer: usize, materials: &[usize], add: Vec<ActiveTile>, fade: f32) {
+        for &m in materials {
+            self.tile_fade.retain(|(k, _)| *k != (layer, m));
+            self.tile_fade.push(((layer, m), fade));
+        }
+        let (gone, keep): (Vec<ActiveTile>, Vec<ActiveTile>) = std::mem::take(&mut self.tiles).into_iter().partition(|t| t.layer == layer && t.binds.iter().any(|(m, _)| materials.contains(m)));
+        for t in &gone {
+            if let Some((key, _)) = &t.key {
+                self.shapes.push((t.layer, key.clone(), None));
+            }
+        }
+        for t in &add {
+            if let Some((key, v)) = &t.key {
+                self.shapes.push((t.layer, key.clone(), Some(Drive::Hold(*v))));
+            }
+        }
+        self.tiles = keep;
+        self.tiles.extend(add);
+    }
+
+    /// The tiles on `materials` of `layer` now
+    fn tiles_on(&self, layer: usize, materials: &[usize]) -> Vec<ActiveTile> {
+        self.tiles.iter().filter(|t| t.layer == layer && t.binds.iter().any(|(m, _)| materials.contains(m))).cloned().collect()
     }
 
     /// The crossfade seconds of a layer's material
@@ -380,23 +440,72 @@ fn flag(args: &Value, key: &str) -> bool {
 
 /// What `args` asks of one Puppet (`source`, its OBS source), done
 fn apply(args: &Value, source: Ptr, remote: &Shared) -> Result<(), String> {
+    apply_at(args, source, remote, Instant::now())
+}
+
+fn apply_at(args: &Value, source: Ptr, remote: &Shared, now: Instant) -> Result<(), String> {
     let mut shown = None;
-    let result = ask(args, source, remote, &mut shown);
+    let mut undo = None;
+    let result = ask(args, source, remote, &mut shown, &mut undo);
     // Written once the remote is let go (the source's update takes it)
     if let Some(shown) = shown {
         crate::source::set_shown(source, shown);
     }
+    if result.is_ok() {
+        if let Some((target, undo)) = undo {
+            let timer = number(args, "timer", 0.0, 0.0, 86_400.0);
+            let mut r = remote.lock().unwrap();
+            // A timer already on it: this one takes its place, undoing to
+            // how it was before that one
+            let before = r.timers.iter().position(|t| t.target == target).map(|i| r.timers.remove(i).undo);
+            if timer > 0.0 {
+                r.timers.push(Timer { due: now + Duration::from_secs_f32(timer), target, undo: before.unwrap_or(undo) });
+            }
+        }
+    }
     result
 }
 
-/// `apply`'s work; `shown`: the slots' Show settings to write
-fn ask(args: &Value, source: Ptr, remote: &Shared, shown: &mut Option<Vec<bool>>) -> Result<(), String> {
+/// Timed commands whose time is up, undone. Call every frame
+pub fn run_due(source: Ptr, remote: &Shared) {
+    run_due_at(source, remote, Instant::now());
+}
+
+fn run_due_at(source: Ptr, remote: &Shared, now: Instant) {
+    let due: Vec<Timer> = {
+        let mut r = remote.lock().unwrap();
+        if r.timers.is_empty() {
+            return;
+        }
+        let (due, wait) = std::mem::take(&mut r.timers).into_iter().partition(|t| t.due <= now);
+        r.timers = wait;
+        due
+    };
+    for t in due {
+        match t.undo {
+            Undo::Args(args) => {
+                if let Err(e) = apply_at(&args, source, remote, now) {
+                    crate::log(&format!("[Puppet] Timer ran out, undoing failed: {e}"));
+                }
+            }
+            Undo::Tiles { layer, materials, before, fade } => remote.lock().unwrap().put_tiles(layer, &materials, before, fade),
+        }
+    }
+}
+
+/// `apply`'s work; `shown`: the slots' Show settings to write; `undo`: what
+/// was changed (a name for it) and how to undo it, for a timer
+fn ask(args: &Value, source: Ptr, remote: &Shared, shown: &mut Option<Vec<bool>>, undo: &mut Option<(String, Undo)>) -> Result<(), String> {
     let text = |k: &str| args.get(k).and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
     let action = text("action");
     let fade = number(args, "fade", 0.0, 0.0, 60.0);
     let mut r = remote.lock().unwrap();
-    if matches!(action.as_str(), "glb" | "group" | "shape_anim") {
+    if matches!(action.as_str(), "glb" | "group" | "shape_anim" | "shown") {
         r.pending_fade = fade;
+    }
+    // The Show settings now, to go back to
+    if matches!(action.as_str(), "glb" | "group") {
+        *undo = Some(("shown".into(), Undo::Args(json!({ "action": "shown", "shown": effective(&r.shown, &r.groups), "fade": fade }))));
     }
     match action.as_str() {
         "animation" => {
@@ -407,6 +516,7 @@ fn ask(args: &Value, source: Ptr, remote: &Shared, shown: &mut Option<Vec<bool>>
                     if !clip.is_empty() && !r.animation.clips.contains(&clip) {
                         return Err(format!("no animation \"{clip}\""));
                     }
+                    *undo = Some(("animation".into(), Undo::Args(json!({ "action": "animation", "mode": "loop", "clip": r.animation.loop_clip }))));
                     drop(r);
                     // The source's setting: saved, and its properties agree
                     crate::source::set_string_setting(source, crate::source::S_ANIMATION, &clip);
@@ -416,6 +526,7 @@ fn ask(args: &Value, source: Ptr, remote: &Shared, shown: &mut Option<Vec<bool>>
                         return Err(format!("no animation \"{clip}\""));
                     }
                     r.animation.play = Some(clip);
+                    *undo = Some(("animation".into(), Undo::Args(json!({ "action": "animation", "mode": "stop" }))));
                 }
             }
         }
@@ -451,7 +562,14 @@ fn ask(args: &Value, source: Ptr, remote: &Shared, shown: &mut Option<Vec<bool>>
                     fade,
                 })
             };
+            if action == "shape" && drive.is_some() {
+                *undo = Some((format!("shape {layer} {}", key.to_ascii_lowercase()), Undo::Args(json!({ "action": "shape", "glb": layer, "key": key, "state": "off" }))));
+            }
             r.shapes.push((layer, key, drive));
+        }
+        // A timer's undo of `glb` / `group`: the Show settings as they were
+        "shown" => {
+            *shown = Some(args.get("shown").and_then(|v| v.as_array()).map(|a| a.iter().map(|b| b.as_bool().unwrap_or(true)).collect()).unwrap_or_default());
         }
         "glb" => {
             let layer = r.layer(args.get("glb"))?;
@@ -470,7 +588,7 @@ fn ask(args: &Value, source: Ptr, remote: &Shared, shown: &mut Option<Vec<bool>>
             let name = text("name");
             let mut tile = if !name.is_empty() {
                 let t = glb.tiles.iter().find(|t| t.name.eq_ignore_ascii_case(&name)).ok_or_else(|| format!("GLB {layer} has no tile \"{name}\""))?;
-                ActiveTile { layer, name: t.name.clone(), binds: t.binds.clone(), weight, grid: None }
+                ActiveTile { layer, name: t.name.clone(), binds: t.binds.clone(), weight, grid: None, key: None }
             } else {
                 let mat_name = text("material");
                 let material = glb.materials.iter().position(|m| m.eq_ignore_ascii_case(&mat_name)).ok_or_else(|| format!("GLB {layer} has no material \"{mat_name}\""))?;
@@ -483,14 +601,17 @@ fn ask(args: &Value, source: Ptr, remote: &Shared, shown: &mut Option<Vec<bool>>
                     "random" => (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0) / 7) % (columns * rows),
                     _ => number(args, "cell", 0.0, 0.0, 1_000_000.0).round() as u32,
                 } % (columns * rows);
-                ActiveTile { layer, name: String::new(), binds: vec![(material, grid_cell(columns, rows, cell))], weight, grid: Some((columns, rows, cell)) }
+                ActiveTile { layer, name: String::new(), binds: vec![(material, grid_cell(columns, rows, cell))], weight, grid: Some((columns, rows, cell)), key: None }
             };
-            let materials: Vec<usize> = tile.binds.iter().map(|(m, _)| *m).collect();
-            // The crossfade its materials take (on, and off)
-            for &m in &materials {
-                r.tile_fade.retain(|(k, _)| *k != (layer, m));
-                r.tile_fade.push(((layer, m), fade));
+            // A shape key held with it
+            let key = text("key");
+            if !key.is_empty() {
+                let found = glb.keys.iter().find(|k| k.eq_ignore_ascii_case(&key)).ok_or_else(|| format!("GLB {layer} has no shape key \"{key}\""))?;
+                tile.key = Some((found.clone(), number(args, "key_value", 1.0, 0.0, 1.0)));
             }
+            let mut materials: Vec<usize> = tile.binds.iter().map(|(m, _)| *m).collect();
+            materials.sort();
+            *undo = Some((format!("tile {layer} {materials:?}"), Undo::Tiles { layer, materials: materials.clone(), before: r.tiles_on(layer, &materials), fade }));
             // Already showing: the same named tile, or the same cell of a grid
             let showing = r.tiles.iter().any(|t| t.layer == layer && if tile.name.is_empty() { t.name.is_empty() && t.binds == tile.binds } else { t.name == tile.name });
             let on = match state.as_str() {
@@ -498,18 +619,18 @@ fn ask(args: &Value, source: Ptr, remote: &Shared, shown: &mut Option<Vec<bool>>
                 "toggle" => !showing,
                 _ => true,
             };
-            // One tile per material: what was on those materials goes
-            r.tiles.retain(|t| !(t.layer == layer && t.binds.iter().any(|(m, _)| materials.contains(m))));
-            if on {
-                tile.weight = weight;
-                r.tiles.push(tile);
-            }
+            // One tile per material: what was on those materials goes (the
+            // crossfade its materials take, on and off)
+            tile.weight = weight;
+            r.put_tiles(layer, &materials, if on { vec![tile] } else { Vec::new() }, fade);
         }
         "color" => {
             let slot = args.get("slot").and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))).ok_or("no slot")? as u32;
             let color = text("color");
             drop(r);
             let rgb = if color.eq_ignore_ascii_case("reset") { None } else { Some(parse_color(&color).ok_or_else(|| format!("colour \"{color}\": #rrggbb or reset"))?) };
+            let before = crate::source::get_color_setting(source, slot).map_or_else(|| "reset".to_string(), |c| format!("#{:02x}{:02x}{:02x}", (c[0] * 255.0).round() as u8, (c[1] * 255.0).round() as u8, (c[2] * 255.0).round() as u8));
+            *undo = Some((format!("color {slot}"), Undo::Args(json!({ "action": "color", "slot": slot, "color": before }))));
             crate::source::set_color_setting(source, slot, rgb);
         }
         "list" | "" => {}
@@ -648,7 +769,7 @@ mod tests {
         assert_eq!(grid_cell(4, 2, 5), [0.25, 0.5, 0.25, 0.5]);
         assert_eq!(grid_cell(3, 3, 9), grid_cell(3, 3, 0));
         let base = crate::model::UV_IDENTITY;
-        let t = |weight| ActiveTile { layer: 0, name: "x".into(), binds: vec![(2, [0.5, 0.5, 0.5, 0.0])], weight, grid: None };
+        let t = |weight| ActiveTile { layer: 0, name: "x".into(), binds: vec![(2, [0.5, 0.5, 0.5, 0.0])], weight, grid: None, key: None };
         assert_eq!(tiled(base, &[t(1.0)], 0, 2), Some([0.5, 0.5, 0.5, 0.0]));
         assert_eq!(tiled(base, &[t(0.5)], 0, 2), Some([0.75, 0.75, 0.25, 0.0]));
         assert_eq!(tiled(base, &[t(1.0)], 0, 1), None);
@@ -673,6 +794,51 @@ mod tests {
         r.update_hidden();
         r.step_fade(0.01);
         assert_eq!(r.fade[1], 1.0);
+    }
+
+    #[test]
+    fn a_tile_holds_its_key_and_its_timer_puts_back_the_one_before() {
+        let tile = |n: &str| crate::model::Tile { name: n.into(), binds: vec![(0, [0.5, 0.5, 0.0, 0.0])] };
+        let remote: Shared = Arc::new(Mutex::new(Remote {
+            glbs: vec![GlbInfo { name: "Armature".into(), keys: vec!["Blush".into(), "Fcl_MTH_A".into()], materials: vec!["Skin".into()], tiles: vec![tile("Red"), tile("Blue")] }],
+            ..Default::default()
+        }));
+        let source = std::ptr::null_mut();
+        let start = Instant::now();
+        let at = |s: f32| start + Duration::from_secs_f32(s);
+        // Red, for good
+        apply_at(&json!({ "action": "tile", "name": "Red" }), source, &remote, at(0.0)).unwrap();
+        // Blue with its key, 5 s; then again 3 s later for 5 s more
+        let blue = json!({ "action": "tile", "name": "blue", "key": "blush", "key_value": 0.6, "timer": 5 });
+        apply_at(&blue, source, &remote, at(1.0)).unwrap();
+        assert!(apply_at(&json!({ "action": "tile", "name": "Blue", "key": "nope" }), source, &remote, at(1.0)).is_err());
+        {
+            let mut r = remote.lock().unwrap();
+            assert_eq!(r.tiles.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["Blue"]);
+            assert_eq!(std::mem::take(&mut r.shapes), vec![(0, "Blush".to_string(), Some(Drive::Hold(0.6)))]);
+        }
+        apply_at(&blue, source, &remote, at(4.0)).unwrap();
+        assert_eq!(remote.lock().unwrap().timers.len(), 1);
+        remote.lock().unwrap().shapes.clear();
+        // The first timer's time: nothing yet
+        run_due_at(source, &remote, at(6.5));
+        assert_eq!(remote.lock().unwrap().tiles[0].name, "Blue");
+        // The second's: Red back (as before the first), the key let go
+        run_due_at(source, &remote, at(9.5));
+        let r = remote.lock().unwrap();
+        assert_eq!(r.tiles.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["Red"]);
+        assert_eq!(r.shapes, vec![(0, "Blush".to_string(), None)]);
+        assert!(r.timers.is_empty());
+    }
+
+    #[test]
+    fn a_timed_shape_key_goes_off() {
+        let remote: Shared = Arc::new(Mutex::new(Remote { glbs: vec![GlbInfo { name: "A".into(), keys: vec!["Fcl_MTH_A".into()], ..Default::default() }], ..Default::default() }));
+        let start = Instant::now();
+        apply_at(&json!({ "action": "shape", "key": "Fcl_MTH_A", "timer": "2" }), std::ptr::null_mut(), &remote, start).unwrap();
+        remote.lock().unwrap().shapes.clear();
+        run_due_at(std::ptr::null_mut(), &remote, start + Duration::from_secs(3));
+        assert_eq!(remote.lock().unwrap().shapes, vec![(0, "Fcl_MTH_A".to_string(), None)]);
     }
 
     #[test]
