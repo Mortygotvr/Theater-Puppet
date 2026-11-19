@@ -172,23 +172,26 @@ impl Prop {
 /// The fingers holding the controller, pressing what's pressed (left, right)
 /// `thumb_lift`: the thumbs raised (+, radians at each joint) or lowered (-)
 pub fn fingers(pad: &Pad, thumb_lift: f32) -> [Hand; 2] {
-    // Around the grip: middle, ring and little fingers closed
+    // Around the grip: ring and little fingers closed
     let grip = |h: &mut Hand| {
-        h.bend[2] = [1.0, 1.2, 0.8];
         h.bend[3] = [1.1, 1.25, 0.85];
         h.bend[4] = [1.2, 1.3, 0.9];
     };
-    // The index resting on its trigger (it stays put when the trigger is
-    // pulled: the trigger moves, not the finger), or pressing its bumper: a
-    // little lifted at the knuckle (the bumper is above), the end joints
-    // curled down onto it
+    // The index resting by its bumper, or pressing it: a little lifted at
+    // the knuckle (the bumper is above), the end joints curled down onto it
     let index = |h: &mut Hand, bumper: bool| {
         h.bend[1] = if bumper { [0.35, 0.85, 0.65] } else { [0.55, 0.6, 0.45] };
+    };
+    // The middle finger on the trigger, curling in as it's pulled
+    let middle = |h: &mut Hand, trigger: f32| {
+        let t = trigger.clamp(0.0, 1.0);
+        h.bend[2] = [0.6 + t * 0.4, 0.7 + t * 0.5, 0.5 + t * 0.35];
     };
 
     let mut left = Hand::default();
     grip(&mut left);
     index(&mut left, pad.pressed(button::LB));
+    middle(&mut left, pad.left_trigger);
     // The left thumb: on the stick, down on the d-pad when it's pressed
     let dpad = pad.buttons & (button::UP | button::DOWN | button::LEFT | button::RIGHT) != 0;
     left.bend[0] = if dpad { [0.55, 0.5, 0.45] } else { [0.35, 0.35 - pad.left_stick[1] * 0.15, 0.25] };
@@ -197,6 +200,7 @@ pub fn fingers(pad: &Pad, thumb_lift: f32) -> [Hand; 2] {
     let mut right = Hand::default();
     grip(&mut right);
     index(&mut right, pad.pressed(button::RB));
+    middle(&mut right, pad.right_trigger);
     // The right thumb (as seen live: its buttons and stick were the wrong
     // way round). At rest on the right stick, riding it as the left thumb
     // rides its own; ABXY the deep reach, as the d-pad is for the left
@@ -281,7 +285,8 @@ mod tests {
         let a = fingers(&Pad { buttons: button::A, ..Default::default() }, 0.0);
         assert!(a[1].bend[0][0] > rest[1].bend[0][0]);
         let lt = fingers(&Pad { left_trigger: 1.0, ..Default::default() }, 0.0);
-        // The trigger pulled: the index stays put
+        // The trigger pulled: the middle finger curls, the index stays put
+        assert!(lt[0].bend[2][1] > rest[0].bend[2][1]);
         assert_eq!(lt[0].bend[1], rest[0].bend[1]);
         let lb = fingers(&Pad { buttons: button::LB, ..Default::default() }, 0.0);
         // A bumper: the knuckle lifts, the end joints curl onto it (not pointing)
