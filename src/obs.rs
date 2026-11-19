@@ -46,6 +46,8 @@ pub const OBS_GROUP_NORMAL: u32 = 1;
 pub type ModifiedCallback = unsafe extern "C" fn(Ptr, Ptr, Ptr) -> bool;
 /// A button's click (properties, the button, the value given with it): true redraws the properties
 pub type ButtonCallback = unsafe extern "C" fn(Ptr, Ptr, Ptr) -> bool;
+/// obs_enum_sources / obs_enum_scenes's callback (its value, a source): true goes on
+pub type EnumProc = unsafe extern "C" fn(Ptr, Ptr) -> bool;
 pub const OBS_EFFECT_DEFAULT: u32 = 0;
 
 /// libobs's gs_vb_data (vec3 is 16 bytes: an SSE register)
@@ -147,6 +149,13 @@ api! {
     obs_properties_add_button2: fn(Ptr, *const c_char, *const c_char, ButtonCallback, Ptr) -> Ptr;
     obs_properties_set_param: fn(Ptr, Ptr, Ptr);
     obs_properties_get_param: fn(Ptr) -> Ptr;
+    obs_get_source_by_name: fn(*const c_char) -> Ptr;
+    obs_source_release: fn(Ptr);
+    obs_source_get_width: fn(Ptr) -> u32;
+    obs_source_get_height: fn(Ptr) -> u32;
+    obs_source_video_render: fn(Ptr);
+    obs_enum_sources: fn(EnumProc, Ptr);
+    obs_enum_scenes: fn(EnumProc, Ptr);
     obs_data_set_int: fn(Ptr, *const c_char, i64);
     obs_source_update: fn(Ptr, Ptr);
     obs_source_enabled: fn(Ptr) -> bool;

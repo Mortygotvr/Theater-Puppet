@@ -75,6 +75,41 @@ const S_CONTROLLER_FORWARD: &CStr = c"controller_forward";
 const S_HAND_UP: &CStr = c"controller_hand_up";
 const S_HAND_APART: &CStr = c"controller_hand_apart";
 const S_HAND_ROLL: &CStr = c"controller_hand_roll";
+/// A reflection: an OBS source's picture on the avatar (render.rs), how much,
+/// flat or 360, how the 360 one is turned (degrees)
+const S_REFLECTION_SOURCE: &CStr = c"reflection_source";
+const S_REFLECTION_STRENGTH: &CStr = c"reflection_strength";
+const S_REFLECTION_MAPPING: &CStr = c"reflection_mapping";
+const S_REFLECTION_TURN: &CStr = c"reflection_turn";
+
+/// The reflection's settings
+#[derive(Clone, Default)]
+struct ReflectionSettings {
+    source: String,
+    strength: f32,
+    flat: bool,
+    turn: f32,
+}
+
+/// Every source's and scene's name, for the reflection's list
+fn source_names() -> Vec<String> {
+    unsafe extern "C" fn add(list: Ptr, source: Ptr) -> bool {
+        let list = unsafe { &mut *(list as *mut Vec<String>) };
+        let p = unsafe { (obs::api().obs_source_get_name)(source) };
+        if !p.is_null() {
+            list.push(unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned());
+        }
+        true
+    }
+    let mut list: Vec<String> = Vec::new();
+    unsafe {
+        (obs::api().obs_enum_scenes)(add, &mut list as *mut Vec<String> as Ptr);
+        (obs::api().obs_enum_sources)(add, &mut list as *mut Vec<String> as Ptr);
+    }
+    list.sort();
+    list.dedup();
+    list
+}
 const S_HAND_FORWARD: &CStr = c"controller_hand_forward";
 const S_THUMB_LIFT: &CStr = c"controller_thumb_lift";
 
@@ -223,6 +258,8 @@ struct Puppet {
     prop_generation: Arc<AtomicU64>,
     prop_loaded: Arc<Mutex<Option<(u64, Option<Arc<Model>>)>>>,
     prop_model: Mutex<Option<Arc<Model>>>,
+    /// Its reflection's settings
+    reflection: Mutex<ReflectionSettings>,
     gpu: Mutex<Option<Gpu>>,
     /// Its skeleton, springs and posed vertices (motion.rs)
     rig: Mutex<Option<Rig>>,
@@ -492,6 +529,21 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
             (api.obs_properties_add_float_slider)(props, S_HAND_ROLL.as_ptr(), c"Controller: hands rotation (degrees)".as_ptr(), -90.0, 90.0, 1.0);
             (api.obs_properties_add_float_slider)(props, S_HAND_FORWARD.as_ptr(), c"Controller: hands back (-) or forward (+), metres".as_ptr(), -0.1, 0.1, 0.005);
             (api.obs_properties_add_float_slider)(props, S_THUMB_LIFT.as_ptr(), c"Controller: thumbs lower (-) or higher (+)".as_ptr(), -0.6, 0.6, 0.02);
+            // A reflection: another source's picture on the avatar
+            let own = get_string_of(puppet.source);
+            let group = (api.obs_properties_create)();
+            let list = (api.obs_properties_add_list)(group, S_REFLECTION_SOURCE.as_ptr(), c"Source reflected".as_ptr(), obs::OBS_COMBO_TYPE_LIST, obs::OBS_COMBO_FORMAT_STRING);
+            (api.obs_property_list_add_string)(list, c"(none)".as_ptr(), c"".as_ptr());
+            for name in source_names().into_iter().filter(|n| *n != own) {
+                let n = cstring(&name);
+                (api.obs_property_list_add_string)(list, n.as_ptr(), n.as_ptr());
+            }
+            (api.obs_properties_add_float_slider)(group, S_REFLECTION_STRENGTH.as_ptr(), c"Strength".as_ptr(), 0.0, 1.0, 0.01);
+            let mapping = (api.obs_properties_add_list)(group, S_REFLECTION_MAPPING.as_ptr(), c"The picture is".as_ptr(), obs::OBS_COMBO_TYPE_LIST, obs::OBS_COMBO_FORMAT_STRING);
+            (api.obs_property_list_add_string)(mapping, c"360 (equirectangular)".as_ptr(), c"360".as_ptr());
+            (api.obs_property_list_add_string)(mapping, c"Flat (a mirror ball facing the camera)".as_ptr(), c"flat".as_ptr());
+            (api.obs_properties_add_float_slider)(group, S_REFLECTION_TURN.as_ptr(), c"360: turn (degrees)".as_ptr(), -180.0, 180.0, 1.0);
+            (api.obs_properties_add_group)(props, c"reflection".as_ptr(), c"Reflection".as_ptr(), obs::OBS_GROUP_NORMAL, group);
             (api.obs_properties_add_path)(props, S_CONTROLLER_MODEL.as_ptr(), c"Controller it holds (when Arms are on the Controller input; empty: the built-in one)".as_ptr(), obs::OBS_PATH_FILE, c"glTF (*.glb *.gltf)".as_ptr(), std::ptr::null());
         }
         // Colour slots (Theater Rig's Color<N>): the avatar's and its extras'
@@ -721,6 +773,7 @@ unsafe extern "C" fn create(settings: Ptr, source: Ptr) -> Ptr {
         prop_generation: Arc::new(AtomicU64::new(0)),
         prop_loaded: Arc::new(Mutex::new(None)),
         prop_model: Mutex::new(None),
+        reflection: Mutex::new(ReflectionSettings::default()),
         gpu: Mutex::new(None),
         rig: Mutex::new(None),
         motion: Mutex::new(Motion::default()),
@@ -768,6 +821,16 @@ unsafe extern "C" fn get_height(data: Ptr) -> u32 {
     unsafe { &*(data as *const Puppet) }.height.load(Ordering::Relaxed)
 }
 
+fn api_of() -> &'static obs::Api {
+    obs::api()
+}
+
+/// A source's name
+fn get_string_of(source: Ptr) -> String {
+    let p = unsafe { (obs::api().obs_source_get_name)(source) };
+    if p.is_null() { String::new() } else { unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned() }
+}
+
 fn get_string(settings: Ptr, name: &CStr) -> String {
     let p = unsafe { (obs::api().obs_data_get_string)(settings, name.as_ptr()) };
     if p.is_null() { String::new() } else { unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned() }
@@ -800,6 +863,12 @@ unsafe extern "C" fn update(data: Ptr, settings: Ptr) {
         };
     }
     puppet.remote.lock().unwrap().animation.loop_clip = get_string(settings, S_ANIMATION);
+    *puppet.reflection.lock().unwrap() = ReflectionSettings {
+        source: get_string(settings, S_REFLECTION_SOURCE),
+        strength: unsafe { (api.obs_data_get_double)(settings, S_REFLECTION_STRENGTH.as_ptr()) } as f32,
+        flat: get_string(settings, S_REFLECTION_MAPPING) == "flat",
+        turn: unsafe { (api.obs_data_get_double)(settings, S_REFLECTION_TURN.as_ptr()) } as f32,
+    };
     *puppet.colors.lock().unwrap() = (0..COLOR_SLOTS)
         .filter(|&s| unsafe { (api.obs_data_get_bool)(settings, color_on_key(s).as_ptr()) })
         .map(|s| (s, obs_to_rgb(unsafe { (api.obs_data_get_int)(settings, color_key(s).as_ptr()) })))
@@ -1187,6 +1256,10 @@ fn stack(running: &[Option<Running>; SLOTS]) -> (String, String, Frame) {
 
 unsafe extern "C" fn video_render(data: Ptr, _effect: Ptr) {
     let puppet = unsafe { &*(data as *const Puppet) };
+    // Inside a Puppet's reflection source: not drawn (no endless mirror)
+    if crate::render::IN_REFLECTION.with(|f| f.get()) {
+        return;
+    }
     let mut gpu = puppet.gpu.lock().unwrap();
     // The GLBs drawn with it, newly loaded
     let mut extras_changed = false;
@@ -1310,7 +1383,21 @@ unsafe extern "C" fn video_render(data: Ptr, _effect: Ptr) {
         let view = placed(puppet);
         let (width, height) = (puppet.width.load(Ordering::Relaxed), puppet.height.load(Ordering::Relaxed));
         let filters = filter_chain(puppet);
-        g.draw(width, height, view, s, &frame, &filters);
+        // The reflection's picture: its source drawn now
+        let r = puppet.reflection.lock().unwrap().clone();
+        let reflection = (!r.source.is_empty() && r.strength > 0.0)
+            .then(|| {
+                let name = cstring(&r.source);
+                let source = unsafe { (api_of().obs_get_source_by_name)(name.as_ptr()) };
+                if source.is_null() {
+                    return None;
+                }
+                let texture = g.render_source(source);
+                unsafe { (api_of().obs_source_release)(source) };
+                texture.map(|texture| crate::render::Reflection { texture, strength: r.strength, flat: r.flat, turn: r.turn.to_radians() })
+            })
+            .flatten();
+        g.draw(width, height, view, s, &frame, &filters, reflection);
         // The body parts map, for Theater Scene
         if let Some(pixels) = g.parts(width, height, view, s) {
             let map = crate::parts::PartMap { pixels, width, height };

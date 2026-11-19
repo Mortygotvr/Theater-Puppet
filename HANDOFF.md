@@ -165,6 +165,17 @@ MediaPipe notes:
   `controller/make_gamepad.py` (Blender), which documents the node names a
   user's own controller GLB needs (source setting "Controller it holds").
 
+## Reflection
+
+- Source properties → Reflection: an OBS source (or scene) drawn each frame
+  into `Gpu::env_rt` (`render_source`), sampled in `puppet.effect` after
+  the style by the reflected view direction: 360 (equirectangular, a turn)
+  or flat (a mirror ball facing the camera); some everywhere, more at
+  grazing angles. A Puppet drawn while a reflection source is being drawn
+  draws nothing (`IN_REFLECTION`), so a scene containing itself can't loop
+  or deadlock. It's everywhere equally: materials' metallic / roughness
+  aren't read yet (the next step if only some parts should shine).
+
 ## Microphone lipsync
 
 - The "🎤 Puppet Lipsync" **audio filter** (`src/lipsync.rs`), put on the

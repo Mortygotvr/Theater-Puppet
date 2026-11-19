@@ -3,6 +3,15 @@
 What's built but not yet tried live, newest first. Tick it (or tell Claude
 what went wrong) and it comes off the list.
 
+## Reflection
+- [ ] Puppet properties → Reflection: pick your 360 background, strength
+      ~0.3, "360": the avatar picks up its colours, more at the edges.
+- [ ] "360: turn" lines the reflection up with the room.
+- [ ] A flat source (a game capture) with "Flat".
+- [ ] A scene that contains the Puppet itself: no freeze (the Puppet is
+      left out of its own reflection).
+- [ ] Cost: OBS's GPU time with it on (it draws the source once more a frame).
+
 ## Microphone lipsync
 - [ ] Your mic source → Filters → add "🎤 Puppet Lipsync" (after noise
       suppression). Talking opens the avatar's mouth; silence keeps it shut

@@ -21,6 +21,19 @@ uniform float glb_fade;
 // to (uv * xy + zw), and how far the new one has come in (1 = all of it)
 uniform float4 tile_map;
 uniform float tile_mix;
+// A reflection (the source's "Reflection" settings): an OBS source's picture,
+// how much of it (0 = none), a flat picture (1) or a 360 one (0), and how the
+// 360 one is turned (radians)
+uniform texture2d env;
+uniform float env_strength;
+uniform float env_flat;
+uniform float env_turn;
+
+sampler_state env_sampler {
+	Filter   = Linear;
+	AddressU = Wrap;
+	AddressV = Clamp;
+};
 
 sampler_state tex_sampler {
 	Filter   = Linear;
@@ -103,6 +116,23 @@ float4 PSPuppet(VertOut v) : TARGET
 	s.screen = v.pos.xy;
 	s.time = time;
 	float4 c = style(s);
+	// The reflection, over the style's colour: some everywhere, more at grazing angles
+	if (env_strength > 0.0) {
+		float3 r = reflect(-s.view, s.normal);
+		float2 at;
+		if (env_flat > 0.5) {
+			// A flat picture, as a mirror ball facing the camera (the avatar's
+			// left is the picture's right as the camera sees it)
+			at = float2(0.5 + r.x * 0.5, 0.5 - r.y * 0.5);
+		} else {
+			// A 360 picture (equirectangular): around, and up and down
+			float around = atan2(r.x, r.z) + env_turn;
+			at = float2(frac(0.5 - around / 6.2831853), acos(clamp(r.y, -1.0, 1.0)) / 3.1415927);
+		}
+		float3 e = env.Sample(env_sampler, at).rgb;
+		float grazing = 0.25 + 0.75 * pow(1.0 - saturate(dot(s.normal, s.view)), 3.0);
+		c.rgb = lerp(c.rgb, e, saturate(env_strength * grazing));
+	}
 	// Opaque and cut-out materials are solid where they're drawn
 	return float4(c.rgb, lerp(1.0, c.a, blended));
 }

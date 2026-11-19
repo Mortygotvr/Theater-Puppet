@@ -119,6 +119,26 @@ struct Params {
     glb_fade: Ptr,
     tile_map: Ptr,
     tile_mix: Ptr,
+    env: Ptr,
+    env_strength: Ptr,
+    env_flat: Ptr,
+    env_turn: Ptr,
+}
+
+/// A reflection this frame: the picture (an OBS source drawn), how much of
+/// it, flat or 360, how the 360 one is turned (radians)
+#[derive(Clone, Copy, Debug)]
+pub struct Reflection {
+    pub texture: Ptr,
+    pub strength: f32,
+    pub flat: bool,
+    pub turn: f32,
+}
+
+thread_local! {
+    /// A Puppet's reflection source being drawn: a Puppet inside it (a scene
+    /// with itself in it) draws nothing (no endless mirror, no deadlock)
+    pub static IN_REFLECTION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// The effect a style's code compiles into
@@ -154,6 +174,8 @@ struct FrameValues<'a> {
     /// Seconds since Puppet loaded (wraps every hour, for float precision)
     time: f32,
     frame: &'a Frame,
+    /// The reflection (the picture draw only)
+    reflection: Option<Reflection>,
 }
 
 fn seconds() -> f32 {
@@ -187,6 +209,10 @@ impl Shader {
             glb_fade: p("glb_fade"),
             tile_map: p("tile_map"),
             tile_mix: p("tile_mix"),
+            env: p("env"),
+            env_strength: p("env_strength"),
+            env_flat: p("env_flat"),
+            env_turn: p("env_turn"),
         };
         let mut numeric = Vec::new();
         unsafe {
@@ -219,6 +245,12 @@ impl Shader {
             (api.gs_effect_set_float)(p.outline_jitter, v.frame.outline_jitter);
             (api.gs_effect_set_float)(p.outline_boil, v.frame.outline_boil);
             (api.gs_effect_set_float)(p.time, v.time);
+            if let Some(r) = v.reflection.filter(|r| !r.texture.is_null() && r.strength > 0.0) {
+                (api.gs_effect_set_texture)(p.env, r.texture);
+                (api.gs_effect_set_float)(p.env_strength, r.strength);
+                (api.gs_effect_set_float)(p.env_flat, if r.flat { 1.0 } else { 0.0 });
+                (api.gs_effect_set_float)(p.env_turn, r.turn);
+            }
             self.set_uniforms(v.frame);
         }
     }
@@ -358,6 +390,8 @@ pub struct Gpu {
     pub colors: std::sync::Mutex<std::collections::HashMap<u32, [f32; 3]>>,
     /// How much of each layer shows (0 not drawn, below 1 dissolving; missing: 1)
     pub fade: std::sync::Mutex<Vec<f32>>,
+    /// Where a reflection source is drawn (render_source)
+    env_rt: Ptr,
     /// The controller's layer (controller.rs): left out of the parts map
     pub prop_layer: std::sync::Mutex<Option<usize>>,
     /// Each mesh's texture placement now (set_uvs), and its crossfade
@@ -448,6 +482,7 @@ impl Gpu {
         let gbuf = unsafe { (api.gs_texrender_create)(obs::GS_RGBA16F, obs::GS_Z24_S8) };
         let inked = unsafe { (api.gs_texrender_create)(obs::GS_RGBA, obs::GS_ZS_NONE) };
         let parts_rt = unsafe { (api.gs_texrender_create)(obs::GS_RGBA, obs::GS_Z24_S8) };
+        let env_rt = unsafe { (api.gs_texrender_create)(obs::GS_RGBA, obs::GS_ZS_NONE) };
         let chain = unsafe { [(api.gs_texrender_create)(obs::GS_RGBA, obs::GS_ZS_NONE), (api.gs_texrender_create)(obs::GS_RGBA, obs::GS_ZS_NONE)] };
         let unpremultiply = create_effect(UNPREMULTIPLY, c"unpremultiply.effect").unwrap_or_else(|e| {
             crate::log(&format!("[Puppet] ⚠️ The filters' straight-alpha step: {e}"));
@@ -479,6 +514,7 @@ impl Gpu {
             chain,
             unpremultiply,
             parts_rt,
+            env_rt,
             parts_stage: Default::default(),
             min: model.min,
             max: model.max,
@@ -512,7 +548,7 @@ impl Gpu {
 
     /// Draws the avatar into the current target, `width` x `height`, with
     /// `shader` and the style's `frame`.
-    pub fn draw(&self, width: u32, height: u32, view: View, shader: &Shader, frame: &Frame, filters: &[FilterPass]) {
+    pub fn draw(&self, width: u32, height: u32, view: View, shader: &Shader, frame: &Frame, filters: &[FilterPass], reflection: Option<Reflection>) {
         let api = obs::api();
         let cam = self.camera(width, height, view);
         unsafe {
@@ -531,6 +567,7 @@ impl Gpu {
                     eye: [cam.eye.x, cam.eye.y, cam.eye.z, 1.0],
                     time: seconds(),
                     frame,
+                    reflection,
                 };
 
                 // Solid and cut-out, then the outline around them, then the blended ones
@@ -684,6 +721,31 @@ impl Gpu {
         }
     }
 
+    /// An OBS source drawn into a texture of its own size (the reflection's
+    /// picture); None when it has no size or can't be drawn. A Puppet in
+    /// it draws nothing (IN_REFLECTION). Call on the graphics thread.
+    pub fn render_source(&self, source: Ptr) -> Option<Ptr> {
+        let api = obs::api();
+        unsafe {
+            let (w, h) = ((api.obs_source_get_width)(source), (api.obs_source_get_height)(source));
+            if w == 0 || h == 0 || self.env_rt.is_null() {
+                return None;
+            }
+            (api.gs_texrender_reset)(self.env_rt);
+            if !(api.gs_texrender_begin)(self.env_rt, w, h) {
+                return None;
+            }
+            (api.gs_clear)(obs::GS_CLEAR_COLOR, &[0.0; 4], 1.0, 0);
+            (api.gs_ortho)(0.0, w as f32, 0.0, h as f32, -100.0, 100.0);
+            IN_REFLECTION.with(|f| f.set(true));
+            (api.obs_source_video_render)(source);
+            IN_REFLECTION.with(|f| f.set(false));
+            (api.gs_texrender_end)(self.env_rt);
+            let t = (api.gs_texrender_get_texture)(self.env_rt);
+            (!t.is_null()).then_some(t)
+        }
+    }
+
     /// Layer `layer`'s posed vertices (pose::skin's, per primitive) into the
     /// GPU's buffers. Call on the graphics thread.
     pub fn update_vertices(&self, layer: usize, points: &[Vec<[f32; 4]>], normals: &[Vec<[f32; 4]>]) {
@@ -756,6 +818,7 @@ impl Gpu {
                 eye: [cam.eye.x, cam.eye.y, cam.eye.z, 1.0],
                 time: seconds(),
                 frame: &Frame::default(),
+                reflection: None,
             };
             (api.gs_texrender_reset)(self.parts_rt);
             if !(api.gs_texrender_begin)(self.parts_rt, w, h) {
@@ -845,6 +908,7 @@ impl Gpu {
             eye: [cam.eye.x, cam.eye.y, cam.eye.z, 1.0],
             time: seconds(),
             frame,
+            reflection: None,
         };
         unsafe {
             (api.gs_texrender_reset)(self.gbuf);
@@ -877,7 +941,7 @@ impl Gpu {
     unsafe fn ink(&self, picture: Ptr, gbuf: Ptr, width: u32, height: u32, frame: &Frame) -> Option<Ptr> {
         let api = obs::api();
         let ink = self.ink.as_ref()?;
-        let values = FrameValues { mvp: [0.0; 16], light: [0.0; 4], eye: [0.0; 4], time: seconds(), frame };
+        let values = FrameValues { mvp: [0.0; 16], light: [0.0; 4], eye: [0.0; 4], time: seconds(), frame, reflection: None };
         unsafe {
             (api.gs_texrender_reset)(self.inked);
             if !(api.gs_texrender_begin)(self.inked, width, height) {
@@ -991,6 +1055,7 @@ impl Gpu {
             }
             destroy_effect(self.unpremultiply);
             (api.gs_texrender_destroy)(self.parts_rt);
+            (api.gs_texrender_destroy)(self.env_rt);
             if let Some((surface, _, _)) = self.parts_stage.into_inner().ok().and_then(|s| s.surface) {
                 (api.gs_stagesurface_destroy)(surface);
             }
