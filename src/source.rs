@@ -137,7 +137,10 @@ const S_DESK_HANDS: &CStr = c"desk_hands";
 const S_DESK_LEFT: &CStr = c"desk_left_handed";
 const S_DESK_UP: &CStr = c"desk_up";
 const S_DESK_FORWARD: &CStr = c"desk_forward";
-const S_DESK_HAND_UP: &CStr = c"desk_hand_up";
+const S_DESK_LEFT_UP: &CStr = c"desk_left_hand_up";
+const S_DESK_RIGHT_UP: &CStr = c"desk_right_hand_up";
+const S_DESK_LEFT_FORWARD: &CStr = c"desk_left_hand_forward";
+const S_DESK_RIGHT_FORWARD: &CStr = c"desk_right_hand_forward";
 const S_DESK_HAND_TILT: &CStr = c"desk_hand_tilt";
 const S_DESK_CURL: &CStr = c"desk_curl";
 
@@ -609,7 +612,10 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
             (api.obs_properties_add_bool)(props, S_DESK_LEFT.as_ptr(), c"Keyboard & mouse: left-handed (the mouse on the left)".as_ptr());
             (api.obs_properties_add_float_slider)(props, S_DESK_UP.as_ptr(), c"Keyboard & mouse: desk lower (-) or higher (+), metres".as_ptr(), -0.25, 0.3, 0.01);
             (api.obs_properties_add_float_slider)(props, S_DESK_FORWARD.as_ptr(), c"Keyboard & mouse: desk closer (-) or farther (+), metres".as_ptr(), -0.2, 0.3, 0.01);
-            (api.obs_properties_add_float_slider)(props, S_DESK_HAND_UP.as_ptr(), c"Keyboard & mouse: hands lower (-) or higher (+), metres".as_ptr(), -0.1, 0.15, 0.005);
+            (api.obs_properties_add_float_slider)(props, S_DESK_LEFT_UP.as_ptr(), c"Keyboard & mouse: left hand lower (-) or higher (+), metres".as_ptr(), -0.1, 0.15, 0.005);
+            (api.obs_properties_add_float_slider)(props, S_DESK_LEFT_FORWARD.as_ptr(), c"Keyboard & mouse: left hand back (-) or forward (+), metres".as_ptr(), -0.1, 0.1, 0.005);
+            (api.obs_properties_add_float_slider)(props, S_DESK_RIGHT_UP.as_ptr(), c"Keyboard & mouse: right hand lower (-) or higher (+), metres".as_ptr(), -0.1, 0.15, 0.005);
+            (api.obs_properties_add_float_slider)(props, S_DESK_RIGHT_FORWARD.as_ptr(), c"Keyboard & mouse: right hand back (-) or forward (+), metres".as_ptr(), -0.1, 0.1, 0.005);
             (api.obs_properties_add_float_slider)(props, S_DESK_HAND_TILT.as_ptr(), c"Keyboard & mouse: hands tilted back (-) or forward (+), degrees".as_ptr(), -45.0, 45.0, 1.0);
             (api.obs_properties_add_float_slider)(props, S_DESK_CURL.as_ptr(), c"Keyboard & mouse: fingers straighter (-) or more curled (+)".as_ptr(), -0.6, 0.8, 0.02);
             // A reflection: another source's picture on the avatar
@@ -963,7 +969,8 @@ unsafe extern "C" fn update(data: Ptr, settings: Ptr) {
                     _ => crate::desk::HandMode::Gaming,
                 },
                 left_handed: (api.obs_data_get_bool)(settings, S_DESK_LEFT.as_ptr()),
-                hand_up: (api.obs_data_get_double)(settings, S_DESK_HAND_UP.as_ptr()) as f32,
+                hand_up: [S_DESK_LEFT_UP, S_DESK_RIGHT_UP].map(|k| (api.obs_data_get_double)(settings, k.as_ptr()) as f32),
+                hand_forward: [S_DESK_LEFT_FORWARD, S_DESK_RIGHT_FORWARD].map(|k| (api.obs_data_get_double)(settings, k.as_ptr()) as f32),
                 hand_tilt: (api.obs_data_get_double)(settings, S_DESK_HAND_TILT.as_ptr()) as f32,
                 curl: (api.obs_data_get_double)(settings, S_DESK_CURL.as_ptr()) as f32,
             },

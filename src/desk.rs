@@ -67,8 +67,10 @@ pub struct Look {
     pub hands: HandMode,
     /// The mouse on the left, the right hand on the keys (the arrows, gaming)
     pub left_handed: bool,
-    /// The hands raised (+) or lowered (-) over the keys and mouse, metres
-    pub hand_up: f32,
+    /// Each hand (left, right) raised (+) or lowered (-), and moved forward
+    /// (+, away from the user) or back (-), metres
+    pub hand_up: [f32; 2],
+    pub hand_forward: [f32; 2],
     /// The hands tilted forward (+, fingertips down) or back (-), degrees
     pub hand_tilt: f32,
     /// The fingers curled more (+) or less (-), radians at each joint
@@ -304,12 +306,12 @@ pub fn wrists(layout: &Layout, state: &State, look: &Look, input: &Desk) -> [Wri
             let hp = layout.key_at(h, look);
             Wrist {
                 // (Seen live: 4 cm over the keys was too low)
-                at: hp + Vec3::new(s * 0.5 * U, 0.07 + look.hand_up, -0.10) + state.shift[hand],
+                at: hp + Vec3::new(s * 0.5 * U, 0.07, -0.10) + state.shift[hand],
                 fingers: Vec3::new(-s * 0.12, -0.35, 1.0),
                 palm: Vec3::new(0.0, -1.0, 0.15),
             }
         });
-        let on_mouse = Wrist { at: layout.mouse_now(look, input) + Vec3::new(0.0, 0.065 + look.hand_up, -0.10), fingers: Vec3::new(0.0, -0.25, 1.0), palm: Vec3::new(0.0, -1.0, 0.1) };
+        let on_mouse = Wrist { at: layout.mouse_now(look, input) + Vec3::new(0.0, 0.065, -0.10), fingers: Vec3::new(0.0, -0.25, 1.0), palm: Vec3::new(0.0, -1.0, 0.1) };
         let keys = on_keys.unwrap_or(on_mouse);
         let t = if hand == mh { state.on_mouse } else { 0.0 };
         let w = if t <= 0.0 {
@@ -321,7 +323,9 @@ pub fn wrists(layout: &Layout, state: &State, look: &Look, input: &Desk) -> [Wri
             let lift = Vec3::Y * 0.05 * (t * std::f32::consts::PI).sin();
             Wrist { at: keys.at.lerp(on_mouse.at, t) + lift, fingers: keys.fingers.lerp(on_mouse.fingers, t), palm: keys.palm.lerp(on_mouse.palm, t) }
         };
-        Wrist { at: w.at, fingers: tilt * w.fingers, palm: tilt * w.palm }
+        // This hand's own sliders
+        let own = Vec3::new(0.0, look.hand_up[hand], look.hand_forward[hand]);
+        Wrist { at: w.at + own, fingers: tilt * w.fingers, palm: tilt * w.palm }
     })
 }
 
@@ -548,6 +552,10 @@ mod tests {
             assert!(forward[h].fingers.normalize().y < flat[h].fingers.normalize().y - 0.2);
             assert_eq!(forward[h].at, flat[h].at);
         }
+        // Each hand's own height and distance, the other left alone
+        let moved = wrists(&layout, &state, &Look { hand_up: [0.02, 0.0], hand_forward: [0.0, -0.03], ..Default::default() }, &still);
+        assert!((moved[0].at - flat[0].at - Vec3::new(0.0, 0.02, 0.0)).length() < 1e-6);
+        assert!((moved[1].at - flat[1].at - Vec3::new(0.0, 0.0, -0.03)).length() < 1e-6);
         let back = wrists(&layout, &state, &Look { hand_tilt: -20.0, ..Default::default() }, &still);
         assert!(back[0].fingers.normalize().y > flat[0].fingers.normalize().y);
         // Curl: every joint of the four fingers bends more, the thumb doesn't

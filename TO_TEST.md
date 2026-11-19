@@ -10,8 +10,11 @@ what went wrong) and it comes off the list.
 - [ ] W A S D, Space, Shift, Ctrl: the right fingers press and the keys sink.
       Other keys (Area, the default): only a tap of the hand on that side,
       no key sinks.
-- [ ] Moving the mouse moves the avatar's mouse and hand (also in a game
-      that holds the cursor); clicks bend the index / middle finger.
+- [ ] Moving the mouse moves the avatar's mouse and hand (now through a
+      mouse hook: also in a game that holds the cursor); clicks bend the
+      index / middle finger. Your own mouse doesn't feel any slower.
+- [ ] Each hand's own height and forward / back sliders; the tilt and
+      finger curl sliders.
 - [ ] Puppet properties → "Keyboard & mouse: hands": switching (both
       typing, the right hand goes to the mouse while you use it) and typing.
 - [ ] "What the keys show": Exact (every key) and Motion only.

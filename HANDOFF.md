@@ -169,9 +169,14 @@ MediaPipe notes:
 
 - Input `Source::Desk` (`src/tracking/desk.rs`): keys and mouse buttons
   polled with GetAsyncKeyState (as OBS reads hotkeys: nothing registered),
-  mouse movement through Raw Input on a message-only window of its own
-  (RIDEV_INPUTSINK; it moves even when a game holds the cursor). Only the
-  keys down now are kept, and a press count: never what was typed.
+  mouse movement through a low-level mouse hook (WH_MOUSE_LL: each move's
+  target minus the cursor now, so a game putting it back still counts).
+  Not Raw Input: one target per process, and other plugins' egui/winit
+  windows took it (the mouse never moved). The hook's thread waits with
+  MsgWaitForMultipleObjects, answering each move at once (the system waits
+  for it), and is per-monitor DPI-aware (the hook's pixels are physical).
+  The first move is logged with both positions. Only the keys down now are
+  kept, and a press count: never what was typed.
 - Arms on it: the prop is the desk GLB instead of the controller (the
   source loads whichever the Arms setting asks for, each frame:
   `load_prop`). `Prop` holds a `desk::Layout` when its GLB has a `keyboard`
