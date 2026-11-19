@@ -195,19 +195,22 @@ pub fn fingers(pad: &Pad, thumb_lift: f32) -> [Hand; 2] {
     let mut right = Hand::default();
     grip(&mut right);
     index(&mut right, pad.right_trigger, pad.pressed(button::RB));
-    // The right thumb: over ABXY, reaching for the one pressed; on the right stick when it's moved
-    let (bend, spread) = if pad.pressed(button::A) {
-        ([0.55, 0.5, 0.45], 0.0)
+    // The right thumb: the left one's mirror. At rest on ABXY as the left
+    // rests on its stick; a press is a small reach from there, at the left
+    // thumb's depth; on the right stick (lower and inward, as the d-pad is
+    // for the left) as the left thumb on the d-pad, riding the stick
+    let (bend, spread) = if moved(pad.right_stick) || pad.pressed(button::RS) {
+        ([0.55, 0.5 - pad.right_stick[1] * 0.15, 0.45], -0.12 + pad.right_stick[0] * 0.1)
+    } else if pad.pressed(button::A) {
+        ([0.4, 0.4, 0.35], 0.0)
     } else if pad.pressed(button::Y) {
-        ([0.2, 0.25, 0.3], 0.0)
+        ([0.3, 0.25, 0.3], 0.0)
     } else if pad.pressed(button::X) {
-        ([0.4, 0.4, 0.4], 0.12)
+        ([0.35, 0.4, 0.35], 0.08)
     } else if pad.pressed(button::B) {
-        ([0.4, 0.4, 0.4], -0.12)
-    } else if moved(pad.right_stick) || pad.pressed(button::RS) {
-        ([0.6, 0.55 - pad.right_stick[1] * 0.15, 0.4], 0.15 - pad.right_stick[0] * 0.1)
+        ([0.35, 0.4, 0.35], -0.08)
     } else {
-        ([0.3, 0.35, 0.25], 0.0)
+        ([0.35, 0.35, 0.25], 0.0)
     };
     right.bend[0] = bend;
     // Thumbs higher than their bend says by default (they sank into the
