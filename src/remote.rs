@@ -48,7 +48,12 @@
 //!   base64), as `previews`: [{name, png}] (a grid's names are its cells).
 //!   Only the first Puppet (or `source`'s).
 //!
-//! It answers `{"ok", "error"?, "puppets"?, "previews"?}`.
+//! - `avatar` {source}: its tracking settings (`settings`: source.rs's
+//!   AVATAR_SETTINGS: Follow tracking, the controller's and the desk's
+//!   places, hands, models…), and `avatar_set` {source, values}: changes
+//!   some. For the Puppet Configuration window. Only that source.
+//!
+//! It answers `{"ok", "error"?, "puppets"?, "previews"?, "settings"?}`.
 
 use std::ffi::CStr;
 use std::sync::{Arc, Mutex};
@@ -678,6 +683,18 @@ pub fn answer(args: &str) -> String {
         .collect();
     let targets: Vec<&(Ptr, String, Shared)> = puppets.iter().filter(|(_, n, _)| which.is_empty() || *n == which).collect();
     let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("list");
+    if action == "avatar" || action == "avatar_set" {
+        let Some((source, _, _)) = targets.first() else {
+            return json!({ "ok": false, "error": "no Puppet source" }).to_string();
+        };
+        if action == "avatar_set" {
+            let values = args.get("values").and_then(|v| v.as_object()).cloned().unwrap_or_default();
+            if let Err(e) = crate::source::set_avatar_settings(*source, &values) {
+                return json!({ "ok": false, "error": e }).to_string();
+            }
+        }
+        return json!({ "ok": true, "settings": crate::source::avatar_settings(*source) }).to_string();
+    }
     if action == "tile_previews" {
         return match targets.first() {
             None => json!({ "ok": false, "error": "no Puppet source" }),

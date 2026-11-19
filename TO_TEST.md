@@ -3,6 +3,18 @@
 What's built but not yet tried live, newest first. Tick it (or tell Claude
 what went wrong) and it comes off the list.
 
+## ⚙ Puppet Configuration window
+- [ ] 🎭 Theater menu → "⚙ Puppet Configuration…" opens a window (title bar,
+      taskbar button); its ✕ hides it, the menu opens it again.
+- [ ] Tabs: General, iFacialMocap, MeowFace, MediaPipe, SteamVR, VR telemetry,
+      Leap Motion, Controller, Keyboard & mouse. Each one's switches, address
+      (Enter or Apply), sliders and buttons work, and its "Now:" status updates.
+- [ ] General / Controller / Keyboard & mouse: the Puppet list (with two
+      Puppet sources) edits the one picked.
+- [ ] Puppet properties no longer show the controller / keyboard & mouse
+      options or "Follow tracking" (they're in the window).
+- [ ] Typing in an address box: the keys go to the window.
+
 ## Keyboard & mouse (the avatar at a desk)
 - [ ] Tracking window: turn on "Keyboard & mouse", set **Arms** to
       "Keyboard & mouse (at a desk)". The desk comes in front of the

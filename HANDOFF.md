@@ -165,6 +165,19 @@ MediaPipe notes:
   `controller/make_gamepad.py` (Blender), which documents the node names a
   user's own controller GLB needs (source setting "Controller it holds").
 
+## The Configuration window
+
+- `theater-scripts/puppet_configuration.rhai`, a Theater Scene Rhai script
+  of KIND "window" (Scene's egui_docks: a window of its own, made hidden at
+  startup, shown by its Theater menu entry, hidden by its ✕). A tab per
+  tracking method plus General (what tracks what, how it feels).
+- It asks `theater_puppet_tracking` (`get` with the whole config, statuses,
+  parts; `set_config` merges values; `assign`; `lists: true` adds cameras
+  and controllers) and `theater_puppet_command` (`avatar` / `avatar_set`:
+  a source's AVATAR_SETTINGS in source.rs). Those per-avatar settings are no
+  longer in the source's properties.
+- The old Tracking… window (OBS properties) stays in the menu.
+
 ## At a desk (keyboard and mouse)
 
 - Input `Source::Desk` (`src/tracking/desk.rs`): keys and mouse buttons

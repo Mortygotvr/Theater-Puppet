@@ -585,39 +585,6 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
             }
             let add = (api.obs_properties_add_button2)(props, c"extra.add".as_ptr(), c"\u{2795} Add a GLB".as_ptr(), add_extra, std::ptr::null_mut());
             (api.obs_property_set_visible)(add, count < MAX_EXTRAS);
-            (api.obs_properties_add_float_slider)(props, S_CONTROLLER_UP.as_ptr(), c"Controller: height (0 = the lowest), metres".as_ptr(), 0.0, 0.4, 0.01);
-            (api.obs_properties_add_float_slider)(props, S_CONTROLLER_FORWARD.as_ptr(), c"Controller: closer (-) or farther (+), metres".as_ptr(), -0.2, 0.3, 0.01);
-            (api.obs_properties_add_float_slider)(props, S_HAND_UP.as_ptr(), c"Controller: hands lower (-) or higher (+), metres".as_ptr(), -0.1, 0.15, 0.005);
-            (api.obs_properties_add_float_slider)(props, S_HAND_APART.as_ptr(), c"Controller: hands closer (-) or wider (+), metres each".as_ptr(), -0.05, 0.15, 0.005);
-            (api.obs_properties_add_float_slider)(props, S_HAND_ROLL.as_ptr(), c"Controller: hands rotation (degrees)".as_ptr(), -90.0, 90.0, 1.0);
-            (api.obs_properties_add_float_slider)(props, S_HAND_FORWARD.as_ptr(), c"Controller: hands back (-) or forward (+), metres".as_ptr(), -0.1, 0.1, 0.005);
-            (api.obs_properties_add_float_slider)(props, S_THUMB_LIFT.as_ptr(), c"Controller: thumbs lower (-) or higher (+)".as_ptr(), -0.6, 0.6, 0.02);
-            // At a desk: Arms on the Keyboard & mouse input
-            let hands = (api.obs_properties_add_list)(props, S_DESK_HANDS.as_ptr(), c"Keyboard & mouse: hands".as_ptr(), obs::OBS_COMBO_TYPE_LIST, obs::OBS_COMBO_FORMAT_STRING);
-            for (label, value) in [
-                (c"One on the keys, the other on the mouse (gaming)", c"gaming"),
-                (c"Both typing; one goes to the mouse while it's used", c"switching"),
-                (c"Both on the keys (typing only)", c"typing"),
-            ] {
-                (api.obs_property_list_add_string)(hands, label.as_ptr(), value.as_ptr());
-            }
-            let keys = (api.obs_properties_add_list)(props, S_DESK_KEYS.as_ptr(), c"Keyboard & mouse: what the keys show".as_ptr(), obs::OBS_COMBO_TYPE_LIST, obs::OBS_COMBO_FORMAT_STRING);
-            for (label, value) in [
-                (c"Area: WASD, Space, Shift and Ctrl exactly; other keys only tap (your typing can't be read)", c"area"),
-                (c"Exact: every key, its finger and the key itself (viewers could read your typing)", c"exact"),
-                (c"Motion only: fingers tap as you type, no keys shown", c"motion"),
-            ] {
-                (api.obs_property_list_add_string)(keys, label.as_ptr(), value.as_ptr());
-            }
-            (api.obs_properties_add_bool)(props, S_DESK_LEFT.as_ptr(), c"Keyboard & mouse: left-handed (the mouse on the left)".as_ptr());
-            (api.obs_properties_add_float_slider)(props, S_DESK_UP.as_ptr(), c"Keyboard & mouse: desk lower (-) or higher (+), metres".as_ptr(), -0.25, 0.3, 0.01);
-            (api.obs_properties_add_float_slider)(props, S_DESK_FORWARD.as_ptr(), c"Keyboard & mouse: desk closer (-) or farther (+), metres".as_ptr(), -0.2, 0.3, 0.01);
-            (api.obs_properties_add_float_slider)(props, S_DESK_LEFT_UP.as_ptr(), c"Keyboard & mouse: left hand lower (-) or higher (+), metres".as_ptr(), -0.1, 0.15, 0.005);
-            (api.obs_properties_add_float_slider)(props, S_DESK_LEFT_FORWARD.as_ptr(), c"Keyboard & mouse: left hand back (-) or forward (+), metres".as_ptr(), -0.1, 0.1, 0.005);
-            (api.obs_properties_add_float_slider)(props, S_DESK_RIGHT_UP.as_ptr(), c"Keyboard & mouse: right hand lower (-) or higher (+), metres".as_ptr(), -0.1, 0.15, 0.005);
-            (api.obs_properties_add_float_slider)(props, S_DESK_RIGHT_FORWARD.as_ptr(), c"Keyboard & mouse: right hand back (-) or forward (+), metres".as_ptr(), -0.1, 0.1, 0.005);
-            (api.obs_properties_add_float_slider)(props, S_DESK_HAND_TILT.as_ptr(), c"Keyboard & mouse: hands tilted back (-) or forward (+), degrees".as_ptr(), -45.0, 45.0, 1.0);
-            (api.obs_properties_add_float_slider)(props, S_DESK_CURL.as_ptr(), c"Keyboard & mouse: fingers straighter (-) or more curled (+)".as_ptr(), -0.6, 0.8, 0.02);
             // A reflection: another source's picture on the avatar
             let own = get_string_of(puppet.source);
             let group = (api.obs_properties_create)();
@@ -633,8 +600,6 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
             (api.obs_property_list_add_string)(mapping, c"Flat (a mirror ball facing the camera)".as_ptr(), c"flat".as_ptr());
             (api.obs_properties_add_float_slider)(group, S_REFLECTION_TURN.as_ptr(), c"360: turn (degrees)".as_ptr(), -180.0, 180.0, 1.0);
             (api.obs_properties_add_group)(props, c"reflection".as_ptr(), c"Reflection".as_ptr(), obs::OBS_GROUP_NORMAL, group);
-            (api.obs_properties_add_path)(props, S_CONTROLLER_MODEL.as_ptr(), c"Controller it holds (when Arms are on the Controller input; empty: the built-in one)".as_ptr(), obs::OBS_PATH_FILE, c"glTF (*.glb *.gltf)".as_ptr(), std::ptr::null());
-            (api.obs_properties_add_path)(props, S_DESK_MODEL.as_ptr(), c"Keyboard & mouse it uses (when Arms are on the Keyboard & mouse input; empty: the built-in one)".as_ptr(), obs::OBS_PATH_FILE, c"glTF (*.glb *.gltf)".as_ptr(), std::ptr::null());
         }
         // Colour slots (Theater Rig's Color<N>): the avatar's and its extras'
         if !data.is_null() {
@@ -751,7 +716,6 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
         (api.obs_properties_add_float_slider)(props, S_ARMS.as_ptr(), c"Arms down (degrees from the T-pose)".as_ptr(), 0.0, 85.0, 1.0);
         (api.obs_properties_add_float_slider)(props, S_IDLE.as_ptr(), c"Idle motion".as_ptr(), 0.0, 1.0, 0.01);
         (api.obs_properties_add_bool)(props, S_SPRINGS.as_ptr(), c"Spring bones (hair, skirt…)".as_ptr());
-        (api.obs_properties_add_bool)(props, S_TRACKED.as_ptr(), c"Follow tracking (Theater menu > Tracking)".as_ptr());
 
         // The springs' tuning: the avatar's own kinds (all, before it's loaded)
         let kinds: Vec<usize> = if data.is_null() {
@@ -1272,6 +1236,82 @@ pub(crate) fn set_color_setting(source: Ptr, slot: u32, rgb: Option<[f32; 3]>) {
         (api.obs_source_update)(source, data);
         (api.obs_data_release)(data);
     }
+}
+
+/// A Puppet source's tracking settings, edited in the Puppet Configuration
+/// window (theater-scripts/puppet_configuration.rhai) rather than in its
+/// properties: (name, 'd' a number, 'b' on / off, 's' text)
+pub(crate) const AVATAR_SETTINGS: &[(&str, char)] = &[
+    ("tracked", 'b'),
+    ("controller_model", 's'),
+    ("controller_up", 'd'),
+    ("controller_forward", 'd'),
+    ("controller_hand_up", 'd'),
+    ("controller_hand_apart", 'd'),
+    ("controller_hand_roll", 'd'),
+    ("controller_hand_forward", 'd'),
+    ("controller_thumb_lift", 'd'),
+    ("desk_model", 's'),
+    ("desk_keys", 's'),
+    ("desk_hands", 's'),
+    ("desk_left_handed", 'b'),
+    ("desk_up", 'd'),
+    ("desk_forward", 'd'),
+    ("desk_left_hand_up", 'd'),
+    ("desk_left_hand_forward", 'd'),
+    ("desk_right_hand_up", 'd'),
+    ("desk_right_hand_forward", 'd'),
+    ("desk_hand_tilt", 'd'),
+    ("desk_curl", 'd'),
+];
+
+/// Those settings of a Puppet source, as they are (defaults included)
+pub(crate) fn avatar_settings(source: Ptr) -> serde_json::Value {
+    let api = obs::api();
+    let mut out = serde_json::Map::new();
+    unsafe {
+        let settings = (api.obs_source_get_settings)(source);
+        if settings.is_null() {
+            return serde_json::Value::Object(out);
+        }
+        for &(name, kind) in AVATAR_SETTINGS {
+            let key = cstring(name);
+            let v = match kind {
+                'b' => serde_json::json!((api.obs_data_get_bool)(settings, key.as_ptr())),
+                's' => serde_json::json!(get_string(settings, &key)),
+                _ => serde_json::json!((api.obs_data_get_double)(settings, key.as_ptr())),
+            };
+            out.insert(name.to_string(), v);
+        }
+        (api.obs_data_release)(settings);
+    }
+    serde_json::Value::Object(out)
+}
+
+/// Changes some of those settings of a Puppet source (others are left alone)
+pub(crate) fn set_avatar_settings(source: Ptr, values: &serde_json::Map<String, serde_json::Value>) -> Result<(), String> {
+    let api = obs::api();
+    unsafe {
+        let data = (api.obs_data_create)();
+        if data.is_null() {
+            return Err("OBS couldn't make settings".into());
+        }
+        for (name, v) in values {
+            let Some(&(_, kind)) = AVATAR_SETTINGS.iter().find(|(n, _)| n == name) else {
+                (api.obs_data_release)(data);
+                return Err(format!("no setting \"{name}\""));
+            };
+            let key = cstring(name);
+            match kind {
+                'b' => (api.obs_data_set_bool)(data, key.as_ptr(), v.as_bool().unwrap_or(false)),
+                's' => (api.obs_data_set_string)(data, key.as_ptr(), cstring(v.as_str().unwrap_or("").trim()).as_ptr()),
+                _ => (api.obs_data_set_double)(data, key.as_ptr(), v.as_f64().unwrap_or(0.0)),
+            }
+        }
+        (api.obs_source_update)(source, data);
+        (api.obs_data_release)(data);
+    }
+    Ok(())
 }
 
 /// Colour slot `slot`'s colour on a Puppet source (None: its own)
