@@ -3,6 +3,22 @@
 What's built but not yet tried live, newest first. Tick it (or tell Claude
 what went wrong) and it comes off the list.
 
+## Keyboard & mouse (the avatar at a desk)
+- [ ] Tracking window: turn on "Keyboard & mouse", set **Arms** to
+      "Keyboard & mouse (at a desk)". The desk comes in front of the
+      avatar, left hand by WASD, right hand on the mouse (zoom out to see).
+- [ ] W A S D, Space, Shift, Ctrl: the right fingers press and the keys sink.
+      Other keys (Area, the default): only a tap of the hand on that side,
+      no key sinks.
+- [ ] Moving the mouse moves the avatar's mouse and hand (also in a game
+      that holds the cursor); clicks bend the index / middle finger.
+- [ ] Puppet properties → "Keyboard & mouse: hands": switching (both
+      typing, the right hand goes to the mouse while you use it) and typing.
+- [ ] "What the keys show": Exact (every key) and Motion only.
+- [ ] Left-handed: the mouse on the left, the right hand on the arrows.
+- [ ] Desk lower / higher and closer / farther sliders; your own desk GLB.
+- [ ] Hands, wrist angles and finger bends look right (worked out, not seen).
+
 ## Theater Rig: colour slot kept
 - [ ] Reinstall the zip. On a MToon VRM: Make Colour Slot *before*
       Detoonify, then Export: the GLB's texture is the grey one (it used to

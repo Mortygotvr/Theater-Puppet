@@ -20,6 +20,7 @@ pub fn obs_function<T>(name: &std::ffi::CStr) -> Option<T> {
     menu::function("obs.dll", name)
 }
 mod dll;
+pub mod desk;
 pub mod dock;
 mod fingers;
 pub mod gamepad;
@@ -69,10 +70,12 @@ pub enum Source {
     Telemetry,
     /// A game controller held in the hands (gamepad.rs)
     Controller,
+    /// The keyboard and mouse, the avatar at a desk (desk.rs)
+    Desk,
 }
 
 impl Source {
-    pub const ALL: [Source; 7] = [Source::IFacialMocap, Source::MeowFace, Source::SteamVr, Source::Telemetry, Source::Leap, Source::MediaPipe, Source::Controller];
+    pub const ALL: [Source; 8] = [Source::IFacialMocap, Source::MeowFace, Source::SteamVr, Source::Telemetry, Source::Leap, Source::MediaPipe, Source::Controller, Source::Desk];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -83,6 +86,7 @@ impl Source {
             Source::MediaPipe => "MediaPipe",
             Source::Telemetry => "VR telemetry",
             Source::Controller => "Controller (held)",
+            Source::Desk => "Keyboard & mouse (at a desk)",
         }
     }
 }
@@ -236,7 +240,7 @@ impl Part {
             Part::Expressions => &[Source::IFacialMocap, Source::MeowFace, Source::MediaPipe],
             Part::HeadTurn => &[Source::IFacialMocap, Source::MeowFace, Source::MediaPipe, Source::SteamVr, Source::Telemetry],
             Part::HeadPosition => &[Source::SteamVr, Source::Telemetry, Source::IFacialMocap, Source::MediaPipe],
-            Part::Arms => &[Source::SteamVr, Source::Telemetry, Source::Leap, Source::MediaPipe, Source::Controller],
+            Part::Arms => &[Source::SteamVr, Source::Telemetry, Source::Leap, Source::MediaPipe, Source::Controller, Source::Desk],
             Part::Fingers => &[Source::Leap, Source::MediaPipe, Source::SteamVr, Source::Telemetry],
             Part::LowerBody => &[Source::SteamVr, Source::Telemetry, Source::MediaPipe],
         }
@@ -275,6 +279,8 @@ pub struct Snapshot {
     pub from: Vec<(Part, Source)>,
     /// The controller held (Arms set to it): the hands go on it, the fingers press it
     pub controller: Option<gamepad::Pad>,
+    /// The keyboard and mouse (Arms set to them): the hands go on the desk
+    pub desk: Option<desk::Desk>,
 }
 
 /// The newest fresh thing from an input `part` may use, that has `get`:
@@ -361,6 +367,14 @@ pub fn snapshot(assign: &config::Assign) -> Snapshot {
                 note(&mut out.from, Part::Fingers, Source::Controller);
             }
         }
+        // Arms on the keyboard and mouse: the hands on the desk
+        if assign.arms == Pick::Only(Source::Desk) {
+            out.desk = desk::latest();
+            if out.desk.is_some() {
+                note(&mut out.from, Part::Arms, Source::Desk);
+                note(&mut out.from, Part::Fingers, Source::Desk);
+            }
+        }
         out
     })
 }
@@ -389,6 +403,7 @@ pub fn start() {
     leap::restart(&cfg);
     mediapipe::restart(&cfg);
     gamepad::restart(&cfg.controller);
+    desk::restart(&cfg.desk);
 }
 
 #[cfg(test)]

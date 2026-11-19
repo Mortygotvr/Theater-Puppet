@@ -43,11 +43,15 @@ pub struct Motion {
     pub hand_forward: f32,
     /// The thumbs on it raised (+) or lowered (-), radians at each joint
     pub thumb_lift: f32,
+    /// At a desk (Arms on the Keyboard & mouse input): what the keys show, the hands
+    pub desk_look: crate::desk::Look,
+    /// The desk moved from its place: up (+) or down (-), forward (metres)
+    pub desk_offset: [f32; 2],
 }
 
 impl Default for Motion {
     fn default() -> Self {
-        Motion { arms_down: 65.0, idle: 0.5, yaw: 0.0, springs: true, adjust: Adjust::default(), tracked: true, controller_offset: [0.0, 0.0], hand_offset: [0.0, 0.03], hand_roll: 0.0, hand_forward: 0.0, thumb_lift: 0.0 }
+        Motion { arms_down: 65.0, idle: 0.5, yaw: 0.0, springs: true, adjust: Adjust::default(), tracked: true, controller_offset: [0.0, 0.0], hand_offset: [0.0, 0.03], hand_roll: 0.0, hand_forward: 0.0, thumb_lift: 0.0, desk_look: Default::default(), desk_offset: [0.0, 0.0] }
     }
 }
 
@@ -125,7 +129,7 @@ fn mix_target(a: Target, b: Target, t: f32) -> Target {
     Target { position: a.position.lerp(b.position, t), rotation: a.rotation.slerp(b.rotation, t) }
 }
 
-fn mix_hand(a: Hand, b: Hand, t: f32) -> Hand {
+pub(crate) fn mix_hand(a: Hand, b: Hand, t: f32) -> Hand {
     let mut out = a;
     for f in 0..5 {
         out.spread[f] = a.spread[f] + (b.spread[f] - a.spread[f]) * t;
@@ -177,6 +181,8 @@ pub struct Rig {
     pub prop: Option<crate::controller::Prop>,
     /// The controller's state, while it's held
     pad: Option<crate::tracking::gamepad::Pad>,
+    /// The keyboard and mouse, while the avatar is at its desk
+    desk: Option<crate::tracking::desk::Desk>,
     /// The chest as the last frame left it (where, how turned from rest):
     /// the controller is bound to it
     chest_last: Option<(Vec3, Quat)>,
@@ -277,6 +283,7 @@ impl Rig {
             hide: Vec::new(),
             prop: None,
             pad: None,
+            desk: None,
             chest_last: None,
             thumb_lift: 0.0,
             next_blink: 2.0,
@@ -353,6 +360,7 @@ impl Rig {
         let tracked = if config.mirror { mirrored(tracked) } else { tracked.clone() };
         self.follow(&tracked, dt, config);
         self.pad = tracked.controller;
+        self.desk = tracked.desk;
 
         let model = self.model.clone();
         let bones = self.bones();
@@ -400,7 +408,14 @@ impl Rig {
         // The controller held: bound to the chest as the last frame left it
         // (the arms then reach it), coming into the hands or going
         let chest_bone = model.node("Spine2").or(bones.spine1);
-        if let Some(prop) = self.prop.as_mut() {
+        if let Some(prop) = self.prop.as_mut().filter(|p| p.is_desk()) {
+            // A desk: in front of the chest at rest, turned with the body (it doesn't lean)
+            prop.fade(self.desk.is_some(), dt);
+            prop.step_desk(self.desk, motion.desk_look, dt);
+            let rest_head = self.skeleton.rest_head();
+            let anchor = chest_bone.map(|c| turn * self.rest.position(c)).unwrap_or(rest_head * 0.8);
+            prop.place_desk(anchor, turn, rest_head.y / 1.5, motion.desk_offset);
+        } else if let Some(prop) = self.prop.as_mut() {
             prop.fade(self.pad.is_some(), dt);
             let rest_head = self.skeleton.rest_head();
             let (chest, chest_turn) = self.chest_last.unwrap_or_else(|| (chest_bone.map(|c| turn * self.rest.position(c)).unwrap_or(rest_head * 0.8), turn));
@@ -518,7 +533,7 @@ impl Rig {
             out.right_hand = Some(held(bones.right_hand, r));
             out.left_elbow = None;
             out.right_elbow = None;
-            let [lf, rf] = crate::controller::fingers(&self.pad.unwrap_or_default(), self.thumb_lift);
+            let [lf, rf] = prop.desk_fingers().unwrap_or_else(|| crate::controller::fingers(&self.pad.unwrap_or_default(), self.thumb_lift));
             out.left_fingers = Some(mix_hand(Hand::default(), lf, w));
             out.right_fingers = Some(mix_hand(Hand::default(), rf, w));
         }
@@ -929,6 +944,55 @@ mod tests {
         rig.step_with(1.0 / 60.0, still(), &pressed, &config);
         assert!(rig.pose.rotation[thumb].angle_between(rest_thumb) > 0.02);
         // Let go: it fades out of the hands
+        for _ in 0..30 {
+            rig.step_with(1.0 / 60.0, still(), &Snapshot::default(), &config);
+        }
+        assert_eq!(rig.prop.as_ref().unwrap().weight, 0.0);
+    }
+
+    #[test]
+    fn the_avatar_sits_at_its_desk() {
+        use crate::tracking::desk::Desk;
+        let Some(mut rig) = rig() else { return };
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("controller").join("desk.glb");
+        rig.set_prop(Some(Arc::new(crate::model::load(&path).unwrap())));
+        assert!(rig.prop.as_ref().unwrap().is_desk());
+        let config = tracking::config::Config { smoothing: 0.0, ..Default::default() };
+        let at_desk = |d: Desk| Snapshot { desk: Some(d), ..Default::default() };
+        let still_desk = Desk { mouse_idle: 10.0, keys_idle: 10.0, ..Default::default() };
+        for _ in 0..40 {
+            rig.step_with(1.0 / 60.0, still(), &at_desk(still_desk), &config);
+        }
+        let prop = rig.prop.as_ref().unwrap();
+        assert_eq!(prop.weight, 1.0);
+        let [l, r] = prop.hands();
+        fn at_of(rig: &Rig, n: &str) -> Vec3 {
+            rig.pose.position(rig.model.node(n).unwrap())
+        }
+        let (lh, rh) = (at_of(&rig, "LeftHand"), at_of(&rig, "RightHand"));
+        println!("left wrist {lh:?} (target {:?}), right {rh:?} (target {:?}), chest {:?}", l.position, r.position, at_of(&rig, "Spine1"));
+        // The wrists reach the keys and the mouse: in front, below the chest,
+        // the right hand (on the mouse) farther right than the left (on WASD)
+        assert!((lh - l.position).length() < 0.04 && (rh - r.position).length() < 0.04, "the hands don't reach the desk");
+        assert!(lh.z > at_of(&rig, "Spine1").z + 0.1 && rh.z > at_of(&rig, "Spine1").z + 0.1);
+        assert!(lh.y < at_of(&rig, "Spine1").y && rh.y < at_of(&rig, "Spine1").y);
+        assert!(lh.x > rh.x + 0.15, "left on the keys (+X), right on the mouse");
+        // W down (gaming, Area: it shows): the left middle finger bends
+        let middle = rig.model.node("LeftHandMiddle1").unwrap();
+        let rest_middle = rig.pose.rotation[middle];
+        let mut w = still_desk;
+        w.press(0x57);
+        for _ in 0..3 {
+            rig.step_with(1.0 / 60.0, still(), &at_desk(w), &config);
+        }
+        assert!(rig.pose.rotation[middle].angle_between(rest_middle) > 0.05);
+        // The mouse moved right: the right hand follows it
+        let before = at_of(&rig, "RightHand");
+        for _ in 0..10 {
+            rig.step_with(1.0 / 60.0, still(), &at_desk(Desk { mouse: [0.04, 0.0], ..still_desk }), &config);
+        }
+        assert!(before.x - at_of(&rig, "RightHand").x > 0.02, "{before:?} → {:?}", at_of(&rig, "RightHand"));
+        // Off the desk: it fades
         for _ in 0..30 {
             rig.step_with(1.0 / 60.0, still(), &Snapshot::default(), &config);
         }

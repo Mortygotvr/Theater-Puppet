@@ -4,6 +4,7 @@
 
 pub mod animation;
 pub mod controller;
+pub mod desk;
 pub mod lipsync;
 pub mod filters;
 pub mod ik;

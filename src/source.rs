@@ -129,6 +129,14 @@ fn source_names() -> Vec<String> {
 }
 const S_HAND_FORWARD: &CStr = c"controller_hand_forward";
 const S_THUMB_LIFT: &CStr = c"controller_thumb_lift";
+// At a desk (Arms on the Keyboard & mouse input): its GLB, what the keys
+// show, the hands, a left-handed user, where it is
+const S_DESK_MODEL: &CStr = c"desk_model";
+const S_DESK_KEYS: &CStr = c"desk_keys";
+const S_DESK_HANDS: &CStr = c"desk_hands";
+const S_DESK_LEFT: &CStr = c"desk_left_handed";
+const S_DESK_UP: &CStr = c"desk_up";
+const S_DESK_FORWARD: &CStr = c"desk_forward";
 
 /// Colour slots (Theater Rig's Color<N>) a source can set
 const COLOR_SLOTS: u32 = 100;
@@ -275,6 +283,8 @@ struct Puppet {
     prop_generation: Arc<AtomicU64>,
     prop_loaded: Arc<Mutex<Option<(u64, Option<Arc<Model>>)>>>,
     prop_model: Mutex<Option<Arc<Model>>>,
+    /// The controller's file and the desk's (the Arms setting picks one)
+    prop_files: Mutex<(String, String)>,
     /// Its reflection's settings
     reflection: Mutex<ReflectionSettings>,
     gpu: Mutex<Option<Gpu>>,
@@ -351,6 +361,8 @@ unsafe extern "C" fn get_defaults(settings: Ptr) {
         (api.obs_data_set_default_bool)(settings, S_SPRINGS.as_ptr(), m.springs);
         (api.obs_data_set_default_bool)(settings, S_TRACKED.as_ptr(), m.tracked);
         (api.obs_data_set_default_double)(settings, S_HAND_APART.as_ptr(), m.hand_offset[1] as f64);
+        (api.obs_data_set_default_string)(settings, S_DESK_KEYS.as_ptr(), c"area".as_ptr());
+        (api.obs_data_set_default_string)(settings, S_DESK_HANDS.as_ptr(), c"gaming".as_ptr());
         for kind in 0..KINDS.len() {
             for what in TUNING {
                 (api.obs_data_set_default_double)(settings, tune_key(kind, what).as_ptr(), 1.0);
@@ -574,6 +586,26 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
             (api.obs_properties_add_float_slider)(props, S_HAND_ROLL.as_ptr(), c"Controller: hands rotation (degrees)".as_ptr(), -90.0, 90.0, 1.0);
             (api.obs_properties_add_float_slider)(props, S_HAND_FORWARD.as_ptr(), c"Controller: hands back (-) or forward (+), metres".as_ptr(), -0.1, 0.1, 0.005);
             (api.obs_properties_add_float_slider)(props, S_THUMB_LIFT.as_ptr(), c"Controller: thumbs lower (-) or higher (+)".as_ptr(), -0.6, 0.6, 0.02);
+            // At a desk: Arms on the Keyboard & mouse input
+            let hands = (api.obs_properties_add_list)(props, S_DESK_HANDS.as_ptr(), c"Keyboard & mouse: hands".as_ptr(), obs::OBS_COMBO_TYPE_LIST, obs::OBS_COMBO_FORMAT_STRING);
+            for (label, value) in [
+                (c"One on the keys, the other on the mouse (gaming)", c"gaming"),
+                (c"Both typing; one goes to the mouse while it's used", c"switching"),
+                (c"Both on the keys (typing only)", c"typing"),
+            ] {
+                (api.obs_property_list_add_string)(hands, label.as_ptr(), value.as_ptr());
+            }
+            let keys = (api.obs_properties_add_list)(props, S_DESK_KEYS.as_ptr(), c"Keyboard & mouse: what the keys show".as_ptr(), obs::OBS_COMBO_TYPE_LIST, obs::OBS_COMBO_FORMAT_STRING);
+            for (label, value) in [
+                (c"Area: WASD, Space, Shift and Ctrl exactly; other keys only tap (your typing can't be read)", c"area"),
+                (c"Exact: every key, its finger and the key itself (viewers could read your typing)", c"exact"),
+                (c"Motion only: fingers tap as you type, no keys shown", c"motion"),
+            ] {
+                (api.obs_property_list_add_string)(keys, label.as_ptr(), value.as_ptr());
+            }
+            (api.obs_properties_add_bool)(props, S_DESK_LEFT.as_ptr(), c"Keyboard & mouse: left-handed (the mouse on the left)".as_ptr());
+            (api.obs_properties_add_float_slider)(props, S_DESK_UP.as_ptr(), c"Keyboard & mouse: desk lower (-) or higher (+), metres".as_ptr(), -0.25, 0.3, 0.01);
+            (api.obs_properties_add_float_slider)(props, S_DESK_FORWARD.as_ptr(), c"Keyboard & mouse: desk closer (-) or farther (+), metres".as_ptr(), -0.2, 0.3, 0.01);
             // A reflection: another source's picture on the avatar
             let own = get_string_of(puppet.source);
             let group = (api.obs_properties_create)();
@@ -590,6 +622,7 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
             (api.obs_properties_add_float_slider)(group, S_REFLECTION_TURN.as_ptr(), c"360: turn (degrees)".as_ptr(), -180.0, 180.0, 1.0);
             (api.obs_properties_add_group)(props, c"reflection".as_ptr(), c"Reflection".as_ptr(), obs::OBS_GROUP_NORMAL, group);
             (api.obs_properties_add_path)(props, S_CONTROLLER_MODEL.as_ptr(), c"Controller it holds (when Arms are on the Controller input; empty: the built-in one)".as_ptr(), obs::OBS_PATH_FILE, c"glTF (*.glb *.gltf)".as_ptr(), std::ptr::null());
+            (api.obs_properties_add_path)(props, S_DESK_MODEL.as_ptr(), c"Keyboard & mouse it uses (when Arms are on the Keyboard & mouse input; empty: the built-in one)".as_ptr(), obs::OBS_PATH_FILE, c"glTF (*.glb *.gltf)".as_ptr(), std::ptr::null());
         }
         // Colour slots (Theater Rig's Color<N>): the avatar's and its extras'
         if !data.is_null() {
@@ -819,6 +852,7 @@ unsafe extern "C" fn create(settings: Ptr, source: Ptr) -> Ptr {
         prop_generation: Arc::new(AtomicU64::new(0)),
         prop_loaded: Arc::new(Mutex::new(None)),
         prop_model: Mutex::new(None),
+        prop_files: Mutex::new((String::new(), String::new())),
         reflection: Mutex::new(ReflectionSettings::default()),
         gpu: Mutex::new(None),
         rig: Mutex::new(None),
@@ -911,6 +945,20 @@ unsafe extern "C" fn update(data: Ptr, settings: Ptr) {
             hand_roll: (api.obs_data_get_double)(settings, S_HAND_ROLL.as_ptr()) as f32,
             hand_forward: (api.obs_data_get_double)(settings, S_HAND_FORWARD.as_ptr()) as f32,
             thumb_lift: (api.obs_data_get_double)(settings, S_THUMB_LIFT.as_ptr()) as f32,
+            desk_look: crate::desk::Look {
+                detail: match get_string(settings, S_DESK_KEYS).as_str() {
+                    "exact" => crate::desk::KeyDetail::Exact,
+                    "motion" => crate::desk::KeyDetail::Motion,
+                    _ => crate::desk::KeyDetail::Area,
+                },
+                hands: match get_string(settings, S_DESK_HANDS).as_str() {
+                    "switching" => crate::desk::HandMode::Switching,
+                    "typing" => crate::desk::HandMode::Typing,
+                    _ => crate::desk::HandMode::Gaming,
+                },
+                left_handed: (api.obs_data_get_bool)(settings, S_DESK_LEFT.as_ptr()),
+            },
+            desk_offset: [(api.obs_data_get_double)(settings, S_DESK_UP.as_ptr()) as f32, (api.obs_data_get_double)(settings, S_DESK_FORWARD.as_ptr()) as f32],
         };
     }
     puppet.remote.lock().unwrap().animation.loop_clip = get_string(settings, S_ANIMATION);
@@ -940,37 +988,17 @@ unsafe extern "C" fn update(data: Ptr, settings: Ptr) {
         r.update_hidden();
     }
 
-    // The controller it holds: the built-in one unless it has its own
-    let prop_file = {
-        let own = get_string(settings, S_CONTROLLER_MODEL);
+    // The controller it holds and the desk it uses: the built-in ones unless it has its own
+    let file = |key: &CStr, built_in: &str| {
+        let own = get_string(settings, key);
         if own.trim().is_empty() {
-            crate::data_dir().map(|d| d.join("controller").join("gamepad.glb").to_string_lossy().into_owned()).unwrap_or_default()
+            crate::data_dir().map(|d| d.join("controller").join(built_in).to_string_lossy().into_owned()).unwrap_or_default()
         } else {
             own
         }
     };
-    let mut current_prop = puppet.prop_file.lock().unwrap();
-    if *current_prop != prop_file {
-        *current_prop = prop_file.clone();
-        let generation = puppet.prop_generation.fetch_add(1, Ordering::SeqCst) + 1;
-        let (loaded, latest) = (puppet.prop_loaded.clone(), puppet.prop_generation.clone());
-        std::thread::Builder::new()
-            .name("theater-puppet-load-controller".into())
-            .spawn(move || {
-                let model = match model::load(&PathBuf::from(&prop_file)) {
-                    Ok(m) => Some(Arc::new(m)),
-                    Err(e) => {
-                        crate::log(&format!("[Puppet] ⚠️ The controller: {e}"));
-                        None
-                    }
-                };
-                if latest.load(Ordering::SeqCst) == generation {
-                    *loaded.lock().unwrap() = Some((generation, model));
-                }
-            })
-            .ok();
-    }
-    drop(current_prop);
+    *puppet.prop_files.lock().unwrap() = (file(S_CONTROLLER_MODEL, "gamepad.glb"), file(S_DESK_MODEL, "desk.glb"));
+    load_prop(puppet);
 
     // The GLBs drawn with it: loaded again when their list changes
     let extra_files: Vec<(usize, String)> = (1..=extra_count(settings)).map(|n| (n, get_string(settings, &extra_key(n)))).filter(|(_, f)| !f.is_empty()).collect();
@@ -1113,6 +1141,40 @@ fn filter_chain(puppet: &Puppet) -> Vec<FilterPass> {
     chain
 }
 
+/// Loads the prop the Arms setting asks for (the controller, or the desk
+/// while Arms are on the Keyboard & mouse input), when it isn't the one loaded
+fn load_prop(puppet: &Puppet) {
+    let at_desk = crate::tracking::config::get().assign.arms == crate::tracking::Pick::Only(crate::tracking::Source::Desk);
+    let prop_file = {
+        let files = puppet.prop_files.lock().unwrap();
+        if at_desk { files.1.clone() } else { files.0.clone() }
+    };
+    let mut current_prop = puppet.prop_file.lock().unwrap();
+    if prop_file.is_empty() || *current_prop == prop_file {
+        return;
+    }
+    {
+        *current_prop = prop_file.clone();
+        let generation = puppet.prop_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let (loaded, latest) = (puppet.prop_loaded.clone(), puppet.prop_generation.clone());
+        std::thread::Builder::new()
+            .name("theater-puppet-load-controller".into())
+            .spawn(move || {
+                let model = match model::load(&PathBuf::from(&prop_file)) {
+                    Ok(m) => Some(Arc::new(m)),
+                    Err(e) => {
+                        crate::log(&format!("[Puppet] ⚠️ The controller: {e}"));
+                        None
+                    }
+                };
+                if latest.load(Ordering::SeqCst) == generation {
+                    *loaded.lock().unwrap() = Some((generation, model));
+                }
+            })
+            .ok();
+    }
+}
+
 /// Hands what Control Panel and Scene asked (remote.rs) to the rig, and
 /// tells them what the Puppet has. The Show settings to write (a shape-key
 /// animation ended hiding its GLB), once the locks are let go
@@ -1227,6 +1289,8 @@ fn placed(puppet: &Puppet) -> View {
 unsafe extern "C" fn video_tick(data: Ptr, dt: f32) {
     let puppet = unsafe { &*(data as *const Puppet) };
     crate::snapshot::poll();
+    // Arms moved between the controller and the desk: the other GLB
+    load_prop(puppet);
     // The avatar's pose and springs, skinned (the render uploads them)
     let mut shown = None;
     if let Some(rig) = puppet.rig.lock().unwrap().as_mut() {

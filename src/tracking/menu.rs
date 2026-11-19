@@ -103,6 +103,7 @@ fn to_data(config: &Config, data: Ptr) {
         super::gamepad::Backend::Sdl => "sdl",
     });
     string(c"controller_device", &config.controller.device);
+    boolean(c"desk_on", config.desk.enabled);
     boolean(c"mirror", config.mirror);
     double(c"head_strength", config.head_strength);
     double(c"spine_lean", config.spine_lean);
@@ -145,6 +146,7 @@ fn from_data(data: Ptr) -> Config {
         _ => super::gamepad::Backend::Auto,
     };
     c.controller.device = get_string(data, c"controller_device");
+    c.desk.enabled = boolean(c"desk_on");
     c.mirror = boolean(c"mirror");
     c.head_strength = double(c"head_strength");
     c.spine_lean = double(c"spine_lean");
@@ -242,6 +244,9 @@ unsafe extern "C" fn get_properties(_: Ptr) -> Ptr {
         for (label, id) in super::gamepad::devices() {
             (api.obs_property_list_add_string)(list, key(&label).as_ptr(), key(&id).as_ptr());
         }
+
+        // The keyboard and mouse: the avatar at a desk (Arms set to it below)
+        (api.obs_properties_add_bool)(props, c"desk_on".as_ptr(), key(&format!("Keyboard & mouse (the avatar at a desk, typing and mousing; set Arms to it below; what its keys show is in each Puppet's properties): {}", status(Source::Desk))).as_ptr());
 
         info(c"i_assign", "What tracks what: for each part of the avatar, the input that drives it. Auto takes whichever of its inputs sent last.");
         for part in Part::ALL {

@@ -165,6 +165,27 @@ MediaPipe notes:
   `controller/make_gamepad.py` (Blender), which documents the node names a
   user's own controller GLB needs (source setting "Controller it holds").
 
+## At a desk (keyboard and mouse)
+
+- Input `Source::Desk` (`src/tracking/desk.rs`): keys and mouse buttons
+  polled with GetAsyncKeyState (as OBS reads hotkeys: nothing registered),
+  mouse movement through Raw Input on a message-only window of its own
+  (RIDEV_INPUTSINK; it moves even when a game holds the cursor). Only the
+  keys down now are kept, and a press count: never what was typed.
+- Arms on it: the prop is the desk GLB instead of the controller (the
+  source loads whichever the Arms setting asks for, each frame:
+  `load_prop`). `Prop` holds a `desk::Layout` when its GLB has a `keyboard`
+  node; `src/desk.rs` gives the wrists, fingers and the keys that sink.
+  The desk is placed from the chest at rest (it doesn't lean with it).
+- Source settings: hands (gaming / switching / typing), what the keys show
+  (Area, the default: WASD, Space, Shift, Ctrl exactly, other keys only tap
+  the hand on their side, a finger from the press count; Exact; Motion
+  only), left-handed (keyboard and mouse mirrored), desk height and
+  distance, its own GLB. Area doesn't map other keys to fingers or zones on
+  purpose: any key-dependent motion could be decoded like T9.
+- The built-in model: `controller/desk.glb`, made by
+  `controller/make_desk.py`, which documents the node names.
+
 ## Reflection
 
 - Source properties → Reflection: an OBS source (or scene) drawn each frame

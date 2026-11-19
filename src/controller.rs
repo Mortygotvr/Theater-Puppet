@@ -3,6 +3,10 @@
 //! source's own) placed in front of the avatar, its hands on it, its fingers
 //! on the buttons, its sticks, triggers and buttons moving as the real ones do.
 //!
+//! Or, while its Arms are on the Keyboard & mouse input, a desk: a GLB with a
+//! keyboard (controller/desk.glb, or the source's own), placed in front of
+//! the avatar's chest and lower, its hands and fingers from desk.rs.
+//!
 //! The GLB's parts are found by name (controller/make_gamepad.py says which).
 //! Its axes are the avatar's: +X the holder's left, +Y up, +Z away from the
 //! holder; metres, a real controller's size (scaled with the avatar).
@@ -51,6 +55,10 @@ pub struct Prop {
     pub hand_roll: f32,
     /// The hands moved along it: toward its far edge (+) or the holder (-), metres
     pub hand_forward: f32,
+    /// A desk (its GLB has a keyboard): its keys and mouse, and what changes over time
+    desk: Option<(crate::desk::Layout, crate::desk::State)>,
+    desk_look: crate::desk::Look,
+    desk_input: crate::tracking::desk::Desk,
 }
 
 impl Prop {
@@ -76,7 +84,11 @@ impl Prop {
             .filter_map(|(n, b)| Some((node(n)?, b)))
             .collect(),
         };
+        let desk = crate::desk::Layout::find(&model, &pose).map(|l| (l, crate::desk::State::default()));
         Prop {
+            desk,
+            desk_look: Default::default(),
+            desk_input: Default::default(),
             points: model.primitives.iter().map(|p| vec![[0.0; 4]; p.positions.len()]).collect(),
             normals: model.primitives.iter().map(|p| vec![[0.0; 4]; p.positions.len()]).collect(),
             morph: vec![0.0; model.morph_names.len()],
@@ -93,6 +105,36 @@ impl Prop {
             hand_forward: 0.0,
             model,
         }
+    }
+
+    /// A desk (keyboard and mouse), not a controller
+    pub fn is_desk(&self) -> bool {
+        self.desk.is_some()
+    }
+
+    /// The desk `dt` seconds later, with the keyboard and mouse now
+    pub fn step_desk(&mut self, input: Option<crate::tracking::desk::Desk>, look: crate::desk::Look, dt: f32) {
+        self.desk_look = look;
+        self.desk_input = input.unwrap_or_default();
+        if let Some((layout, state)) = self.desk.as_mut() {
+            crate::desk::step(layout, state, &look, &self.desk_input, dt);
+        }
+    }
+
+    /// Where the desk is: in front of the chest (`anchor`, at rest: the desk
+    /// doesn't lean with it) and lower, turned with the body; `offset` (up,
+    /// forward; metres) on top. `size`: the avatar's scale
+    pub fn place_desk(&mut self, anchor: Vec3, turn: Quat, size: f32, offset: [f32; 2]) {
+        let at = anchor + turn * (Vec3::new(0.0, -0.30 + offset[0], 0.30 + offset[1]) * size);
+        self.turn = turn;
+        self.size = size;
+        self.transform = Mat4::from_scale_rotation_translation(Vec3::splat(size), turn, at);
+    }
+
+    /// The desk's fingers (left, right); None for a controller
+    pub fn desk_fingers(&self) -> Option<[Hand; 2]> {
+        let (layout, state) = self.desk.as_ref()?;
+        Some(crate::desk::fingers(layout, state, &self.desk_look, &self.desk_input))
     }
 
     /// `dt` seconds later, held or not
@@ -120,6 +162,13 @@ impl Prop {
     /// hand offset: up, and apart), the fingers forward wrapping in, the
     /// palms mostly down around the grips (not facing each other)
     pub fn hands(&self) -> [Target; 2] {
+        if let Some((layout, state)) = &self.desk {
+            let wrists = crate::desk::wrists(layout, state, &self.desk_look, &self.desk_input);
+            return [0, 1].map(|side| {
+                let w = wrists[side];
+                Target { position: self.transform.transform_point3(w.at), rotation: crate::ik::hand_turn(side == 0, self.turn * w.fingers, self.turn * w.palm) }
+            });
+        }
         [0, 1].map(|side| {
             let left = side == 0;
             let s = if left { 1.0 } else { -1.0 };
@@ -138,6 +187,20 @@ impl Prop {
         let model = self.model.clone();
         let pose = &mut self.pose;
         pose.reset(&model);
+        if let Some((layout, _)) = &self.desk {
+            // The desk: the keyboard (moved for a left-handed user), keys
+            // sinking, the mouse with the real one
+            for (n, by) in crate::desk::moved(layout, &self.desk_look, &self.desk_input) {
+                pose.translation[n] = self.rest.translation[n] + by;
+            }
+            pose.update_world(&model);
+            for w in pose.world.iter_mut() {
+                *w = self.transform * *w;
+            }
+            pose::skin(&model, pose, &self.morph, &mut self.points, &mut self.normals);
+            self.dirty = true;
+            return;
+        }
         // Sticks: pushed away tilts the top away (+Z), pushed right toward -X
         for (side, stick) in [pad.left_stick, pad.right_stick].into_iter().enumerate() {
             if let Some(n) = self.parts.sticks[side] {
