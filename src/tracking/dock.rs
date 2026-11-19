@@ -132,7 +132,7 @@ pub fn answer(args: &str) -> String {
     let statuses = super::statuses();
     let status = |s: Source, on: bool| {
         if !on {
-            return "off (turn it on in the Tracking window)".to_string();
+            return "off (turn it on in the Configuration window)".to_string();
         }
         statuses.iter().find(|(src, _, _)| *src == s).map(|(_, _, t)| t.clone()).unwrap_or_else(|| "starting".into())
     };

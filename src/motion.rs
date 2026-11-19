@@ -30,7 +30,7 @@ pub struct Motion {
     pub springs: bool,
     /// The springs' tuning per kind, and the colliders' thickness
     pub adjust: Adjust,
-    /// Whether what's tracked (the Tracking window's inputs) moves this avatar
+    /// Whether what's tracked (the Configuration window's inputs) moves this avatar
     pub tracked: bool,
     /// The controller it holds moved from its place on the chest: up (0 =
     /// the lowest), forward (metres)

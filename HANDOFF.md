@@ -176,7 +176,12 @@ MediaPipe notes:
   and controllers) and `theater_puppet_command` (`avatar` / `avatar_set`:
   a source's AVATAR_SETTINGS in source.rs). Those per-avatar settings are no
   longer in the source's properties.
-- The old Tracking… window (OBS properties) stays in the menu.
+- Puppet adds no menu item itself (the Tracking… window, OBS properties on
+  a private source, is gone; `tracking/menu.rs` keeps only `function` and
+  `cameras`). Theater Scene puts each script's entry in the part of the
+  Theater menu of the plugin whose data folder it's in, with that plugin's
+  `data\icon.png` (Puppet's: `assets/icon.png`, the installer's drawing).
+  Puppet no longer ships Scene's Qt shim.
 
 ## At a desk (keyboard and mouse)
 

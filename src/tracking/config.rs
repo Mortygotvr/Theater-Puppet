@@ -1,6 +1,6 @@
 //! Tracking's settings (plugin_config/theater-puppet/tracking.json): which
 //! inputs are on, where they are, and which input drives which part of the
-//! avatar. Edited in the Tracking window; the inputs restart when it changes.
+//! avatar. Edited in the Configuration window; the inputs restart when it changes.
 
 use std::sync::Mutex;
 

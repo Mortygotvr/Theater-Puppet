@@ -1,16 +1,14 @@
 # Builds the release zip, dist\theater-puppet-<version>-windows-x64.zip, for
 # the Theater Installer (a release in Theater-Releases tagged
 # theater-puppet-v<version>):
-#   theater-puppet\bin\64bit   the plugin (theater-puppet.dll) and Theater Scene's Qt shim (trust_qt.dll)
+#   theater-puppet\bin\64bit   the plugin (theater-puppet.dll)
 #   theater-puppet\data        what deploy.ps1 installs: styles, filters, the
-#                              MediaPipe helper, the docks, the controller, the
-#                              Control Panel module (only the files git tracks)
-# Build first: cargo build --release (and Theater Scene's trust_qt.dll).
+#                              MediaPipe helper, the docks and window, the
+#                              controller and desk, the Control Panel module
+#                              (only the files git tracks), its menu icon
+# Build first: cargo build --release.
 # The version is Cargo.toml's unless given.
-param(
-    [string]$Version = "",
-    [string]$QtShim = "$PSScriptRoot\..\theater scene(rust)\Trust\target\release\trust_qt.dll"
-)
+param([string]$Version = "")
 $ErrorActionPreference = 'Stop'
 
 $root = $PSScriptRoot
@@ -18,15 +16,12 @@ if (!$Version) {
     $Version = (Select-String -LiteralPath "$root\Cargo.toml" -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
 }
 $dll = "$root\target\release\theater_puppet.dll"
-foreach ($f in @($dll, $QtShim)) {
-    if (!(Test-Path -LiteralPath $f)) { throw "$f not found - build it first." }
-}
+if (!(Test-Path -LiteralPath $dll)) { throw "$dll not found - build it first." }
 $work = "$root\dist\stage"
 $stage = "$work\theater-puppet"
 if (Test-Path $work) { Remove-Item $work -Recurse -Force }
 New-Item -ItemType Directory -Force "$stage\bin\64bit", "$stage\data" | Out-Null
 Copy-Item -LiteralPath $dll "$stage\bin\64bit\theater-puppet.dll"
-Copy-Item -LiteralPath $QtShim "$stage\bin\64bit\trust_qt.dll"
 
 # Only what git tracks (and, of the controller, only the model)
 $pairs = @(
@@ -41,6 +36,7 @@ foreach ($pair in $pairs) {
         Copy-Item -LiteralPath (Join-Path $root $file) -Destination $dest
     }
 }
+Copy-Item -LiteralPath "$root\assets\icon.png" "$stage\data\icon.png"
 Copy-Item -LiteralPath "$root\LICENSE" "$stage\LICENSE.txt"
 # The version, which the Theater Installer reads to offer updates
 Set-Content -LiteralPath "$stage\version.txt" -Value $Version -Encoding ascii

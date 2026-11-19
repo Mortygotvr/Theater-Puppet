@@ -58,7 +58,7 @@ pub fn arkit_index(name: &str) -> Option<usize> {
     ARKIT.iter().position(|n| n.eq_ignore_ascii_case(name))
 }
 
-/// The inputs, in the order the Tracking window lists them
+/// The inputs, in the order the Configuration window lists them
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Source {
     IFacialMocap,
@@ -194,7 +194,7 @@ pub fn head_from(source: Source) -> Option<Target> {
     with(|s| s.body.iter().find(|b| b.source == source && b.at.elapsed() < FRESH).and_then(|b| b.value.head))
 }
 
-/// An input's line in the Tracking window ("receiving", "no device"…)
+/// An input's line in the Configuration window ("receiving", "no device"…)
 pub fn set_status(source: Source, text: impl Into<String>) {
     let text = text.into();
     with(|s| match s.status.iter_mut().find(|(src, _, _)| *src == source) {
@@ -209,7 +209,7 @@ pub fn statuses() -> Vec<(Source, Duration, String)> {
 }
 
 /// A part of the avatar an input can drive: the user picks which input
-/// drives which (the Tracking window; config::Assign)
+/// drives which (the Configuration window; config::Assign)
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Part {
     Expressions,
@@ -275,7 +275,7 @@ pub struct Snapshot {
     pub hips: Option<Target>,
     pub left_foot: Option<Target>,
     pub right_foot: Option<Target>,
-    /// Which input each part came from (the Tracking window says)
+    /// Which input each part came from (the Configuration window says)
     pub from: Vec<(Part, Source)>,
     /// The controller held (Arms set to it): the hands go on it, the fingers press it
     pub controller: Option<gamepad::Pad>,

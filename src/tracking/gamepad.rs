@@ -80,7 +80,7 @@ pub struct Settings {
 
 /// The newest state read, and when
 static LATEST: Mutex<Option<(Pad, Instant)>> = Mutex::new(None);
-/// The controllers found (label, id), for the Tracking window
+/// The controllers found (label, id), for the Configuration window
 static DEVICES: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
 /// The input is on (the avatar holds the controller while Arms are on it)
 static ENABLED: AtomicBool = AtomicBool::new(false);

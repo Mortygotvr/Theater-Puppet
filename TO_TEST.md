@@ -4,8 +4,10 @@ What's built but not yet tried live, newest first. Tick it (or tell Claude
 what went wrong) and it comes off the list.
 
 ## ⚙ Puppet Configuration window
-- [ ] 🎭 Theater menu → "⚙ Puppet Configuration…" opens a window (title bar,
-      taskbar button); its ✕ hides it, the menu opens it again.
+- [ ] 🎭 Theater menu: Puppet's part (its icon) has "🎬 Puppet Animations"
+      and "⚙ Puppet Configuration…"; no "Tracking…" any more.
+- [ ] "⚙ Puppet Configuration…" opens a window (title bar, taskbar button);
+      its ✕ hides it, the menu opens it again.
 - [ ] Tabs: General, iFacialMocap, MeowFace, MediaPipe, SteamVR, VR telemetry,
       Leap Motion, Controller, Keyboard & mouse. Each one's switches, address
       (Enter or Apply), sliders and buttons work, and its "Now:" status updates.

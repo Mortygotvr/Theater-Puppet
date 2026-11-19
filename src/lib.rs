@@ -132,10 +132,10 @@ pub extern "C" fn obs_module_load() -> bool {
     place::register();
     remote::register();
     lipsync::register();
-    // Tracking: its settings window's source, its inputs, its menu item
-    tracking::menu::register();
+    // Tracking: its inputs (its settings are in the Puppet Configuration
+    // window, theater-scripts/puppet_configuration.rhai, which Theater Scene
+    // puts in Puppet's part of the Theater menu)
     tracking::start();
-    tracking::menu::setup();
     log("[Puppet] 🚀 Theater Puppet loaded");
     true
 }

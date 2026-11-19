@@ -3,14 +3,14 @@
 //! the Mixamo bones' rotations.
 //!
 //! - The body follows the head: the spine and hips lean toward it first
-//!   (as much as the Tracking window's "spine lean" says), then the hips
+//!   (as much as the Configuration window's "spine lean" says), then the hips
 //!   move under it for what's left (crouching, stepping).
 //! - The feet stay planted where they stood (or go where they're tracked),
 //!   the legs bending to reach them.
 //! - Each hand goes where it's tracked, the arm bending at the elbow (toward
 //!   the tracked elbow when there is one, down and back otherwise).
 //! - The head turns as tracked, the neck taking part of it, and the torso
-//!   a little (the Tracking window's "torso follows the head").
+//!   a little (the Configuration window's "torso follows the head").
 //! - The fingers bend joint by joint.
 //!
 //! Positions are the avatar's own (metres, Y up, facing +Z, its left at +X);
