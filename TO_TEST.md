@@ -3,6 +3,11 @@
 What's built but not yet tried live, newest first. Tick it (or tell Claude
 what went wrong) and it comes off the list.
 
+## Theater Rig: colour slot kept
+- [ ] Reinstall the zip. On a MToon VRM: Make Colour Slot *before*
+      Detoonify, then Export: the GLB's texture is the grey one (it used to
+      go back to the old one).
+
 ## One tile standard (sets)
 - [ ] Theater Rig (reinstall the zip): Tile textures → **Convert VRM Tiles**
       on HavocFFT: the box lists the set `expressions` with its 8 tiles.
