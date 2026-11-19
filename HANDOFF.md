@@ -217,6 +217,12 @@ MediaPipe notes:
 
 ## Discussed, not started
 
+- **Project Babble** (the owner's next input, once the hardware arrives):
+  mouth tracking from a camera on the face. Check its own docs then for
+  what it sends and how (it's VRChat face-tracking oriented, OSC); it
+  becomes one more `Source` for Expressions, the mouth's shapes most of
+  all. The microphone lipsync stands in for it meanwhile.
+
 - Switching filters on the fly: preload, crossfade, a `theater_puppet_set_look`
   proc, saved looks.
 - Puppet reacting to hits (Scene already emits `theater_scene_impact`).
