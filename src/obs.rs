@@ -131,6 +131,7 @@ api! {
     obs_properties_get: fn(Ptr, *const c_char) -> Ptr;
     obs_property_list_add_string: fn(Ptr, *const c_char, *const c_char) -> usize;
     obs_property_set_visible: fn(Ptr, bool);
+    obs_property_visible: fn(Ptr) -> bool;
     obs_property_set_modified_callback: fn(Ptr, ModifiedCallback);
     obs_data_get_bool: fn(Ptr, *const c_char) -> bool;
     obs_source_get_settings: fn(Ptr) -> Ptr;

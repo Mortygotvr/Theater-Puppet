@@ -27,12 +27,11 @@ const S_FILE: &CStr = c"file";
 /// GLBs drawn with the avatar in its picture, copying its pose ("Also
 /// draw" 1, 2…: as many as added): how many, and each one's file, Show and
 /// group (of a group, only one shows: remote.rs). Slot 0 is the avatar.
-const S_EXTRA_COUNT: &CStr = c"extras";
 /// The controller it holds (Arms on the Controller input): a GLB of your own,
 /// "" for the built-in one (controller.rs)
 const S_CONTROLLER_MODEL: &CStr = c"controller_model";
 /// The most there can be
-const MAX_EXTRAS: usize = 64;
+const MAX_EXTRAS: usize = 32;
 
 fn extra_key(n: usize) -> CString {
     cstring(&format!("extra{n}"))
@@ -50,10 +49,7 @@ fn group_key(n: usize) -> CString {
 /// How many Also draw GLBs a source has: its count, or (a source from
 /// before the Add button) its last of extra1–3 with a file
 fn extra_count(settings: Ptr) -> usize {
-    let api = obs::api();
-    let count = unsafe { (api.obs_data_get_int)(settings, S_EXTRA_COUNT.as_ptr()) }.clamp(0, MAX_EXTRAS as i64) as usize;
-    let old = (1..=3).rev().find(|&n| !get_string(settings, &extra_key(n)).is_empty()).unwrap_or(0);
-    count.max(old)
+    (1..=MAX_EXTRAS).rev().find(|&n| !get_string(settings, &extra_key(n)).is_empty()).unwrap_or(0)
 }
 const S_WIDTH: &CStr = c"width";
 const S_HEIGHT: &CStr = c"height";
@@ -461,22 +457,41 @@ unsafe fn properties_source(props: Ptr) -> Ptr {
     unsafe { (obs::api().obs_properties_get_param)(props) }
 }
 
-/// "Add a GLB": one more Also draw (shown, no group)
+/// Also draw `n`'s box in the window
+fn extra_box(n: usize) -> CString {
+    cstring(&format!("extra{n}.group_box"))
+}
+
+/// How many Also draw boxes the window shows
+unsafe fn shown_boxes(props: Ptr) -> usize {
+    let api = obs::api();
+    (1..=MAX_EXTRAS)
+        .take_while(|&n| {
+            let p = unsafe { (api.obs_properties_get)(props, extra_box(n).as_ptr()) };
+            !p.is_null() && unsafe { (api.obs_property_visible)(p) }
+        })
+        .count()
+}
+
+/// "Add a GLB": the next box shown, to pick its GLB in. (OBS refreshes the
+/// window's widgets after a button, it doesn't build the window again: the
+/// boxes are all there, hidden past the last GLB.) An empty one is gone the
+/// next time the window opens
 unsafe extern "C" fn add_extra(props: Ptr, _button: Ptr, _data: Ptr) -> bool {
     let api = obs::api();
     unsafe {
-        let source = properties_source(props);
-        let settings = if source.is_null() { std::ptr::null_mut() } else { (api.obs_source_get_settings)(source) };
-        if settings.is_null() {
+        let n = shown_boxes(props) + 1;
+        let p = (api.obs_properties_get)(props, extra_box(n).as_ptr());
+        if p.is_null() {
             return false;
         }
-        let count = extra_count(settings);
-        if count < MAX_EXTRAS {
-            (api.obs_data_set_int)(settings, S_EXTRA_COUNT.as_ptr(), (count + 1) as i64);
-            (api.obs_data_set_bool)(settings, shown_key(count + 1).as_ptr(), true);
+        (api.obs_property_set_visible)(p, true);
+        if n >= MAX_EXTRAS {
+            let add = (api.obs_properties_get)(props, c"extra.add".as_ptr());
+            if !add.is_null() {
+                (api.obs_property_set_visible)(add, false);
+            }
         }
-        (api.obs_data_release)(settings);
-        (api.obs_source_update)(source, std::ptr::null_mut());
     }
     true
 }
@@ -491,7 +506,7 @@ unsafe extern "C" fn remove_extra(props: Ptr, _button: Ptr, data: Ptr) -> bool {
         if settings.is_null() {
             return false;
         }
-        let count = extra_count(settings);
+        let count = shown_boxes(props).max(extra_count(settings));
         if (1..=count).contains(&n) {
             for m in n..count {
                 let file = get_string(settings, &extra_key(m + 1));
@@ -503,7 +518,14 @@ unsafe extern "C" fn remove_extra(props: Ptr, _button: Ptr, data: Ptr) -> bool {
             for key in [extra_key(count), group_key(count), shown_key(count)] {
                 (api.obs_data_erase)(settings, key.as_ptr());
             }
-            (api.obs_data_set_int)(settings, S_EXTRA_COUNT.as_ptr(), (count - 1) as i64);
+            let last = (api.obs_properties_get)(props, extra_box(count).as_ptr());
+            if !last.is_null() {
+                (api.obs_property_set_visible)(last, false);
+            }
+            let add = (api.obs_properties_get)(props, c"extra.add".as_ptr());
+            if !add.is_null() {
+                (api.obs_property_set_visible)(add, true);
+            }
         }
         (api.obs_data_release)(settings);
         (api.obs_source_update)(source, std::ptr::null_mut());
@@ -533,17 +555,18 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
             if !settings.is_null() {
                 (api.obs_data_release)(settings);
             }
-            for n in 1..=count {
+            // Every box, hidden past the last GLB (Add shows the next)
+            for n in 1..=MAX_EXTRAS {
                 let group = (api.obs_properties_create)();
                 (api.obs_properties_add_path)(group, extra_key(n).as_ptr(), c"GLB (copies the avatar's pose)".as_ptr(), obs::OBS_PATH_FILE, c"glTF (*.glb *.gltf)".as_ptr(), std::ptr::null());
                 (api.obs_properties_add_bool)(group, shown_key(n).as_ptr(), c"Show".as_ptr());
                 (api.obs_properties_add_text)(group, group_key(n).as_ptr(), c"Group (only one GLB of a group shows; empty: none)".as_ptr(), obs::OBS_TEXT_DEFAULT);
                 (api.obs_properties_add_button2)(group, cstring(&format!("extra{n}.remove")).as_ptr(), c"Remove".as_ptr(), remove_extra, n as Ptr);
-                (api.obs_properties_add_group)(props, cstring(&format!("extra{n}.group_box")).as_ptr(), cstring(&format!("Also draw {n}")).as_ptr(), obs::OBS_GROUP_NORMAL, group);
+                let b = (api.obs_properties_add_group)(props, extra_box(n).as_ptr(), cstring(&format!("Also draw {n}")).as_ptr(), obs::OBS_GROUP_NORMAL, group);
+                (api.obs_property_set_visible)(b, n <= count);
             }
-            if count < MAX_EXTRAS {
-                (api.obs_properties_add_button2)(props, c"extra.add".as_ptr(), c"\u{2795} Add a GLB".as_ptr(), add_extra, std::ptr::null_mut());
-            }
+            let add = (api.obs_properties_add_button2)(props, c"extra.add".as_ptr(), c"\u{2795} Add a GLB".as_ptr(), add_extra, std::ptr::null_mut());
+            (api.obs_property_set_visible)(add, count < MAX_EXTRAS);
             (api.obs_properties_add_float_slider)(props, S_CONTROLLER_UP.as_ptr(), c"Controller: height (0 = the lowest), metres".as_ptr(), 0.0, 0.4, 0.01);
             (api.obs_properties_add_float_slider)(props, S_CONTROLLER_FORWARD.as_ptr(), c"Controller: closer (-) or farther (+), metres".as_ptr(), -0.2, 0.3, 0.01);
             (api.obs_properties_add_float_slider)(props, S_HAND_UP.as_ptr(), c"Controller: hands lower (-) or higher (+), metres".as_ptr(), -0.1, 0.15, 0.005);
