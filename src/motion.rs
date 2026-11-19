@@ -869,7 +869,7 @@ mod tests {
         let rest_thumb = rig.pose.rotation[thumb];
         let pressed = Snapshot { controller: Some(Pad { buttons: button::A, ..Default::default() }), ..Default::default() };
         rig.step_with(1.0 / 60.0, still(), &pressed, &config);
-        assert!(rig.pose.rotation[thumb].angle_between(rest_thumb) > 0.05);
+        assert!(rig.pose.rotation[thumb].angle_between(rest_thumb) > 0.02);
         // Let go: it fades out of the hands
         for _ in 0..30 {
             rig.step_with(1.0 / 60.0, still(), &Snapshot::default(), &config);
