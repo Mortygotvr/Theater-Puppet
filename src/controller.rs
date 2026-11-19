@@ -178,16 +178,17 @@ pub fn fingers(pad: &Pad, thumb_lift: f32) -> [Hand; 2] {
         h.bend[3] = [1.1, 1.25, 0.85];
         h.bend[4] = [1.2, 1.3, 0.9];
     };
-    // The index on its trigger (pulled with it), or pressing its bumper:
-    // a little lifted at the knuckle (the bumper is above), the end joints
+    // The index resting on its trigger (it stays put when the trigger is
+    // pulled: the trigger moves, not the finger), or pressing its bumper: a
+    // little lifted at the knuckle (the bumper is above), the end joints
     // curled down onto it
-    let index = |h: &mut Hand, trigger: f32, bumper: bool| {
-        h.bend[1] = if bumper { [0.35, 0.85, 0.65] } else { [0.55 + trigger * 0.35, 0.6 + trigger * 0.45, 0.45 + trigger * 0.3] };
+    let index = |h: &mut Hand, bumper: bool| {
+        h.bend[1] = if bumper { [0.35, 0.85, 0.65] } else { [0.55, 0.6, 0.45] };
     };
 
     let mut left = Hand::default();
     grip(&mut left);
-    index(&mut left, pad.left_trigger, pad.pressed(button::LB));
+    index(&mut left, pad.pressed(button::LB));
     // The left thumb: on the stick, down on the d-pad when it's pressed
     let dpad = pad.buttons & (button::UP | button::DOWN | button::LEFT | button::RIGHT) != 0;
     left.bend[0] = if dpad { [0.55, 0.5, 0.45] } else { [0.35, 0.35 - pad.left_stick[1] * 0.15, 0.25] };
@@ -195,7 +196,7 @@ pub fn fingers(pad: &Pad, thumb_lift: f32) -> [Hand; 2] {
 
     let mut right = Hand::default();
     grip(&mut right);
-    index(&mut right, pad.right_trigger, pad.pressed(button::RB));
+    index(&mut right, pad.pressed(button::RB));
     // The right thumb (as seen live: its buttons and stick were the wrong
     // way round). At rest on the right stick, riding it as the left thumb
     // rides its own; ABXY the deep reach, as the d-pad is for the left
@@ -280,7 +281,8 @@ mod tests {
         let a = fingers(&Pad { buttons: button::A, ..Default::default() }, 0.0);
         assert!(a[1].bend[0][0] > rest[1].bend[0][0]);
         let lt = fingers(&Pad { left_trigger: 1.0, ..Default::default() }, 0.0);
-        assert!(lt[0].bend[1][1] > rest[0].bend[1][1]);
+        // The trigger pulled: the index stays put
+        assert_eq!(lt[0].bend[1], rest[0].bend[1]);
         let lb = fingers(&Pad { buttons: button::LB, ..Default::default() }, 0.0);
         // A bumper: the knuckle lifts, the end joints curl onto it (not pointing)
         assert!(lb[0].bend[1][0] < rest[0].bend[1][0] && lb[0].bend[1][1] > rest[0].bend[1][1]);
