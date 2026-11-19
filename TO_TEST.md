@@ -48,8 +48,7 @@ what went wrong) and it comes off the list.
       sit now becomes the rest.
 
 ## Add / remove GLBs
-- [ ] Puppet properties: "➕ Add a GLB" adds an "Also draw" box (GLB, Show,
-      Group, Remove); add 4+ and put 3 in one group: one shows at a time.
+- [ ] Put 3 GLBs in one group: one shows at a time.
 - [ ] "Remove" on a middle one: the ones after it move up, keeping their
       files, Show and group.
 - [ ] A source that had Also draw 1–3 before keeps them.
