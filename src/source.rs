@@ -97,6 +97,8 @@ fn canvas() -> Option<(u32, u32)> {
 const S_ZOOM: &CStr = c"zoom";
 const S_CENTRE: &CStr = c"centre";
 pub(crate) const S_YAW: &CStr = c"yaw";
+// "perspective" (the default) or "orthographic"
+const S_PROJECTION: &CStr = c"camera_projection";
 /// Where the avatar stands (metres): right, up, towards the camera
 pub(crate) const S_POSITION: [&CStr; 3] = [c"position_x", c"position_y", c"position_z"];
 // The light (optional): its own direction, colour and strength, or the one
@@ -768,6 +770,9 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
         (api.obs_properties_add_int)(props, S_HEIGHT.as_ptr(), c"Height".as_ptr(), 16, 8192, 1);
         // (Far out: a big prop or scene beside the avatar fits)
         (api.obs_properties_add_float_slider)(props, S_ZOOM.as_ptr(), c"Zoom".as_ptr(), 0.05, 8.0, 0.01);
+        let projection = (api.obs_properties_add_list)(props, S_PROJECTION.as_ptr(), c"Camera".as_ptr(), obs::OBS_COMBO_TYPE_LIST, obs::OBS_COMBO_FORMAT_STRING);
+        (api.obs_property_list_add_string)(projection, c"Perspective".as_ptr(), c"perspective".as_ptr());
+        (api.obs_property_list_add_string)(projection, c"Orthographic (no perspective)".as_ptr(), c"orthographic".as_ptr());
         // The light (optional)
         let light = (api.obs_properties_create)();
         (api.obs_properties_add_bool)(light, S_LIGHT_ON.as_ptr(), c"Its own light (off: from the front, upper left, white)".as_ptr());
@@ -777,7 +782,7 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
         (api.obs_properties_add_float_slider)(light, S_LIGHT_STRENGTH.as_ptr(), c"Strength".as_ptr(), 0.0, 4.0, 0.05);
         (api.obs_properties_add_group)(props, c"light".as_ptr(), c"Light".as_ptr(), obs::OBS_GROUP_NORMAL, light);
         (api.obs_properties_add_float_slider)(props, S_CENTRE.as_ptr(), c"Centre (feet to head)".as_ptr(), -1.0, 1.0, 0.01);
-        (api.obs_properties_add_float_slider)(props, S_YAW.as_ptr(), c"Turn".as_ptr(), -180.0, 180.0, 1.0);
+        (api.obs_properties_add_float_slider)(props, S_YAW.as_ptr(), c"Turn (the camera goes around the avatar)".as_ptr(), -180.0, 180.0, 1.0);
         for (key, label, range) in [
             (S_POSITION[0], c"Position: left / right (m)", 3.0),
             (S_POSITION[1], c"Position: down / up (m)", 2.0),
@@ -893,7 +898,7 @@ unsafe extern "C" fn create(settings: Ptr, source: Ptr) -> Ptr {
         colors: Mutex::new(HashMap::new()),
         width: AtomicU32::new(1080),
         height: AtomicU32::new(1080),
-        view: Mutex::new(View { zoom: 1.0, height: 0.0, yaw: 0.0, position: glam::Vec3::ZERO, light: View::LIGHT, light_color: [1.0; 3] }),
+        view: Mutex::new(View { zoom: 1.0, height: 0.0, yaw: 0.0, orbit: 0.0, orthographic: false, position: glam::Vec3::ZERO, light: View::LIGHT, light_color: [1.0; 3] }),
         file: Mutex::new(String::new()),
         slots: Mutex::new(Default::default()),
         style_settings: Mutex::new(HashMap::new()),
@@ -987,7 +992,10 @@ unsafe extern "C" fn update(data: Ptr, settings: Ptr) {
         *puppet.view.lock().unwrap() = View {
             zoom: (api.obs_data_get_double)(settings, S_ZOOM.as_ptr()) as f32,
             height: (api.obs_data_get_double)(settings, S_CENTRE.as_ptr()) as f32,
-            yaw: (api.obs_data_get_double)(settings, S_YAW.as_ptr()) as f32,
+            // (Turn takes the camera around the avatar; Puppet Place turns the body)
+            yaw: 0.0,
+            orbit: (api.obs_data_get_double)(settings, S_YAW.as_ptr()) as f32,
+            orthographic: CStr::from_ptr((api.obs_data_get_string)(settings, S_PROJECTION.as_ptr())).to_bytes() == b"orthographic",
             position: glam::Vec3::from_array(S_POSITION.map(|k| (api.obs_data_get_double)(settings, k.as_ptr()) as f32)),
             light: if (api.obs_data_get_bool)(settings, S_LIGHT_ON.as_ptr()) {
                 View::light_from((api.obs_data_get_double)(settings, S_LIGHT_TURN.as_ptr()) as f32, (api.obs_data_get_double)(settings, S_LIGHT_HEIGHT.as_ptr()) as f32)

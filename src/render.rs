@@ -482,8 +482,13 @@ pub struct View {
     pub zoom: f32,
     /// -1 (feet) .. 1 (head): where the frame is centred
     pub height: f32,
-    /// Turn, degrees
+    /// The body's turn, degrees (Puppet Place filters: its hair swings after it)
     pub yaw: f32,
+    /// The camera's turn around the avatar, degrees (it looks as a body turn
+    /// of the same degrees did: the old Turn)
+    pub orbit: f32,
+    /// Orthographic (no perspective: sizes don't shrink with distance)
+    pub orthographic: bool,
     /// Where the avatar stands, metres from the middle: its right (+X, as
     /// seen), up, towards the camera
     pub position: Vec3,
@@ -522,6 +527,46 @@ struct Camera {
     light_color: [f32; 4],
     /// The camera, in the avatar's own space
     eye: Vec3,
+}
+
+/// The camera for a model from `min` to `max` (Gpu::camera)
+fn camera(min: Vec3, max: Vec3, width: u32, height: u32, view: View) -> Camera {
+    let size = max - min;
+    let centre = (min + max) * 0.5;
+
+    let fov = 30f32.to_radians();
+    let aspect = width as f32 / height.max(1) as f32;
+    // Standing on the origin, looked at from the front (+Z), the camera
+    // turned around it by Orbit (a body turn of the same degrees looks the
+    // same; Puppet Place's turn turns the body, motion.rs). Position moves
+    // it from there.
+    let model = Mat4::from_translation(Vec3::new(-centre.x, 0.0, -centre.z) + view.position);
+    let visible = size.y * 1.08 / view.zoom.max(0.05);
+    let target = Vec3::new(0.0, centre.y + view.height * size.y * 0.5, 0.0);
+    // Back by its depth as the camera sees it (from the front: as it always
+    // was; from a side: its width), so no side of it is behind the camera
+    let turned = view.orbit.to_radians();
+    let depth = turned.sin().abs() * size.x + turned.cos().abs() * size.z;
+    let distance = visible * 0.5 / (fov * 0.5).tan() + depth;
+    let around = glam::Quat::from_rotation_y(-turned);
+    let eye = target + around * Vec3::Z * distance;
+    let far = distance + size.length() * 2.0;
+    let proj = if view.orthographic {
+        // The same size as the perspective shows at the avatar's middle
+        let h = distance * (fov * 0.5).tan();
+        let w = h * aspect;
+        Mat4::orthographic_rh(-w, w, -h, h, 0.01, far)
+    } else {
+        Mat4::perspective_rh(fov, aspect, 0.01, far)
+    };
+    let inverse = model.inverse();
+    Camera {
+        mvp: proj * Mat4::look_at_rh(eye, target, Vec3::Y) * model,
+        // From the front, upper left, as the camera sees it: it goes around with the camera
+        light: inverse.transform_vector3(around * view.light.normalize_or(View::LIGHT.normalize())),
+        light_color: [view.light_color[0], view.light_color[1], view.light_color[2], 1.0],
+        eye: inverse.transform_point3(eye),
+    }
 }
 
 impl Gpu {
@@ -579,27 +624,7 @@ impl Gpu {
 
     /// The camera: the avatar centred, `zoom` x its height in view
     fn camera(&self, width: u32, height: u32, view: View) -> Camera {
-        let size = self.max - self.min;
-        let centre = (self.min + self.max) * 0.5;
-        let fov = 30f32.to_radians();
-        let aspect = width as f32 / height.max(1) as f32;
-        // Standing on the origin, looked at from the front (+Z). (Turn turns
-        // the body itself, motion.rs: its hair swings after it.) Position
-        // moves it from there; the camera stays.
-        let model = Mat4::from_translation(Vec3::new(-centre.x, 0.0, -centre.z) + view.position);
-        let visible = size.y * 1.08 / view.zoom.max(0.05);
-        let target = Vec3::new(0.0, centre.y + view.height * size.y * 0.5, 0.0);
-        let distance = visible * 0.5 / (fov * 0.5).tan() + size.z;
-        let eye = target + Vec3::Z * distance;
-        let proj = Mat4::perspective_rh(fov, aspect, 0.01, distance + size.length() * 2.0);
-        let inverse = model.inverse();
-        Camera {
-            mvp: proj * Mat4::look_at_rh(eye, target, Vec3::Y) * model,
-            // From the front, upper left
-            light: inverse.transform_vector3(view.light.normalize_or(View::LIGHT.normalize())),
-            light_color: [view.light_color[0], view.light_color[1], view.light_color[2], 1.0],
-            eye: inverse.transform_point3(eye),
-        }
+        camera(self.min, self.max, width, height, view)
     }
 
     /// Draws the avatar into the current target, `width` x `height`, with
@@ -1168,5 +1193,53 @@ mod tests {
         // Straight above, and from the camera's side
         assert!((View::light_from(0.0, 90.0) - Vec3::Y).length() < 1e-5);
         assert!((View::light_from(0.0, 0.0) - Vec3::Z).length() < 1e-5);
+    }
+
+    fn view(orbit: f32, orthographic: bool) -> View {
+        View { zoom: 1.0, height: 0.0, yaw: 0.0, orbit, orthographic, position: Vec3::ZERO, light: View::LIGHT, light_color: [1.0; 3] }
+    }
+
+    /// Where a point of the avatar lands in the picture (-1..1)
+    fn on_screen(cam: &Camera, p: Vec3) -> glam::Vec3 {
+        let c = cam.mvp * p.extend(1.0);
+        c.truncate() / c.w
+    }
+
+    #[test]
+    fn turn_takes_the_camera_around_the_avatar() {
+        let (min, max) = (Vec3::new(-0.3, 0.0, -0.15), Vec3::new(0.3, 1.7, 0.15));
+        // At 0 the camera is in front (+Z); at 180 behind, at 90 on a side, always as far
+        let front = camera(min, max, 1920, 1080, view(0.0, false));
+        let back = camera(min, max, 1920, 1080, view(180.0, false));
+        let side = camera(min, max, 1920, 1080, view(90.0, false));
+        assert!(front.eye.z > 1.0 && back.eye.z < -1.0, "{:?} {:?}", front.eye, back.eye);
+        assert!(side.eye.z.abs() < 1e-3 && side.eye.x.abs() > 1.0, "{:?}", side.eye);
+        assert!((front.eye.length() - back.eye.length()).abs() < 1e-4);
+        // The light goes around with it: from the camera's side, front or back
+        assert!(front.light.z > 0.0 && back.light.z < 0.0);
+        // The avatar's middle stays in the middle of the picture
+        let mid = on_screen(&back, Vec3::new(0.0, 0.85, 0.0));
+        assert!(mid.x.abs() < 1e-4 && mid.y.abs() < 1e-4, "{mid:?}");
+    }
+
+    #[test]
+    fn orthographic_has_no_perspective() {
+        let (min, max) = (Vec3::new(-0.3, 0.0, -0.15), Vec3::new(0.3, 1.7, 0.15));
+        // A point near the camera and one far from it, the same height: the same height in the picture
+        let ortho = camera(min, max, 1920, 1080, view(0.0, true));
+        let (near, far) = (on_screen(&ortho, Vec3::new(0.2, 1.5, 0.15)), on_screen(&ortho, Vec3::new(0.2, 1.5, -0.15)));
+        assert!((near.y - far.y).abs() < 1e-5 && (near.x - far.x).abs() < 1e-5, "{near:?} {far:?}");
+        // With perspective, the near one is farther from the middle
+        let persp = camera(min, max, 1920, 1080, view(0.0, false));
+        let (near, far) = (on_screen(&persp, Vec3::new(0.2, 1.5, 0.15)), on_screen(&persp, Vec3::new(0.2, 1.5, -0.15)));
+        assert!(near.x > far.x);
+        // Both in the picture, the same size at its middle (switching doesn't jump)
+        let tall = |cam: &Camera| {
+            let (top, bottom) = (on_screen(cam, Vec3::new(0.0, 1.7, 0.0)), on_screen(cam, Vec3::new(0.0, 0.0, 0.0)));
+            assert!(top.y < 1.0 && bottom.y > -1.0, "{top:?} {bottom:?}");
+            assert!((0.0..1.0).contains(&top.z) && (0.0..1.0).contains(&bottom.z));
+            top.y - bottom.y
+        };
+        assert!((tall(&ortho) - tall(&persp)).abs() < 1e-3);
     }
 }

@@ -3,6 +3,14 @@
 What's built but not yet tried live, newest first. Tick it (or tell Claude
 what went wrong) and it comes off the list.
 
+## Camera
+- [ ] Puppet properties → Turn: the camera goes around the avatar (0 front,
+      180 behind). The avatar doesn't spin and its hair doesn't swing. The
+      light goes around with the camera. Puppet Place filters still turn
+      the body.
+- [ ] Puppet properties → Camera: Perspective / Orthographic (no
+      perspective). Switching keeps the avatar the same size.
+
 ## Materials as Blender has them, light, framing
 - [ ] The big carved block: its carving (flowers, gears) shows now. Its normal
       map is a 16-bit PNG, which used to load flat.
