@@ -533,39 +533,41 @@ struct Camera {
 fn camera(min: Vec3, max: Vec3, width: u32, height: u32, view: View) -> Camera {
     let size = max - min;
     let centre = (min + max) * 0.5;
-
     let fov = 30f32.to_radians();
+    let tan = (fov * 0.5).tan();
     let aspect = width as f32 / height.max(1) as f32;
-    // Standing on the origin, looked at from the front (+Z), the camera
-    // turned around it by Orbit (a body turn of the same degrees looks the
-    // same; Puppet Place's turn turns the body, motion.rs). Position moves
-    // it from there.
-    let model = Mat4::from_translation(Vec3::new(-centre.x, 0.0, -centre.z) + view.position);
+    // The avatar's middle on the origin; the camera goes around it on a
+    // circle (Turn: a body turn of the same degrees looks the same; Puppet
+    // Place's turn turns the body, motion.rs), looking at it
+    let model = Mat4::from_translation(Vec3::new(-centre.x, 0.0, -centre.z));
     let visible = size.y * 1.08 / view.zoom.max(0.05);
     let target = Vec3::new(0.0, centre.y + view.height * size.y * 0.5, 0.0);
-    // Back by its depth as the camera sees it (from the front: as it always
-    // was; from a side: its width), so no side of it is behind the camera
-    let turned = view.orbit.to_radians();
-    let depth = turned.sin().abs() * size.x + turned.cos().abs() * size.z;
-    let distance = visible * 0.5 / (fov * 0.5).tan() + depth;
-    let around = glam::Quat::from_rotation_y(-turned);
+    // How far: the same all the way round (as it always framed from the
+    // front), never inside the avatar
+    let radius = 0.5 * (size.x * size.x + size.z * size.z).sqrt();
+    let distance = (visible * 0.5 / tan + size.z).max(radius + 0.05);
+    let around = glam::Quat::from_rotation_y(-view.orbit.to_radians());
     let eye = target + around * Vec3::Z * distance;
-    let far = distance + size.length() * 2.0;
+    // Position: where the avatar is in the picture, as the camera sees it
+    // (its right, up, towards the camera): the camera's circle goes with it
+    let look = Mat4::from_translation(view.position) * Mat4::look_at_rh(eye, target, Vec3::Y);
+    let far = distance + size.length() * 2.0 + view.position.z.abs();
     let proj = if view.orthographic {
         // The same size as the perspective shows at the avatar's middle
-        let h = distance * (fov * 0.5).tan();
+        let h = distance * tan;
         let w = h * aspect;
         Mat4::orthographic_rh(-w, w, -h, h, 0.01, far)
     } else {
         Mat4::perspective_rh(fov, aspect, 0.01, far)
     };
-    let inverse = model.inverse();
+    // The camera and the light, in the avatar's own space (the light from
+    // the front, upper left as the camera sees it: it goes around with it)
+    let inverse = (look * model).inverse();
     Camera {
-        mvp: proj * Mat4::look_at_rh(eye, target, Vec3::Y) * model,
-        // From the front, upper left, as the camera sees it: it goes around with the camera
-        light: inverse.transform_vector3(around * view.light.normalize_or(View::LIGHT.normalize())),
+        mvp: proj * look * model,
+        light: inverse.transform_vector3(view.light.normalize_or(View::LIGHT.normalize())).normalize(),
         light_color: [view.light_color[0], view.light_color[1], view.light_color[2], 1.0],
-        eye: inverse.transform_point3(eye),
+        eye: inverse.transform_point3(Vec3::ZERO),
     }
 }
 
@@ -1220,6 +1222,25 @@ mod tests {
         // The avatar's middle stays in the middle of the picture
         let mid = on_screen(&back, Vec3::new(0.0, 0.85, 0.0));
         assert!(mid.x.abs() < 1e-4 && mid.y.abs() < 1e-4, "{mid:?}");
+    }
+
+    #[test]
+    fn turn_is_a_circle_around_the_avatar_wherever_it_stands() {
+        // A wide avatar (arms out), moved left and back: all the way round, the
+        // camera is as far from it, and it stays where it is in the picture
+        let (min, max) = (Vec3::new(-0.8, 0.0, -0.15), Vec3::new(0.8, 1.7, 0.15));
+        let moved = |orbit: f32| View { position: Vec3::new(-0.9, 0.0, -0.8), ..view(orbit, false) };
+        let at0 = camera(min, max, 1920, 1080, moved(0.0));
+        let mid0 = on_screen(&at0, Vec3::new(0.0, 0.85, 0.0));
+        for orbit in [30.0, 90.0, 135.0, 180.0, -90.0] {
+            let cam = camera(min, max, 1920, 1080, moved(orbit));
+            let d = glam::Vec2::new(cam.eye.x, cam.eye.z).length();
+            assert!((d - glam::Vec2::new(at0.eye.x, at0.eye.z).length()).abs() < 1e-3, "{orbit}: {:?}", cam.eye);
+            let mid = on_screen(&cam, Vec3::new(0.0, 0.85, 0.0));
+            assert!((mid - mid0).length() < 1e-3, "{orbit}: {mid:?} vs {mid0:?}");
+        }
+        // Position at Turn 0 moves it as it always did: left in the picture
+        assert!(mid0.x < -0.1);
     }
 
     #[test]
