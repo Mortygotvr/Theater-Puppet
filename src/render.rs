@@ -547,10 +547,15 @@ fn camera(min: Vec3, max: Vec3, width: u32, height: u32, view: View) -> Camera {
     let model = Mat4::from_translation(Vec3::new(-centre.x, 0.0, -centre.z));
     let visible = size.y * 1.08 / view.zoom.max(0.05);
     let target = Vec3::new(0.0, centre.y + view.height * size.y * 0.5, 0.0);
-    // How far: the same all the way round (as it always framed from the
-    // front), never inside the avatar
+    // `visible` is the height in view at its front (its depth before its
+    // middle). How far: the same all the way round, never inside the
+    // avatar; closer than that, zoom narrows the lens instead, so it keeps
+    // zooming. (Where the camera can come that close: as it always framed)
     let radius = 0.5 * (size.x * size.x + size.z * size.z).sqrt();
     let distance = (visible * 0.5 / tan + size.z).max(radius + 0.05);
+    let fov = 2.0 * (visible * 0.5 / (distance - size.z).max(0.01)).atan();
+    // The half-height in view at its middle (for orthographic)
+    let half = distance * (fov * 0.5).tan();
     let around = glam::Quat::from_rotation_y(-view.orbit.to_radians());
     let eye = target + around * Vec3::Z * distance;
     // Position: where the avatar is in the picture, as the camera sees it
@@ -559,7 +564,7 @@ fn camera(min: Vec3, max: Vec3, width: u32, height: u32, view: View) -> Camera {
     let far = distance + size.length() * 2.0 + view.position.z.abs();
     let proj = if view.orthographic {
         // The same size as the perspective shows at the avatar's middle
-        let h = distance * tan;
+        let h = half;
         let w = h * aspect;
         Mat4::orthographic_rh(-w, w, -h, h, 0.01, far)
     } else {
@@ -1246,6 +1251,22 @@ mod tests {
         }
         // Position at Turn 0 moves it as it always did: left in the picture
         assert!(mid0.x < -0.1);
+    }
+
+    #[test]
+    fn zoom_keeps_zooming_close_up() {
+        // A wide avatar (arms out): each zoom shows it bigger, up to 50, in both cameras
+        let (min, max) = (Vec3::new(-0.8, 0.0, -0.15), Vec3::new(0.8, 1.7, 0.15));
+        for orthographic in [false, true] {
+            let mut last = 0.0;
+            for zoom in [1.0, 4.0, 8.0, 16.0, 30.0, 50.0] {
+                let cam = camera(min, max, 1920, 1080, View { zoom, height: 0.5, ..view(0.0, orthographic) });
+                let (a, b) = (on_screen(&cam, Vec3::new(0.0, 1.30, 0.0)), on_screen(&cam, Vec3::new(0.0, 1.31, 0.0)));
+                let size = b.y - a.y;
+                assert!(size > last * 1.4, "zoom {zoom} ({orthographic}): {size} after {last}");
+                last = size;
+            }
+        }
     }
 
     #[test]

@@ -10,6 +10,8 @@ what went wrong) and it comes off the list.
       up to 3 (Light is softer than Mirror).
 
 ## Camera
+- [ ] Zoom goes up to 50 and keeps zooming in close (it used to stop
+      getting bigger past about 6–8 on wide avatars).
 - [ ] Puppet properties → Turn: the camera goes around the avatar (0 front,
       180 behind). The avatar doesn't spin and its hair doesn't swing. The
       light goes around with the camera. Puppet Place filters still turn
