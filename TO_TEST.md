@@ -9,7 +9,9 @@ what went wrong) and it comes off the list.
       snapshot; look at it in your scene.)
 - [ ] Style "Standard (as Blender)" (Puppet properties → Style): gloss from
       roughness / metalness like EEVEE; Sun strength, World light, Specular.
-- [ ] Toon avatars look as before (Detoonify makes them rough: no gloss).
+- [ ] Toon has gloss now too: Toon settings → "Gloss" (the materials' own
+      shine; 0 none) and "Gloss edge" (soft as Blender .. hard as anime).
+      Your plaque and varnished wood shine; VRoid avatars don't (rough).
 - [ ] Puppet properties → Light: "Its own light", around / height, colour,
       strength (Standard and Toon follow its colour).
 - [ ] Zoom goes down to 0.05; a big prop beside a small avatar fits in view.
