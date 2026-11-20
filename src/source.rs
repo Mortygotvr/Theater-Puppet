@@ -99,6 +99,13 @@ const S_CENTRE: &CStr = c"centre";
 pub(crate) const S_YAW: &CStr = c"yaw";
 /// Where the avatar stands (metres): right, up, towards the camera
 pub(crate) const S_POSITION: [&CStr; 3] = [c"position_x", c"position_y", c"position_z"];
+// The light (optional): its own direction, colour and strength, or the one
+// Puppet always had
+const S_LIGHT_ON: &CStr = c"light_custom";
+const S_LIGHT_TURN: &CStr = c"light_turn";
+const S_LIGHT_HEIGHT: &CStr = c"light_height";
+const S_LIGHT_COLOR: &CStr = c"light_color";
+const S_LIGHT_STRENGTH: &CStr = c"light_strength";
 /// The avatar's own clip looping in place of the idle motion ("" = none)
 pub(crate) const S_ANIMATION: &CStr = c"animation";
 const S_ARMS: &CStr = c"arms_down";
@@ -382,6 +389,11 @@ unsafe extern "C" fn get_defaults(settings: Ptr) {
         (api.obs_data_set_default_int)(settings, S_WIDTH.as_ptr(), 1080);
         (api.obs_data_set_default_int)(settings, S_HEIGHT.as_ptr(), 1080);
         (api.obs_data_set_default_double)(settings, S_ZOOM.as_ptr(), 1.0);
+        // The light's own settings start as the light Puppet always had
+        (api.obs_data_set_default_double)(settings, S_LIGHT_TURN.as_ptr(), -22.0);
+        (api.obs_data_set_default_double)(settings, S_LIGHT_HEIGHT.as_ptr(), 29.0);
+        (api.obs_data_set_default_int)(settings, S_LIGHT_COLOR.as_ptr(), 0xFFFF_FFFF);
+        (api.obs_data_set_default_double)(settings, S_LIGHT_STRENGTH.as_ptr(), 1.0);
         (api.obs_data_set_default_double)(settings, S_CENTRE.as_ptr(), 0.0);
         (api.obs_data_set_default_double)(settings, S_YAW.as_ptr(), 0.0);
         for slot in 0..=MAX_EXTRAS {
@@ -754,7 +766,16 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
         (api.obs_properties_add_bool)(props, S_CANVAS.as_ptr(), c"Canvas size (as OBS's canvas; off: the width and height below)".as_ptr());
         (api.obs_properties_add_int)(props, S_WIDTH.as_ptr(), c"Width".as_ptr(), 16, 8192, 1);
         (api.obs_properties_add_int)(props, S_HEIGHT.as_ptr(), c"Height".as_ptr(), 16, 8192, 1);
-        (api.obs_properties_add_float_slider)(props, S_ZOOM.as_ptr(), c"Zoom".as_ptr(), 0.2, 8.0, 0.05);
+        // (Far out: a big prop or scene beside the avatar fits)
+        (api.obs_properties_add_float_slider)(props, S_ZOOM.as_ptr(), c"Zoom".as_ptr(), 0.05, 8.0, 0.01);
+        // The light (optional)
+        let light = (api.obs_properties_create)();
+        (api.obs_properties_add_bool)(light, S_LIGHT_ON.as_ptr(), c"Its own light (off: from the front, upper left, white)".as_ptr());
+        (api.obs_properties_add_float_slider)(light, S_LIGHT_TURN.as_ptr(), c"From: around (degrees; 0 the camera's side, + the picture's right)".as_ptr(), -180.0, 180.0, 1.0);
+        (api.obs_properties_add_float_slider)(light, S_LIGHT_HEIGHT.as_ptr(), c"From: height (degrees; 90 straight above)".as_ptr(), -90.0, 90.0, 1.0);
+        (api.obs_properties_add_color)(light, S_LIGHT_COLOR.as_ptr(), c"Colour".as_ptr());
+        (api.obs_properties_add_float_slider)(light, S_LIGHT_STRENGTH.as_ptr(), c"Strength".as_ptr(), 0.0, 4.0, 0.05);
+        (api.obs_properties_add_group)(props, c"light".as_ptr(), c"Light".as_ptr(), obs::OBS_GROUP_NORMAL, light);
         (api.obs_properties_add_float_slider)(props, S_CENTRE.as_ptr(), c"Centre (feet to head)".as_ptr(), -1.0, 1.0, 0.01);
         (api.obs_properties_add_float_slider)(props, S_YAW.as_ptr(), c"Turn".as_ptr(), -180.0, 180.0, 1.0);
         for (key, label, range) in [
@@ -872,7 +893,7 @@ unsafe extern "C" fn create(settings: Ptr, source: Ptr) -> Ptr {
         colors: Mutex::new(HashMap::new()),
         width: AtomicU32::new(1080),
         height: AtomicU32::new(1080),
-        view: Mutex::new(View { zoom: 1.0, height: 0.0, yaw: 0.0, position: glam::Vec3::ZERO }),
+        view: Mutex::new(View { zoom: 1.0, height: 0.0, yaw: 0.0, position: glam::Vec3::ZERO, light: View::LIGHT, light_color: [1.0; 3] }),
         file: Mutex::new(String::new()),
         slots: Mutex::new(Default::default()),
         style_settings: Mutex::new(HashMap::new()),
@@ -968,6 +989,17 @@ unsafe extern "C" fn update(data: Ptr, settings: Ptr) {
             height: (api.obs_data_get_double)(settings, S_CENTRE.as_ptr()) as f32,
             yaw: (api.obs_data_get_double)(settings, S_YAW.as_ptr()) as f32,
             position: glam::Vec3::from_array(S_POSITION.map(|k| (api.obs_data_get_double)(settings, k.as_ptr()) as f32)),
+            light: if (api.obs_data_get_bool)(settings, S_LIGHT_ON.as_ptr()) {
+                View::light_from((api.obs_data_get_double)(settings, S_LIGHT_TURN.as_ptr()) as f32, (api.obs_data_get_double)(settings, S_LIGHT_HEIGHT.as_ptr()) as f32)
+            } else {
+                View::LIGHT
+            },
+            light_color: if (api.obs_data_get_bool)(settings, S_LIGHT_ON.as_ptr()) {
+                let k = (api.obs_data_get_double)(settings, S_LIGHT_STRENGTH.as_ptr()) as f32;
+                obs_to_rgb((api.obs_data_get_int)(settings, S_LIGHT_COLOR.as_ptr())).map(|c| c * k)
+            } else {
+                [1.0; 3]
+            },
         };
         *puppet.motion.lock().unwrap() = Motion {
             arms_down: (api.obs_data_get_double)(settings, S_ARMS.as_ptr()) as f32,
@@ -1080,7 +1112,8 @@ unsafe extern "C" fn update(data: Ptr, settings: Ptr) {
     *current = file.clone();
     let generation = puppet.generation.fetch_add(1, Ordering::SeqCst) + 1;
     if file.is_empty() {
-        *puppet.loaded.lock().unwrap() = None;
+        // No avatar: an empty one, so its Also draw GLBs (props, parts) still draw
+        *puppet.loaded.lock().unwrap() = Some((generation, Ok(Model::empty())));
         return;
     }
     let (loaded, latest) = (puppet.loaded.clone(), puppet.generation.clone());
@@ -1564,7 +1597,7 @@ unsafe extern "C" fn video_render(data: Ptr, _effect: Ptr) {
         let prop = puppet.prop_model.lock().unwrap().clone();
         if let Some(g) = gpu.as_mut() {
             let all: Vec<Arc<Model>> = extras.iter().cloned().chain(prop.clone()).collect();
-            g.set_extras(&all);
+            g.set_extras(&all, extras.len());
             *g.prop_layer.lock().unwrap() = prop.as_ref().map(|_| extras.len() + 1);
         }
         if let Some(rig) = puppet.rig.lock().unwrap().as_mut() {

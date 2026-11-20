@@ -3,6 +3,18 @@
 What's built but not yet tried live, newest first. Tick it (or tell Claude
 what went wrong) and it comes off the list.
 
+## Materials as Blender has them, light, framing
+- [ ] Your MortyAvatar: the head shows its face (emission), the pillar its
+      wood grain and carving (normal maps), the plaque its text. (Checked by
+      snapshot; look at it in your scene.)
+- [ ] Style "Standard (as Blender)" (Puppet properties → Style): gloss from
+      roughness / metalness like EEVEE; Sun strength, World light, Specular.
+- [ ] Toon avatars look as before (Detoonify makes them rough: no gloss).
+- [ ] Puppet properties → Light: "Its own light", around / height, colour,
+      strength (Standard and Toon follow its colour).
+- [ ] Zoom goes down to 0.05; a big prop beside a small avatar fits in view.
+- [ ] A Puppet with no Avatar file, only Also draw GLBs: they draw.
+
 ## VR: how much of your movement the avatar copies
 - [ ] ⚙ Puppet Configuration → VR telemetry (and SteamVR): "How much of your
       movement the avatar copies": Head turn, Head position, Hands, Hips,

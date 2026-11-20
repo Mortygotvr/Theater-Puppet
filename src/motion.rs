@@ -1183,6 +1183,21 @@ mod tests {
     }
 
     #[test]
+    fn no_avatar_only_extra_glbs() {
+        // A source with only Also draw GLBs: an empty avatar, the extras still posed
+        let mut rig = Rig::new(Arc::new(Model::empty()));
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("controller").join("gamepad.glb");
+        rig.set_extras(&[Arc::new(crate::model::load(&path).unwrap())]);
+        rig.follow = vec![FollowSettings { move_on: false, rotate_on: false, shapes: false, ..Default::default() }];
+        let config = tracking::config::Config::default();
+        for _ in 0..30 {
+            rig.step_with(1.0 / 60.0, Motion::default(), &Snapshot::default(), &config);
+        }
+        assert!(rig.followers[0].points.iter().flatten().all(|p| p.iter().all(|v| v.is_finite())));
+        assert!(rig.followers[0].points.iter().any(|p| !p.is_empty()));
+    }
+
+    #[test]
     fn the_avatar_sits_at_its_desk() {
         use crate::tracking::desk::Desk;
         let Some(mut rig) = rig() else { return };

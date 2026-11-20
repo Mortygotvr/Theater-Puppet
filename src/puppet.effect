@@ -9,6 +9,8 @@ uniform float use_texture;
 uniform float alpha_cutoff;
 uniform float blended;
 uniform float4 light_dir;
+// The light's colour x strength (white, 1: the light Puppet always had)
+uniform float4 light_color;
 uniform float4 eye;
 uniform float outline_width;
 uniform float4 outline_color;
@@ -24,10 +26,29 @@ uniform float tile_mix;
 // A reflection (the source's "Reflection" settings): an OBS source's picture,
 // how much of it (0 = none), a flat picture (1) or a 360 one (0), and how the
 // 360 one is turned (radians)
-uniform texture2d env;
 uniform float env_strength;
 uniform float env_flat;
 uniform float env_turn;
+// The material's other maps (glTF's): what it gives off (colour x texture),
+// its normal map (tangent space, +Y up) and its gloss (metalness, roughness,
+// x the metallic-roughness texture's blue and green). use_*: has that texture
+uniform float4 emissive;
+uniform texture2d emissive_tex;
+uniform float use_emissive;
+uniform texture2d normal_tex;
+uniform float use_normal;
+uniform float normal_scale;
+uniform texture2d mr_tex;
+uniform float use_mr;
+uniform float metallic;
+uniform float roughness;
+// OBS gives a shader's textures slots in the order they're declared; the
+// compiler drops a texture whose value isn't used (a style that doesn't use
+// roughness drops the roughness map) and numbers the rest: then every
+// texture after it reads its neighbour's (black, or the normal map as the
+// colour). keep_maps (never set: 0) keeps each map used, whatever the style
+uniform float keep_maps;
+uniform texture2d env;
 
 sampler_state env_sampler {
 	Filter   = Linear;
@@ -36,6 +57,26 @@ sampler_state env_sampler {
 };
 
 sampler_state tex_sampler {
+	Filter   = Linear;
+	AddressU = Wrap;
+	AddressV = Wrap;
+};
+
+// The other maps, each with a sampler of its own (sharing tex_sampler with
+// the colour texture made Direct3D read the colour texture as black)
+sampler_state emissive_sampler {
+	Filter   = Linear;
+	AddressU = Wrap;
+	AddressV = Wrap;
+};
+
+sampler_state normal_sampler {
+	Filter   = Linear;
+	AddressU = Wrap;
+	AddressV = Wrap;
+};
+
+sampler_state mr_sampler {
 	Filter   = Linear;
 	AddressU = Wrap;
 	AddressV = Wrap;
@@ -59,12 +100,19 @@ struct Surface {
 	float3 shade;
 	float3 normal;
 	float3 light;
+	// The light's colour x strength (white unless the source has its own light)
+	float3 light_color;
 	float3 view;
 	float2 uv;
 	// The pixel, in the source's pixels from the top left
 	float2 screen;
 	// Seconds, for styles that move
 	float time;
+	// Its gloss (0–1), as Blender's Principled BSDF: metalness and roughness
+	float metallic;
+	float roughness;
+	// What it gives off (added after the style, as Blender adds emission)
+	float3 emission;
 };
 
 float4 texel(float2 uv)
@@ -100,22 +148,52 @@ VertOut VSPuppet(VertIn v)
 	return o;
 }
 
+// The normal map on normal `n`: its tangent frame from how the position and
+// the UVs change across the pixel (no tangents needed). glTF's maps have +Y
+// up the picture, and its UVs go down it: green is turned round
+float3 mapped_normal(float3 n, float3 wpos, float2 uv, float3 m)
+{
+	float3 dp1 = ddx(wpos);
+	float3 dp2 = ddy(wpos);
+	float2 duv1 = ddx(uv);
+	float2 duv2 = ddy(uv);
+	float3 dp2perp = cross(dp2, n);
+	float3 dp1perp = cross(n, dp1);
+	float3 t = dp2perp * duv1.x + dp1perp * duv2.x;
+	float3 b = dp2perp * duv1.y + dp1perp * duv2.y;
+	float inv = rsqrt(max(max(dot(t, t), dot(b, b)), 1e-20));
+	m.xy *= normal_scale;
+	float3 mapped = normalize(t * inv * m.x - b * inv * m.y + n * m.z);
+	return normalize(lerp(n, mapped, saturate(use_normal)));
+}
+
 float4 PSPuppet(VertOut v) : TARGET
 {
 	float4 t = texel(v.uv);
+	// The other maps, read here in the order they're declared
+	float3 emitted = emissive_tex.Sample(emissive_sampler, v.uv).rgb;
+	float3 nmap = normal_tex.Sample(normal_sampler, v.uv).xyz * 2.0 - 1.0;
+	float3 mrmap = mr_tex.Sample(mr_sampler, v.uv).rgb;
 	float4 albedo = base_color * t;
 	if (albedo.a < alpha_cutoff || faded_out(v.pos.xy))
 		discard;
 	Surface s;
 	s.albedo = albedo;
 	s.shade = shade_color.rgb * t.rgb;
-	s.normal = normalize(v.norm);
+	s.normal = mapped_normal(normalize(v.norm), v.wpos, v.uv, nmap);
+	float3 mr = lerp(float3(1.0, 1.0, 1.0), mrmap, saturate(use_mr));
+	s.metallic = saturate(metallic * mr.b);
+	s.roughness = saturate(roughness * mr.g);
+	s.emission = emissive.rgb * lerp(float3(1.0, 1.0, 1.0), emitted, saturate(use_emissive));
 	s.light = light_dir.xyz;
+	s.light_color = light_color.rgb;
 	s.view = normalize(eye.xyz - v.wpos);
 	s.uv = v.uv;
 	s.screen = v.pos.xy;
 	s.time = time;
 	float4 c = style(s);
+	// What it gives off, over whatever the style made (Blender's emission)
+	c.rgb += s.emission;
 	// The reflection, over the style's colour: some everywhere, more at grazing angles
 	if (env_strength > 0.0) {
 		float3 r = reflect(-s.view, s.normal);
@@ -133,6 +211,8 @@ float4 PSPuppet(VertOut v) : TARGET
 		float grazing = 0.25 + 0.75 * pow(1.0 - saturate(dot(s.normal, s.view)), 3.0);
 		c.rgb = lerp(c.rgb, e, saturate(env_strength * grazing));
 	}
+	// (Every map kept: see keep_maps)
+	c.rgb += (emitted + nmap + mrmap) * keep_maps;
 	// Opaque and cut-out materials are solid where they're drawn
 	return float4(c.rgb, lerp(1.0, c.a, blended));
 }

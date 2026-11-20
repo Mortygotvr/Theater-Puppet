@@ -43,7 +43,12 @@
 //! `lines_boil`; the last slot with lines draws them.
 //!
 //! `Surface` also has `screen` (the pixel, from the top left) and `time`
-//! (seconds), for grain, hatching and anything that moves.
+//! (seconds), for grain, hatching and anything that moves; and the
+//! material's gloss, as Blender's Principled BSDF has it: `metallic` and
+//! `roughness` (0–1, its glTF factors x its metallic-roughness texture), and
+//! `emission` (added after the styles: every style shows it). The normal is
+//! the normal map's, when the material has one. The Standard style shades
+//! as Blender does.
 //!
 //! `this`: `this.settings`, `this.time` (seconds), `this.width` /
 //! `this.height` (the source's size), and anything the script keeps there.

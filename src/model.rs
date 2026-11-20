@@ -39,6 +39,41 @@ pub struct Material {
     /// Its texture's placement (KHR_texture_transform): scale x, y, offset
     /// x, y; uv' = uv * scale + offset. A tile (tiles.rs) moves it
     pub uv: [f32; 4],
+    /// What it gives off by itself (sRGB), times its emissive texture: a
+    /// baked or glowing material shows without light
+    pub emissive: [f32; 3],
+    pub emissive_image: Option<usize>,
+    /// Its normal map (tangent space, glTF's +Y), and how strong
+    pub normal_image: Option<usize>,
+    pub normal_scale: f32,
+    /// Its gloss: metalness and roughness (0–1), times its
+    /// metallic-roughness texture's blue and green
+    pub metallic: f32,
+    pub roughness: f32,
+    pub mr_image: Option<usize>,
+}
+
+impl Material {
+    /// A plain material (no texture, no gloss, nothing given off)
+    pub fn plain(name: &str, color: [f32; 4], shade: [f32; 3]) -> Material {
+        Material {
+            name: name.into(),
+            color,
+            shade,
+            image: None,
+            alpha: Alpha::Opaque,
+            color_slot: None,
+            shade_ratio: 0.7,
+            uv: UV_IDENTITY,
+            emissive: [0.0; 3],
+            emissive_image: None,
+            normal_image: None,
+            normal_scale: 1.0,
+            metallic: 0.0,
+            roughness: 1.0,
+            mr_image: None,
+        }
+    }
 }
 
 /// No texture placement: the texture as it is
@@ -220,6 +255,25 @@ pub struct Model {
 }
 
 impl Model {
+    /// No avatar: nothing drawn, no bones. A source with only Also draw
+    /// GLBs (props, parts) has this as its avatar
+    pub fn empty() -> Model {
+        Model {
+            name: String::new(),
+            primitives: Vec::new(),
+            materials: vec![Material::plain("default", [1.0; 4], [0.7; 3])],
+            images: Vec::new(),
+            min: Vec3::ZERO,
+            max: Vec3::ZERO,
+            nodes: Vec::new(),
+            order: Vec::new(),
+            skins: Vec::new(),
+            morph_names: Vec::new(),
+            clips: Vec::new(),
+            tiles: Vec::new(),
+        }
+    }
+
     /// The shape key called `name` (any case), as its place in morph_names
     pub fn morph(&self, name: &str) -> Option<usize> {
         self.morph_names.iter().position(|n| n.eq_ignore_ascii_case(name))
@@ -314,7 +368,7 @@ pub fn load(path: &Path) -> Result<Model, String> {
 
     let mut materials: Vec<Material> = doc.materials().map(material).collect();
     let default_material = materials.len();
-    materials.push(Material { name: "default".into(), color: [1.0; 4], shade: [0.7; 3], image: None, alpha: Alpha::Opaque, color_slot: None, shade_ratio: 0.7, uv: UV_IDENTITY });
+    materials.push(Material::plain("default", [1.0; 4], [0.7; 3]));
 
     let parts_of = node_parts(&doc);
     let mut morph_names: Vec<String> = Vec::new();
@@ -438,8 +492,10 @@ pub fn load(path: &Path) -> Result<Model, String> {
     }
     // A material whose image is missing draws untextured
     for m in &mut materials {
-        if m.image.is_some_and(|i| i >= images.len()) {
-            m.image = None;
+        for image in [&mut m.image, &mut m.emissive_image, &mut m.normal_image, &mut m.mr_image] {
+            if image.is_some_and(|i| i >= images.len()) {
+                *image = None;
+            }
         }
     }
     let clips = crate::animation::load(&doc, &buffers, &morph_names);
@@ -487,6 +543,7 @@ fn material(m: gltf::Material) -> Material {
         .and_then(|t| t.texture_transform())
         .map(|t| [t.scale()[0], t.scale()[1], t.offset()[0], t.offset()[1]])
         .unwrap_or(UV_IDENTITY);
+    let emissive = m.emissive_factor().map(linear_to_srgb);
     Material {
         name,
         color,
@@ -496,6 +553,13 @@ fn material(m: gltf::Material) -> Material {
         color_slot,
         shade_ratio,
         uv,
+        emissive,
+        emissive_image: m.emissive_texture().map(|t| t.texture().source().index()),
+        normal_image: m.normal_texture().map(|t| t.texture().source().index()),
+        normal_scale: m.normal_texture().map_or(1.0, |t| t.scale()),
+        metallic: pbr.metallic_factor(),
+        roughness: pbr.roughness_factor(),
+        mr_image: pbr.metallic_roughness_texture().map(|t| t.texture().source().index()),
     }
 }
 
@@ -573,7 +637,7 @@ mod tests {
 
     #[test]
     fn a_new_colour_keeps_its_shadow_the_same_colour_darker() {
-        let m = Material { name: "Hair_Color2".into(), color: [0.8, 0.6, 0.4, 1.0], shade: [0.4, 0.3, 0.2], image: None, alpha: Alpha::Opaque, color_slot: Some(2), shade_ratio: 0.5, uv: UV_IDENTITY };
+        let m = Material { color_slot: Some(2), shade_ratio: 0.5, ..Material::plain("Hair_Color2", [0.8, 0.6, 0.4, 1.0], [0.4, 0.3, 0.2]) };
         let r = recoloured(&m, [0.2, 0.4, 1.0]);
         assert_eq!(r.color, [0.2, 0.4, 1.0, 1.0]);
         assert_eq!(r.shade, [0.1, 0.2, 0.5]);

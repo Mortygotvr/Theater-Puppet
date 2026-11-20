@@ -22,7 +22,8 @@ float4 style(Surface s, float4 c)
 	float x = saturate((ndl - threshold) / max(1.0 - threshold, 0.001) * 0.5 + 0.5) * n;
 	float lit = saturate((floor(x) + smoothstep(0.5 - softness, 0.5 + softness, frac(x))) / n);
 	float3 shade = lerp(c.rgb, s.shade, shade_amount);
-	float3 col = lerp(shade, c.rgb, lit);
+	// (The lit side in the light's colour: white unless the source has its own light)
+	float3 col = lerp(shade, c.rgb * s.light_color, lit);
 	// Rim: the edges facing away from the camera
 	float edge = pow(1.0 - saturate(dot(s.normal, s.view)), 4.0);
 	col = col + rim_color.rgb * edge * rim;

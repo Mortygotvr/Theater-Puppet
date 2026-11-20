@@ -110,6 +110,7 @@ struct Params {
     alpha_cutoff: Ptr,
     blended: Ptr,
     light_dir: Ptr,
+    light_color: Ptr,
     eye: Ptr,
     outline_width: Ptr,
     outline_color: Ptr,
@@ -123,6 +124,16 @@ struct Params {
     env_strength: Ptr,
     env_flat: Ptr,
     env_turn: Ptr,
+    emissive: Ptr,
+    emissive_tex: Ptr,
+    use_emissive: Ptr,
+    normal_tex: Ptr,
+    use_normal: Ptr,
+    normal_scale: Ptr,
+    mr_tex: Ptr,
+    use_mr: Ptr,
+    metallic: Ptr,
+    roughness: Ptr,
 }
 
 /// A reflection this frame: the picture (an OBS source drawn), how much of
@@ -170,6 +181,7 @@ fn param_size(kind: u32) -> Option<usize> {
 struct FrameValues<'a> {
     mvp: [f32; 16],
     light: [f32; 4],
+    light_color: [f32; 4],
     eye: [f32; 4],
     /// Seconds since Puppet loaded (wraps every hour, for float precision)
     time: f32,
@@ -200,6 +212,7 @@ impl Shader {
             alpha_cutoff: p("alpha_cutoff"),
             blended: p("blended"),
             light_dir: p("light_dir"),
+            light_color: p("light_color"),
             eye: p("eye"),
             outline_width: p("outline_width"),
             outline_color: p("outline_color"),
@@ -213,6 +226,16 @@ impl Shader {
             env_strength: p("env_strength"),
             env_flat: p("env_flat"),
             env_turn: p("env_turn"),
+            emissive: p("emissive"),
+            emissive_tex: p("emissive_tex"),
+            use_emissive: p("use_emissive"),
+            normal_tex: p("normal_tex"),
+            use_normal: p("use_normal"),
+            normal_scale: p("normal_scale"),
+            mr_tex: p("mr_tex"),
+            use_mr: p("use_mr"),
+            metallic: p("metallic"),
+            roughness: p("roughness"),
         };
         let mut numeric = Vec::new();
         unsafe {
@@ -239,6 +262,7 @@ impl Shader {
             }
             (api.gs_effect_set_matrix4)(p.mvp, &v.mvp);
             (api.gs_effect_set_vec4)(p.light_dir, &v.light);
+            (api.gs_effect_set_vec4)(p.light_color, &v.light_color);
             (api.gs_effect_set_vec4)(p.eye, &v.eye);
             (api.gs_effect_set_float)(p.outline_width, v.frame.outline_width);
             (api.gs_effect_set_vec4)(p.outline_color, &v.frame.outline_color);
@@ -341,7 +365,12 @@ fn upload_meshes(model: &Model, layer: usize, materials: usize, textures: usize)
             unsafe { (api.gs_texture_create)(img.width, img.height, obs::GS_RGBA, 1, &data, 0) }
         })
         .collect();
-    let new_materials = model.materials.iter().map(|m| Material { image: m.image.map(|i| i + textures), ..m.clone() }).collect();
+    let shift = |i: Option<usize>| i.map(|i| i + textures);
+    let new_materials = model
+        .materials
+        .iter()
+        .map(|m| Material { image: shift(m.image), emissive_image: shift(m.emissive_image), normal_image: shift(m.normal_image), mr_image: shift(m.mr_image), ..m.clone() })
+        .collect();
     let mut meshes = Vec::new();
     for (prim, p) in model.primitives.iter().enumerate() {
         let n = p.positions.len();
@@ -410,8 +439,11 @@ pub struct Gpu {
     /// The parts map for Theater Scene: drawn small, copied back a frame later
     parts_rt: Ptr,
     parts_stage: std::sync::Mutex<PartsStage>,
+    /// What the camera frames: the avatar and the GLBs drawn with it (not
+    /// the controller or desk); the avatar's own, kept for when they change
     pub min: Vec3,
     pub max: Vec3,
+    main_bounds: (Vec3, Vec3),
     /// The first frame's line in the log is written
     logged: AtomicBool,
 }
@@ -451,6 +483,22 @@ pub struct View {
     /// Where the avatar stands, metres from the middle: its right (+X, as
     /// seen), up, towards the camera
     pub position: Vec3,
+    /// The light: where it comes from, as the camera sees it (towards it),
+    /// and its colour times its strength
+    pub light: Vec3,
+    pub light_color: [f32; 3],
+}
+
+impl View {
+    /// The light Puppet always had: from the front, upper left, white
+    pub const LIGHT: Vec3 = Vec3::new(-0.4, 0.6, 1.0);
+
+    /// A light from `turn` degrees around (0 the camera's side, + from the
+    /// picture's right) and `height` degrees up
+    pub fn light_from(turn: f32, height: f32) -> Vec3 {
+        let (t, h) = (turn.to_radians(), height.to_radians());
+        Vec3::new(t.sin() * h.cos(), h.sin(), t.cos() * h.cos())
+    }
 }
 
 /// Copies `src` into a libobs allocation (OBS frees it with the buffer)
@@ -466,6 +514,8 @@ struct Camera {
     mvp: Mat4,
     /// Towards the light, in the avatar's own space
     light: Vec3,
+    /// Its colour x strength
+    light_color: [f32; 4],
     /// The camera, in the avatar's own space
     eye: Vec3,
 }
@@ -516,6 +566,7 @@ impl Gpu {
             parts_rt,
             env_rt,
             parts_stage: Default::default(),
+            main_bounds: (model.min, model.max),
             min: model.min,
             max: model.max,
             logged: AtomicBool::new(false),
@@ -541,7 +592,8 @@ impl Gpu {
         Camera {
             mvp: proj * Mat4::look_at_rh(eye, target, Vec3::Y) * model,
             // From the front, upper left
-            light: inverse.transform_vector3(Vec3::new(-0.4, 0.6, 1.0).normalize()),
+            light: inverse.transform_vector3(view.light.normalize_or(View::LIGHT.normalize())),
+            light_color: [view.light_color[0], view.light_color[1], view.light_color[2], 1.0],
             eye: inverse.transform_point3(eye),
         }
     }
@@ -563,7 +615,7 @@ impl Gpu {
                 let values = FrameValues {
                     // Transposed, as OBS does with its own ViewProj before it reaches the shader
                     mvp: cam.mvp.transpose().to_cols_array(),
-                    light: [cam.light.x, cam.light.y, cam.light.z, 0.0],
+                    light: [cam.light.x, cam.light.y, cam.light.z, 0.0], light_color: cam.light_color,
                     eye: [cam.eye.x, cam.eye.y, cam.eye.z, 1.0],
                     time: seconds(),
                     frame,
@@ -593,6 +645,14 @@ impl Gpu {
                         self.meshes.len(),
                         (centre.truncate() / centre.w).to_array()
                     ));
+                    // Each material's maps (what the shader gets: textures by index)
+                    for m in &self.materials {
+                        let has = |i: Option<usize>| i.map_or("-".to_string(), |i| format!("#{i}{}", if self.textures.get(i).is_some_and(|t| !t.is_null()) { "" } else { " (missing!)" }));
+                        crate::log(&format!(
+                            "[Puppet]    material {}: colour {:?} {}, emission {:?} {}, normal map {} x{}, metallic {} roughness {} {}",
+                            m.name, m.color, has(m.image), m.emissive, has(m.emissive_image), has(m.normal_image), m.normal_scale, m.metallic, m.roughness, has(m.mr_image)
+                        ));
+                    }
                 }
             } else if !self.logged.swap(true, Ordering::Relaxed) {
                 crate::log("[Puppet] ⚠️ Couldn't draw into its texture (gs_texrender_begin failed)");
@@ -653,7 +713,18 @@ impl Gpu {
 
     /// The GLBs drawn with the avatar, in the same picture (layers 1, 2…),
     /// in place of the ones before. Call on the graphics thread.
-    pub fn set_extras(&mut self, models: &[std::sync::Arc<Model>]) {
+    /// The GLBs drawn with the avatar (its "Also draw" ones, then the
+    /// controller or desk): the first `framed` of them count in the camera's
+    /// framing with the avatar (a big prop beside a small avatar fits in view)
+    pub fn set_extras(&mut self, models: &[std::sync::Arc<Model>], framed: usize) {
+        let (mut lo, mut hi) = self.main_bounds;
+        for m in models.iter().take(framed) {
+            lo = lo.min(m.min);
+            hi = hi.max(m.max);
+        }
+        (self.min, self.max) = (lo, hi);
+        // Their materials in the log too, on the next frame
+        self.logged.store(false, Ordering::Relaxed);
         let api = obs::api();
         let (keep, old): (Vec<Mesh>, Vec<Mesh>) = std::mem::take(&mut self.meshes).into_iter().partition(|m| m.layer == 0);
         self.meshes = keep;
@@ -815,6 +886,7 @@ impl Gpu {
             let values = FrameValues {
                 mvp: cam.mvp.transpose().to_cols_array(),
                 light: [0.0; 4],
+                light_color: [1.0; 4],
                 eye: [cam.eye.x, cam.eye.y, cam.eye.z, 1.0],
                 time: seconds(),
                 frame: &Frame::default(),
@@ -904,7 +976,7 @@ impl Gpu {
         let api = obs::api();
         let values = FrameValues {
             mvp: cam.mvp.transpose().to_cols_array(),
-            light: [cam.light.x, cam.light.y, cam.light.z, 0.0],
+            light: [cam.light.x, cam.light.y, cam.light.z, 0.0], light_color: cam.light_color,
             eye: [cam.eye.x, cam.eye.y, cam.eye.z, 1.0],
             time: seconds(),
             frame,
@@ -941,7 +1013,7 @@ impl Gpu {
     unsafe fn ink(&self, picture: Ptr, gbuf: Ptr, width: u32, height: u32, frame: &Frame) -> Option<Ptr> {
         let api = obs::api();
         let ink = self.ink.as_ref()?;
-        let values = FrameValues { mvp: [0.0; 16], light: [0.0; 4], eye: [0.0; 4], time: seconds(), frame, reflection: None };
+        let values = FrameValues { mvp: [0.0; 16], light: [0.0; 4], light_color: [1.0; 4], eye: [0.0; 4], time: seconds(), frame, reflection: None };
         unsafe {
             (api.gs_texrender_reset)(self.inked);
             if !(api.gs_texrender_begin)(self.inked, width, height) {
@@ -1033,6 +1105,18 @@ impl Gpu {
             }
             (api.gs_effect_set_float)(p.alpha_cutoff, cutoff);
             (api.gs_effect_set_float)(p.blended, if m.alpha == Alpha::Blend { 1.0 } else { 0.0 });
+            // What it gives off, its normal map, its gloss (each texture when it has one)
+            let tex = |i: Option<usize>| i.and_then(|i| self.textures.get(i).copied()).filter(|t| !t.is_null());
+            for (texture, param, flag) in [(tex(m.emissive_image), p.emissive_tex, p.use_emissive), (tex(m.normal_image), p.normal_tex, p.use_normal), (tex(m.mr_image), p.mr_tex, p.use_mr)] {
+                (api.gs_effect_set_float)(flag, if texture.is_some() { 1.0 } else { 0.0 });
+                if let Some(t) = texture {
+                    (api.gs_effect_set_texture)(param, t);
+                }
+            }
+            (api.gs_effect_set_vec4)(p.emissive, &[m.emissive[0], m.emissive[1], m.emissive[2], 1.0]);
+            (api.gs_effect_set_float)(p.normal_scale, m.normal_scale);
+            (api.gs_effect_set_float)(p.metallic, m.metallic);
+            (api.gs_effect_set_float)(p.roughness, m.roughness);
         }
     }
 
@@ -1063,5 +1147,20 @@ impl Gpu {
                 (api.gs_effect_destroy)(ink.effect);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_lights_defaults_are_the_light_puppet_always_had() {
+        // Its own light's starting settings (-22 degrees around, 29 up) point where the old one did
+        let own = View::light_from(-22.0, 29.0);
+        assert!(own.angle_between(View::LIGHT.normalize()) < 0.02, "{own:?}");
+        // Straight above, and from the camera's side
+        assert!((View::light_from(0.0, 90.0) - Vec3::Y).length() < 1e-5);
+        assert!((View::light_from(0.0, 0.0) - Vec3::Z).length() < 1e-5);
     }
 }
