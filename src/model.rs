@@ -51,6 +51,10 @@ pub struct Material {
     pub metallic: f32,
     pub roughness: f32,
     pub mr_image: Option<usize>,
+    /// Its coat (Blender's Principled Coat, glTF's KHR_materials_clearcoat):
+    /// a clear varnish over everything, how much (0 none) and how rough
+    pub coat: f32,
+    pub coat_roughness: f32,
 }
 
 impl Material {
@@ -72,6 +76,8 @@ impl Material {
             metallic: 0.0,
             roughness: 1.0,
             mr_image: None,
+            coat: 0.0,
+            coat_roughness: 0.03,
         }
     }
 }
@@ -544,6 +550,7 @@ fn material(m: gltf::Material) -> Material {
         .map(|t| [t.scale()[0], t.scale()[1], t.offset()[0], t.offset()[1]])
         .unwrap_or(UV_IDENTITY);
     let emissive = m.emissive_factor().map(linear_to_srgb);
+    let (coat, coat_roughness) = read_coat(&m);
     Material {
         name,
         color,
@@ -560,7 +567,18 @@ fn material(m: gltf::Material) -> Material {
         metallic: pbr.metallic_factor(),
         roughness: pbr.roughness_factor(),
         mr_image: pbr.metallic_roughness_texture().map(|t| t.texture().source().index()),
+        coat,
+        coat_roughness,
     }
+}
+
+/// A material's coat (KHR_materials_clearcoat): how much and how rough,
+/// glTF's defaults (0, 0) when a factor is left out. (Its textures aren't read:
+/// the factors are the whole coat)
+fn read_coat(m: &gltf::Material) -> (f32, f32) {
+    let ext = m.extensions().and_then(|e| e.get("KHR_materials_clearcoat"));
+    let factor = |k: &str| ext.and_then(|e| e.get(k)).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+    (factor("clearcoatFactor").clamp(0.0, 1.0), factor("clearcoatRoughnessFactor").clamp(0.0, 1.0))
 }
 
 /// A material with its slot's new colour (sRGB, 0–1): its shade the same
@@ -583,15 +601,67 @@ fn rgba(img: gltf::image::Data) -> Image {
         Format::R8G8B8 => p.chunks_exact(3).flat_map(|c| [c[0], c[1], c[2], 255]).collect(),
         Format::R8G8 => p.chunks_exact(2).flat_map(|c| [c[0], c[0], c[0], c[1]]).collect(),
         Format::R8 => p.iter().flat_map(|&c| [c, c, c, 255]).collect(),
-        // 16-bit and float images: white, until an avatar needs them
-        _ => vec![255; (w * h * 4) as usize],
+        // 16-bit (a sculpted normal map, often) and float images, to 8 bits
+        Format::R16 | Format::R16G16 | Format::R16G16B16 | Format::R16G16B16A16 => {
+            let channels = match img.format {
+                Format::R16 => 1,
+                Format::R16G16 => 2,
+                Format::R16G16B16 => 3,
+                _ => 4,
+            };
+            let values: Vec<u8> = p.chunks_exact(2).map(|b| ((u16::from_ne_bytes([b[0], b[1]]) as u32 + 128) / 257) as u8).collect();
+            widen(&values, channels)
+        }
+        Format::R32G32B32FLOAT | Format::R32G32B32A32FLOAT => {
+            let channels = if img.format == Format::R32G32B32FLOAT { 3 } else { 4 };
+            let values: Vec<u8> = p.chunks_exact(4).map(|b| (f32::from_ne_bytes([b[0], b[1], b[2], b[3]]).clamp(0.0, 1.0) * 255.0).round() as u8).collect();
+            widen(&values, channels)
+        }
     };
     Image { width: w, height: h, rgba }
+}
+
+/// 8-bit values of `channels` per pixel as RGBA (grey and grey-alpha
+/// spread, no alpha: opaque)
+fn widen(values: &[u8], channels: usize) -> Vec<u8> {
+    values
+        .chunks_exact(channels)
+        .flat_map(|c| match channels {
+            1 => [c[0], c[0], c[0], 255],
+            2 => [c[0], c[0], c[0], c[1]],
+            3 => [c[0], c[1], c[2], 255],
+            _ => [c[0], c[1], c[2], c[3]],
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn coat_is_read() {
+        // Blender's Coat 0.8, roughness 0.1; and one with the factor left out (glTF: none)
+        let json = r#"{"asset":{"version":"2.0"},"extensionsUsed":["KHR_materials_clearcoat"],"materials":[
+            {"name":"Varnish","extensions":{"KHR_materials_clearcoat":{"clearcoatFactor":0.8,"clearcoatRoughnessFactor":0.1}}},
+            {"name":"Bare","extensions":{"KHR_materials_clearcoat":{"clearcoatRoughnessFactor":0}}},
+            {"name":"Plain"}]}"#;
+        let g = gltf::Gltf::from_slice(json.as_bytes()).unwrap();
+        let coats: Vec<(f32, f32)> = g.materials().map(|m| (material(m).coat, material(g.materials().nth(0).unwrap()).coat_roughness)).collect();
+        assert_eq!(coats.iter().map(|c| c.0).collect::<Vec<_>>(), vec![0.8, 0.0, 0.0]);
+        assert!((coats[0].1 - 0.1).abs() < 1e-6);
+    }
+
+    #[test]
+    fn sixteen_bit_and_float_images_are_read() {
+        // A 16-bit RGBA pixel (a normal map's flat blue) and a float RGB one
+        let px16: Vec<u8> = [32768u16, 32768, 65535, 65535].iter().flat_map(|v| v.to_ne_bytes()).collect();
+        let img = rgba(gltf::image::Data { pixels: px16, format: gltf::image::Format::R16G16B16A16, width: 1, height: 1 });
+        assert_eq!(img.rgba, vec![128, 128, 255, 255]);
+        let pxf: Vec<u8> = [0.5f32, 0.0, 1.0].iter().flat_map(|v| v.to_ne_bytes()).collect();
+        let img = rgba(gltf::image::Data { pixels: pxf, format: gltf::image::Format::R32G32B32FLOAT, width: 1, height: 1 });
+        assert_eq!(img.rgba, vec![128, 0, 255, 255]);
+    }
 
     #[test]
     fn bones_name_their_parts() {

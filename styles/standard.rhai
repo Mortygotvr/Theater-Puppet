@@ -49,7 +49,8 @@ float4 style(Surface s, float4 c)
 	// The sun, and the world's light from all around (its reflection on metal and gloss)
 	float3 diffuse = base * (1.0 - s.metallic);
 	float3 around = f0 + (max(float3(1.0 - r, 1.0 - r, 1.0 - r), f0) - f0) * pow(1.0 - ndv, 5.0);
-	float3 lit = (diffuse * ndl + spec) * sun * s.light_color + (diffuse + around * 0.5) * world;
+	float3 rv = reflect(-v, n);
+	float3 lit = (diffuse * ndl + spec) * sun * s.light_color + diffuse * world + around * to_linear(studio(rv, l, s.light_color, r)) * world;
 	return float4(to_srgb(lit), c.a);
 }
 `;

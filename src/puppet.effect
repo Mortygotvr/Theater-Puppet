@@ -42,6 +42,9 @@ uniform texture2d mr_tex;
 uniform float use_mr;
 uniform float metallic;
 uniform float roughness;
+// Its coat (Blender's Coat, glTF's clearcoat): how much, how rough
+uniform float coat;
+uniform float coat_roughness;
 // OBS gives a shader's textures slots in the order they're declared; the
 // compiler drops a texture whose value isn't used (a style that doesn't use
 // roughness drops the roughness map) and numbers the rest: then every
@@ -136,6 +139,24 @@ bool faded_out(float2 screen)
 	return n >= glb_fade;
 }
 
+// The studio a glossy surface reflects along `rv` (as Blender's world and
+// lights): soft all around and brighter above, a softbox where the light is
+// and a strip overhead. Their edges blur with `rough`: sharp spots on varnish
+// and polish (seen even on flat faces, which a pinpoint highlight misses), a
+// haze on matte. For the styles' gloss
+float3 studio(float3 rv, float3 light, float3 light_color, float rough)
+{
+	float r = saturate(rough);
+	float sky = lerp(saturate(rv.y * 0.5 + 0.5), 0.5, r);
+	float3 c = float3(1.0, 1.0, 1.0) * sky * sky;
+	float blur = 0.04 + r * 0.9;
+	// (The same light spread wider is dimmer)
+	float strength = 1.0 / (1.0 + r * 6.0);
+	float box = smoothstep(cos(0.35 + blur), cos(max(0.35 - blur, 0.0)), dot(rv, normalize(light)));
+	float strip = smoothstep(cos(0.45 + blur), cos(max(0.45 - blur, 0.0)), rv.y);
+	return c + (light_color * box * 4.0 + strip * 2.0) * strength;
+}
+
 /* STYLE_CODE */
 
 VertOut VSPuppet(VertIn v)
@@ -194,6 +215,23 @@ float4 PSPuppet(VertOut v) : TARGET
 	float4 c = style(s);
 	// What it gives off, over whatever the style made (Blender's emission)
 	c.rgb += s.emission;
+	// Its coat: clear varnish over whatever the style made, as Blender lays
+	// it over the rest (its own normal: the surface's, not the normal map's).
+	// 4% reflective at the front (IOR 1.5), more at grazing angles; what it
+	// reflects dims what's under it
+	if (coat > 0.0) {
+		float3 cn = normalize(v.norm);
+		float cr = clamp(coat_roughness, 0.03, 1.0);
+		float ndv = saturate(dot(cn, s.view));
+		float fres = (0.04 + 0.96 * pow(1.0 - ndv, 5.0)) * saturate(coat);
+		float3 h = normalize(s.light + s.view);
+		float ndh = saturate(dot(cn, h));
+		float a2 = cr * cr * cr * cr;
+		float dd = ndh * ndh * (a2 - 1.0) + 1.0;
+		float sun = min(a2 / (3.14159265 * dd * dd), 50.0) * saturate(dot(cn, s.light)) * 0.25;
+		float3 coat_light = studio(reflect(-s.view, cn), s.light, s.light_color, cr) + sun * s.light_color;
+		c.rgb = c.rgb * (1.0 - fres) + coat_light * fres;
+	}
 	// The reflection, over the style's colour: some everywhere, more at grazing angles
 	if (env_strength > 0.0) {
 		float3 r = reflect(-s.view, s.normal);

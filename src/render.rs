@@ -134,6 +134,8 @@ struct Params {
     use_mr: Ptr,
     metallic: Ptr,
     roughness: Ptr,
+    coat: Ptr,
+    coat_roughness: Ptr,
 }
 
 /// A reflection this frame: the picture (an OBS source drawn), how much of
@@ -236,6 +238,8 @@ impl Shader {
             use_mr: p("use_mr"),
             metallic: p("metallic"),
             roughness: p("roughness"),
+            coat: p("coat"),
+            coat_roughness: p("coat_roughness"),
         };
         let mut numeric = Vec::new();
         unsafe {
@@ -649,8 +653,8 @@ impl Gpu {
                     for m in &self.materials {
                         let has = |i: Option<usize>| i.map_or("-".to_string(), |i| format!("#{i}{}", if self.textures.get(i).is_some_and(|t| !t.is_null()) { "" } else { " (missing!)" }));
                         crate::log(&format!(
-                            "[Puppet]    material {}: colour {:?} {}, emission {:?} {}, normal map {} x{}, metallic {} roughness {} {}",
-                            m.name, m.color, has(m.image), m.emissive, has(m.emissive_image), has(m.normal_image), m.normal_scale, m.metallic, m.roughness, has(m.mr_image)
+                            "[Puppet]    material {}: colour {:?} {}, emission {:?} {}, normal map {} x{}, metallic {} roughness {} {}, coat {} roughness {}",
+                            m.name, m.color, has(m.image), m.emissive, has(m.emissive_image), has(m.normal_image), m.normal_scale, m.metallic, m.roughness, has(m.mr_image), m.coat, m.coat_roughness
                         ));
                     }
                 }
@@ -1117,6 +1121,8 @@ impl Gpu {
             (api.gs_effect_set_float)(p.normal_scale, m.normal_scale);
             (api.gs_effect_set_float)(p.metallic, m.metallic);
             (api.gs_effect_set_float)(p.roughness, m.roughness);
+            (api.gs_effect_set_float)(p.coat, m.coat);
+            (api.gs_effect_set_float)(p.coat_roughness, m.coat_roughness);
         }
     }
 

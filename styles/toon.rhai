@@ -31,7 +31,8 @@ float4 style(Surface s, float4 c)
 	float edge = pow(1.0 - saturate(dot(s.normal, s.view)), 4.0);
 	col = col + rim_color.rgb * edge * rim;
 	// Gloss: the material's highlight (GGX, as Blender's), tinted by its
-	// metalness; none on a fully rough one (Detoonify makes VRoid's rough)
+	// metalness; none on a fully rough one (Detoonify makes VRoid's rough).
+	// Varnish (roughness near 0) shows the studio's lights as sharp spots
 	float3 h = normalize(s.light + s.view);
 	float ndh = saturate(dot(s.normal, h));
 	float r = clamp(s.roughness, 0.04, 1.0);
@@ -47,8 +48,7 @@ float4 style(Surface s, float4 c)
 	// roughness, more at grazing angles (Fresnel): the sheen glass, varnish
 	// and metal show in Blender
 	float3 rv = reflect(-s.view, s.normal);
-	float sky = lerp(saturate(rv.y * 0.5 + 0.5), 0.5, r);
-	sky = sky * sky * 1.6;
+	float3 sky = studio(rv, s.light, s.light_color, r);
 	float ndv = saturate(dot(s.normal, s.view));
 	float3 fresnel = f0 + (max(float3(1.0 - r, 1.0 - r, 1.0 - r), f0) - f0) * pow(1.0 - ndv, 5.0);
 	col = col + (f0 * spec * 3.0 * s.light_color + fresnel * sky) * gloss * smooth;
