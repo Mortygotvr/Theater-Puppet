@@ -4,6 +4,14 @@ What's built but not yet tried live, newest first. Tick it (or tell Claude
 what went wrong) and it comes off the list.
 
 ## Materials as Blender has them, light, framing
+- [ ] The big carved block: its carving (flowers, gears) shows now. Its normal
+      map is a 16-bit PNG, which used to load flat.
+- [ ] Varnish: smooth materials (roughness near 0, your pillar and block)
+      show sharp reflections of a light box and a ceiling strip, even on flat
+      faces, in Toon and Standard. More or less with Toon's "Gloss".
+- [ ] Blender's Coat (Principled BSDF → Coat Weight / Roughness): set it
+      above 0 on a material, export, and a clear varnish layer shows over it.
+      Your pillar and block have Coat 0; their shine is their roughness.
 - [ ] Your MortyAvatar: the head shows its face (emission), the pillar its
       wood grain and carving (normal maps), the plaque its text. (Checked by
       snapshot; look at it in your scene.)
