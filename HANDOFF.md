@@ -271,6 +271,15 @@ MediaPipe notes:
 
 ## OBS graphics lessons already paid for
 
+- **Textures and dead code (D3D11).** OBS gives a shader's textures slots in
+  the order they're declared (`textureID`, d3d11-shaderprocessor.cpp) and
+  binds texture N to slot N; the compiler drops a texture whose value isn't
+  used and numbers only the rest. A style that ignored roughness dropped the
+  roughness map and shifted every texture after it: black materials, the
+  normal map drawn as colour. Every texture the pixel shader declares must
+  reach its output: `keep_maps` (a uniform never set, so 0) adds each map
+  in. Snapshots (`snapshot.request`) and bisecting found it.
+
 - Matrices must be transposed before `gs_effect_set_matrix4`.
 - OBS clears effect parameters when a technique ends: set every parameter
   before every draw, and zero the numeric ones first, or the draw is skipped.
