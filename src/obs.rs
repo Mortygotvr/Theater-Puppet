@@ -136,6 +136,7 @@ api! {
     obs_data_get_bool: fn(Ptr, *const c_char) -> bool;
     obs_source_get_settings: fn(Ptr) -> Ptr;
     obs_source_get_name: fn(Ptr) -> *const c_char;
+    obs_source_showing: fn(Ptr) -> bool;
     obs_get_proc_handler: fn() -> Ptr;
     proc_handler_add: fn(Ptr, *const c_char, crate::parts::ProcFn, Ptr);
     calldata_get_string: fn(Ptr, *const c_char, *mut *const c_char) -> bool;

@@ -14,6 +14,8 @@ const KIND = "window";
 fn init() {
     this.tab = "General";
     this.puppet = "";
+    // Picked in the list (else: the Puppet on screen)
+    this.picked = false;
     this.note = "";
     this.edits = #{};
     this.lists = #{ cameras: [], controllers: [] };
@@ -160,12 +162,21 @@ fn ui(ui) {
 
     // The Puppet sources, for the tabs that change one of them
     let puppets = [];
+    let showing = [];
     let listed = call_proc("theater_puppet_command", #{ action: "list" });
     if type_of(listed) == "map" && "puppets" in listed {
-        for p in listed.puppets { puppets.push(p.source); }
+        for p in listed.puppets {
+            puppets.push(p.source);
+            if "showing" in p && p.showing { showing.push(p.source); }
+        }
     }
-    if !puppets.contains(this.puppet) && puppets.len() > 0 {
-        this.puppet = puppets[0];
+    // The one on screen, until one is picked in the list (the first on
+    // screen; none on screen: the first)
+    if !puppets.contains(this.puppet) { this.picked = false; }
+    if !this.picked && puppets.len() > 0 {
+        if !showing.contains(this.puppet) {
+            this.puppet = if showing.len() > 0 { showing[0] } else { puppets[0] };
+        }
     }
     let avatar = ();
     if ["General", "Controller", "Desk"].contains(this.tab) {
@@ -173,7 +184,15 @@ fn ui(ui) {
             ui.small("No Puppet source yet: add a 🎭 Theater Puppet source.");
         } else {
             if puppets.len() > 1 {
-                this.puppet = ui.choice("Puppet", this.puppet, puppets);
+                let pairs = [];
+                for p in puppets {
+                    pairs.push([p, if showing.contains(p) { `${p} (on screen)` } else { p }]);
+                }
+                let chosen = pick(ui, "Puppet (the settings below are this one's)", this.puppet, pairs);
+                if chosen != this.puppet {
+                    this.puppet = chosen;
+                    this.picked = true;
+                }
             } else {
                 ui.small(`Puppet: ${this.puppet}`);
             }

@@ -3,6 +3,11 @@
 What's built but not yet tried live, newest first. Tick it (or tell Claude
 what went wrong) and it comes off the list.
 
+## Configuration window
+- [ ] Keyboard & mouse (and Controller, General) tabs: the Puppet list starts on
+      the Puppet on screen (marked "on screen"), so sliders move the avatar
+      you see, live. Picking another one in the list sticks.
+
 ## Sky
 - [ ] Puppet properties → Sky (was Reflection) → "Shows as": Light (the
       default now) lights the avatar with the picture's colours, with no

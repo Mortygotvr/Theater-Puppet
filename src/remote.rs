@@ -53,7 +53,8 @@
 //!   places, hands, models…), and `avatar_set` {source, values}: changes
 //!   some. For the Puppet Configuration window. Only that source.
 //!
-//! It answers `{"ok", "error"?, "puppets"?, "previews"?, "settings"?}`.
+//! It answers `{"ok", "error"?, "puppets"?, "previews"?, "settings"?}`;
+//! each of `puppets` says whether it's on screen (`showing`).
 
 use std::ffi::CStr;
 use std::sync::{Arc, Mutex};
@@ -721,8 +722,10 @@ pub fn answer(args: &str) -> String {
     if action == "list" {
         out["puppets"] = puppets
             .iter()
-            .map(|(_, name, remote)| {
+            .map(|(source, name, remote)| {
                 let r = remote.lock().unwrap();
+                // On screen now (in the scene shown, or a preview)
+                let showing = unsafe { (obs::api().obs_source_showing)(*source) };
                 // The groups its loaded GLBs are in
                 let mut groups: Vec<String> = (0..r.glbs.len()).map(|l| group_of(&r.groups, r.slot(l)).to_string()).filter(|g| !g.is_empty()).collect();
                 // Each GLB's tile sets: {set: [names, in order]}
@@ -737,6 +740,7 @@ pub fn answer(args: &str) -> String {
                 groups.dedup();
                 json!({
                     "source": name,
+                    "showing": showing,
                     "glbs": r.glbs.iter().enumerate().map(|(i, g)| json!({ "index": i, "name": g.name, "keys": g.keys, "visible": !r.is_hidden(i), "group": group_of(&r.groups, r.slot(i)),
                         "materials": g.materials, "tiles": g.tiles.iter().map(|t| t.name.clone()).collect::<Vec<_>>(), "tile_sets": tile_sets(g),
                         "tiles_on": r.tiles.iter().filter(|t| t.layer == i).map(|t| if t.name.is_empty() { t.grid.map(|(c, rr, cell)| format!("{}x{} cell {cell}", c, rr)).unwrap_or_default() } else { t.name.clone() }).collect::<Vec<_>>() })).collect::<Vec<_>>(),
