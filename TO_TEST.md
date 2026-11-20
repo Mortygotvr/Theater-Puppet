@@ -3,6 +3,12 @@
 What's built but not yet tried live, newest first. Tick it (or tell Claude
 what went wrong) and it comes off the list.
 
+## Sky
+- [ ] Puppet properties → Sky (was Reflection) → "Shows as": Light (the
+      default now) lights the avatar with the picture's colours, with no
+      gloss or mirror look. Mirror is the old reflection. Strength now goes
+      up to 3 (Light is softer than Mirror).
+
 ## Camera
 - [ ] Puppet properties → Turn: the camera goes around the avatar (0 front,
       180 behind). The avatar doesn't spin and its hair doesn't swing. The

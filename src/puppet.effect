@@ -29,6 +29,9 @@ uniform float tile_mix;
 uniform float env_strength;
 uniform float env_flat;
 uniform float env_turn;
+// As light (1: the picture lights the avatar from all around, as Blender's
+// world does: no gloss) or as a mirror (0)
+uniform float env_light;
 // The material's other maps (glTF's): what it gives off (colour x texture),
 // its normal map (tangent space, +Y up) and its gloss (metalness, roughness,
 // x the metallic-roughness texture's blue and green). use_*: has that texture
@@ -188,6 +191,22 @@ float3 mapped_normal(float3 n, float3 wpos, float2 uv, float3 m)
 	return normalize(lerp(n, mapped, saturate(use_normal)));
 }
 
+// The reflection source's picture in direction `r` (the avatar's space)
+float3 env_at(float3 r)
+{
+	float2 at;
+	if (env_flat > 0.5) {
+		// A flat picture, as a mirror ball facing the camera (the avatar's
+		// left is the picture's right as the camera sees it)
+		at = float2(0.5 + r.x * 0.5, 0.5 - r.y * 0.5);
+	} else {
+		// A 360 picture (equirectangular): around, and up and down
+		float around = atan2(r.x, r.z) + env_turn;
+		at = float2(frac(0.5 - around / 6.2831853), acos(clamp(r.y, -1.0, 1.0)) / 3.1415927);
+	}
+	return env.Sample(env_sampler, at).rgb;
+}
+
 float4 PSPuppet(VertOut v) : TARGET
 {
 	float4 t = texel(v.uv);
@@ -232,22 +251,31 @@ float4 PSPuppet(VertOut v) : TARGET
 		float3 coat_light = studio(reflect(-s.view, cn), s.light, s.light_color, cr) + sun * s.light_color;
 		c.rgb = c.rgb * (1.0 - fres) + coat_light * fres;
 	}
-	// The reflection, over the style's colour: some everywhere, more at grazing angles
 	if (env_strength > 0.0) {
-		float3 r = reflect(-s.view, s.normal);
-		float2 at;
-		if (env_flat > 0.5) {
-			// A flat picture, as a mirror ball facing the camera (the avatar's
-			// left is the picture's right as the camera sees it)
-			at = float2(0.5 + r.x * 0.5, 0.5 - r.y * 0.5);
+		if (env_light > 0.5) {
+			// The picture as light: what each side of it faces, softened (the
+			// sky around the normal, averaged), lights the material's colour,
+			// added to the style's: a blue sky tints the top blue, a sunset
+			// warms one side. No gloss
+			float3 n = s.normal;
+			float3 t = normalize(cross(abs(n.y) < 0.99 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0), n));
+			float3 b = cross(n, t);
+			float3 sky = env_at(n) * 2.0;
+			sky += env_at(normalize(n + t * 0.9));
+			sky += env_at(normalize(n - t * 0.9));
+			sky += env_at(normalize(n + b * 0.9));
+			sky += env_at(normalize(n - b * 0.9));
+			sky += env_at(normalize(n + (t + b) * 0.64));
+			sky += env_at(normalize(n + (t - b) * 0.64));
+			sky += env_at(normalize(n - (t + b) * 0.64));
+			sky += env_at(normalize(n - (t - b) * 0.64));
+			c.rgb += s.albedo.rgb * sky / 10.0 * env_strength;
 		} else {
-			// A 360 picture (equirectangular): around, and up and down
-			float around = atan2(r.x, r.z) + env_turn;
-			at = float2(frac(0.5 - around / 6.2831853), acos(clamp(r.y, -1.0, 1.0)) / 3.1415927);
+			// The reflection, over the style's colour: some everywhere, more at grazing angles
+			float3 e = env_at(reflect(-s.view, s.normal));
+			float grazing = 0.25 + 0.75 * pow(1.0 - saturate(dot(s.normal, s.view)), 3.0);
+			c.rgb = lerp(c.rgb, e, saturate(env_strength * grazing));
 		}
-		float3 e = env.Sample(env_sampler, at).rgb;
-		float grazing = 0.25 + 0.75 * pow(1.0 - saturate(dot(s.normal, s.view)), 3.0);
-		c.rgb = lerp(c.rgb, e, saturate(env_strength * grazing));
 	}
 	// (Every map kept: see keep_maps)
 	c.rgb += (emitted + nmap + mrmap) * keep_maps;

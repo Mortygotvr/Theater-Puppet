@@ -124,6 +124,7 @@ struct Params {
     env_strength: Ptr,
     env_flat: Ptr,
     env_turn: Ptr,
+    env_light: Ptr,
     emissive: Ptr,
     emissive_tex: Ptr,
     use_emissive: Ptr,
@@ -146,6 +147,8 @@ pub struct Reflection {
     pub strength: f32,
     pub flat: bool,
     pub turn: f32,
+    /// As light (the picture lights the avatar, no gloss), or as a mirror
+    pub light: bool,
 }
 
 thread_local! {
@@ -228,6 +231,7 @@ impl Shader {
             env_strength: p("env_strength"),
             env_flat: p("env_flat"),
             env_turn: p("env_turn"),
+            env_light: p("env_light"),
             emissive: p("emissive"),
             emissive_tex: p("emissive_tex"),
             use_emissive: p("use_emissive"),
@@ -278,6 +282,7 @@ impl Shader {
                 (api.gs_effect_set_float)(p.env_strength, r.strength);
                 (api.gs_effect_set_float)(p.env_flat, if r.flat { 1.0 } else { 0.0 });
                 (api.gs_effect_set_float)(p.env_turn, r.turn);
+                (api.gs_effect_set_float)(p.env_light, if r.light { 1.0 } else { 0.0 });
             }
             self.set_uniforms(v.frame);
         }

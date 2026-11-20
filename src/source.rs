@@ -127,6 +127,8 @@ const S_REFLECTION_SOURCE: &CStr = c"reflection_source";
 const S_REFLECTION_STRENGTH: &CStr = c"reflection_strength";
 const S_REFLECTION_MAPPING: &CStr = c"reflection_mapping";
 const S_REFLECTION_TURN: &CStr = c"reflection_turn";
+// "light" (the default: it lights the avatar) or "mirror"
+const S_REFLECTION_USE: &CStr = c"reflection_use";
 
 /// The reflection's settings
 #[derive(Clone, Default)]
@@ -135,6 +137,7 @@ struct ReflectionSettings {
     strength: f32,
     flat: bool,
     turn: f32,
+    light: bool,
 }
 
 /// Every source's and scene's name, for the reflection's list
@@ -661,18 +664,21 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
             // A reflection: another source's picture on the avatar
             let own = get_string_of(puppet.source);
             let group = (api.obs_properties_create)();
-            let list = (api.obs_properties_add_list)(group, S_REFLECTION_SOURCE.as_ptr(), c"Source reflected".as_ptr(), obs::OBS_COMBO_TYPE_LIST, obs::OBS_COMBO_FORMAT_STRING);
+            let list = (api.obs_properties_add_list)(group, S_REFLECTION_SOURCE.as_ptr(), c"Source (the sky: a picture, 360 or flat)".as_ptr(), obs::OBS_COMBO_TYPE_LIST, obs::OBS_COMBO_FORMAT_STRING);
             (api.obs_property_list_add_string)(list, c"(none)".as_ptr(), c"".as_ptr());
             for name in source_names().into_iter().filter(|n| *n != own) {
                 let n = cstring(&name);
                 (api.obs_property_list_add_string)(list, n.as_ptr(), n.as_ptr());
             }
-            (api.obs_properties_add_float_slider)(group, S_REFLECTION_STRENGTH.as_ptr(), c"Strength".as_ptr(), 0.0, 1.0, 0.01);
+            let using = (api.obs_properties_add_list)(group, S_REFLECTION_USE.as_ptr(), c"Shows as".as_ptr(), obs::OBS_COMBO_TYPE_LIST, obs::OBS_COMBO_FORMAT_STRING);
+            (api.obs_property_list_add_string)(using, c"Light (the picture lights the avatar, as Blender's world: no gloss)".as_ptr(), c"light".as_ptr());
+            (api.obs_property_list_add_string)(using, c"Mirror (reflected on it)".as_ptr(), c"mirror".as_ptr());
+            (api.obs_properties_add_float_slider)(group, S_REFLECTION_STRENGTH.as_ptr(), c"Strength".as_ptr(), 0.0, 3.0, 0.01);
             let mapping = (api.obs_properties_add_list)(group, S_REFLECTION_MAPPING.as_ptr(), c"The picture is".as_ptr(), obs::OBS_COMBO_TYPE_LIST, obs::OBS_COMBO_FORMAT_STRING);
             (api.obs_property_list_add_string)(mapping, c"360 (equirectangular)".as_ptr(), c"360".as_ptr());
             (api.obs_property_list_add_string)(mapping, c"Flat (a mirror ball facing the camera)".as_ptr(), c"flat".as_ptr());
             (api.obs_properties_add_float_slider)(group, S_REFLECTION_TURN.as_ptr(), c"360: turn (degrees)".as_ptr(), -180.0, 180.0, 1.0);
-            (api.obs_properties_add_group)(props, c"reflection".as_ptr(), c"Reflection".as_ptr(), obs::OBS_GROUP_NORMAL, group);
+            (api.obs_properties_add_group)(props, c"reflection".as_ptr(), c"Sky (lights the avatar, or reflected on it)".as_ptr(), obs::OBS_GROUP_NORMAL, group);
         }
         // Colour slots (Theater Rig's Color<N>): the avatar's and its extras'
         if !data.is_null() {
@@ -1047,6 +1053,7 @@ unsafe extern "C" fn update(data: Ptr, settings: Ptr) {
         strength: unsafe { (api.obs_data_get_double)(settings, S_REFLECTION_STRENGTH.as_ptr()) } as f32,
         flat: get_string(settings, S_REFLECTION_MAPPING) == "flat",
         turn: unsafe { (api.obs_data_get_double)(settings, S_REFLECTION_TURN.as_ptr()) } as f32,
+        light: get_string(settings, S_REFLECTION_USE) != "mirror",
     };
     *puppet.colors.lock().unwrap() = (0..COLOR_SLOTS)
         .filter(|&s| unsafe { (api.obs_data_get_bool)(settings, color_on_key(s).as_ptr()) })
@@ -1693,7 +1700,7 @@ unsafe extern "C" fn video_render(data: Ptr, _effect: Ptr) {
                 }
                 let texture = g.render_source(source);
                 unsafe { (api_of().obs_source_release)(source) };
-                texture.map(|texture| crate::render::Reflection { texture, strength: r.strength, flat: r.flat, turn: r.turn.to_radians() })
+                texture.map(|texture| crate::render::Reflection { texture, strength: r.strength, flat: r.flat, turn: r.turn.to_radians(), light: r.light })
             })
             .flatten();
         g.draw(width, height, view, s, &frame, &filters, reflection);
