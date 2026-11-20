@@ -20,8 +20,9 @@ use serde::{Deserialize, Serialize};
 
 use super::Source;
 
-/// The keys and mouse now
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+/// The keys and mouse now (also what another computer sends, network.rs)
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Desk {
     /// Virtual-key codes down (a bit each, 0–255)
     pub keys: [u64; 4],
@@ -62,10 +63,14 @@ static LATEST: Mutex<Option<(Desk, Instant)>> = Mutex::new(None);
 static ENABLED: AtomicBool = AtomicBool::new(false);
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 
-/// The keyboard and mouse now; None while the input is off
+/// The keyboard and mouse now; None while the input is off. Another
+/// computer's while it sends them (network.rs), else this one's
 pub fn latest() -> Option<Desk> {
     if !ENABLED.load(Ordering::Relaxed) {
         return None;
+    }
+    if let Some(d) = super::network::desk() {
+        return Some(d);
     }
     let fresh = LATEST.lock().unwrap().filter(|(_, at)| at.elapsed() < Duration::from_millis(500)).map(|(d, _)| d);
     Some(fresh.unwrap_or_default())

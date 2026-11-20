@@ -29,6 +29,14 @@ use std::path::PathBuf;
 /// The plugin's id: its folder's name
 pub const PLUGIN_ID: &str = "theater-puppet";
 
+/// Run as Theater Puppet Sender (src/bin/sender.rs), not in OBS: the log
+/// goes to its console, and no OBS folders are made on that computer
+pub static OUTSIDE_OBS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn outside_obs() -> bool {
+    OUTSIDE_OBS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// The plugin's data folder (styles shipped with it): bin\64bit\..\..\data
 pub fn data_dir() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
@@ -57,7 +65,7 @@ pub fn data_dir() -> Option<PathBuf> {
 /// Its settings' folder (your own styles): OBS's plugin_config\theater-puppet
 pub fn config_dir() -> PathBuf {
     let dir = obs_user_dir().join("plugin_config").join(PLUGIN_ID);
-    if !cfg!(test) {
+    if !cfg!(test) && !outside_obs() {
         let _ = std::fs::create_dir_all(dir.join("styles"));
     }
     dir
@@ -75,6 +83,10 @@ fn obs_user_dir() -> PathBuf {
 /// A line in OBS's logs folder, theater_puppet.log
 pub fn log(msg: &str) {
     if cfg!(test) {
+        return;
+    }
+    if outside_obs() {
+        println!("{}", msg.trim_start_matches("[Puppet] "));
         return;
     }
     use std::io::Write;

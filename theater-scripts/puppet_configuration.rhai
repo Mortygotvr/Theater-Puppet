@@ -25,7 +25,7 @@ fn init() {
 fn tabs() {
     [
         ["General", "🎯 General"], ["IFacialMocap", "📱 iFacialMocap"], ["MeowFace", "🐱 MeowFace"], ["MediaPipe", "📷 MediaPipe"], ["SteamVr", "🥽 SteamVR"],
-        ["Telemetry", "📡 VR telemetry"], ["Leap", "🖐 Leap Motion"], ["Controller", "🎮 Controller"], ["Desk", "⌨ Keyboard & mouse"],
+        ["Telemetry", "📡 VR telemetry"], ["Leap", "🖐 Leap Motion"], ["Controller", "🎮 Controller"], ["Desk", "⌨ Keyboard & mouse"], ["Network", "🌐 Network"],
     ]
 }
 
@@ -333,6 +333,39 @@ fn ui(ui) {
                 av_slider(ui, this.puppet, avatar, "desk_hand_tilt", "Hands tilted back (-) or forward (+), degrees", -45.0, 45.0);
                 av_slider(ui, this.puppet, avatar, "desk_curl", "Fingers straighter (-) or more curled (+)", -0.6, 0.8);
                 this.model_path(ui, avatar, "desk_model", "Keyboard & mouse GLB (empty: the built-in one)");
+            }
+        },
+        "Network" => {
+            input_on(ui, c, "network", "Input from another computer (its keyboard, mouse and controller)");
+            ui.small(`Now: ${s.network_status}`);
+            ui.small("For OBS on one computer and your game on another: Theater Puppet Sender, on the game's computer, sends its keyboard, mouse and controller here. While it sends, they drive the avatar instead of this computer's.");
+            if c.network.enabled {
+                ui.separator();
+                let here = if s.network_addresses.len() > 0 { s.network_addresses[0] } else { "(this computer's address)" };
+                ui.strong(`This computer: ${here}    Pairing code: ${c.network.code}`);
+                ui.row();
+                ui.label("Port");
+                let shown = if "network_port" in this.edits { this.edits.network_port } else { `${c.network.port}` };
+                let typed = ui.text_box(shown, "47620");
+                if ui.button("Apply") || ui.entered() {
+                    let t = typed;
+                    t.trim();
+                    let p = 0;
+                    try { p = parse_int(t); } catch { p = 0; }
+                    if p > 0 && p < 65536 { set_cfg(#{ network: #{ port: p } }); }
+                    this.edits.remove("network_port");
+                } else if typed != `${c.network.port}` {
+                    this.edits.network_port = typed;
+                }
+                ui.end();
+                if ui.button("New pairing code") {
+                    tracking(#{ action: "network_new_code" });
+                }
+                ui.separator();
+                ui.strong("On the other computer");
+                ui.small(`Run theater-puppet-sender, then give it ${here} and the code (or: theater-puppet-sender ${here} ${c.network.code}).`);
+                ui.small("Linux: it reads the input devices: add yourself to the input group once (sudo usermod -aG input $USER, then log out and in).");
+                ui.small("Here: turn on Keyboard & mouse and/or Controller (their tabs), and set Arms to one of them in General. Windows may ask to let OBS through its firewall: allow it on your private network.");
             }
         },
     }

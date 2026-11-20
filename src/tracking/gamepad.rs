@@ -41,8 +41,9 @@ pub mod button {
     pub const GUIDE: u32 = 1 << 14;
 }
 
-/// A controller's state
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+/// A controller's state (also what another computer sends, network.rs)
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Pad {
     pub buttons: u32,
     /// 0–1
@@ -94,6 +95,10 @@ static SDL_IN_USE: Mutex<()> = Mutex::new(());
 pub fn latest() -> Option<Pad> {
     if !ENABLED.load(Ordering::Relaxed) {
         return None;
+    }
+    // Another computer's while it sends one (network.rs), else this one's
+    if let Some(p) = super::network::pad() {
+        return Some(p);
     }
     let fresh = LATEST.lock().unwrap().filter(|(_, at)| at.elapsed() < Duration::from_millis(500)).map(|(p, _)| p);
     Some(fresh.unwrap_or_default())

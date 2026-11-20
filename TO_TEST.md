@@ -3,6 +3,19 @@
 What's built but not yet tried live, newest first. Tick it (or tell Claude
 what went wrong) and it comes off the list.
 
+## Input from another computer (🌐 Network)
+- [ ] Configuration → 🌐 Network: turn it on; it shows this computer's
+      address and a pairing code. Allow OBS through the firewall if asked.
+- [ ] On the Linux computer: `sudo usermod -aG input $USER` (log out and
+      in), then run `theater-puppet-sender` (from
+      sender/target/x86_64-unknown-linux-musl/release/) with the address
+      and code. It lists the keyboard, mouse and controller it found.
+- [ ] Keyboard & mouse / Controller on in Puppet, Arms set to one of them:
+      the avatar types, mouses and holds the controller as you do on the
+      Linux computer. Unplug/replug the controller: found again.
+- [ ] Which face button is which on your controller (X/Y can be swapped by
+      some Linux drivers): tell Claude if the wrong finger moves.
+
 ## Configuration window
 - [ ] Keyboard & mouse (and Controller, General) tabs: the Puppet list starts on
       the Puppet on screen (marked "on screen"), so sliders move the avatar

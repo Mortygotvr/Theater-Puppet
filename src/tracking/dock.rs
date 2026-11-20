@@ -73,6 +73,12 @@ pub fn answer(args: &str) -> String {
             true
         }
         "leap_centre" => leap::centre(),
+        "network_new_code" => {
+            let mut c = config::get();
+            c.network.code = super::network::new_code();
+            config::set(c);
+            true
+        }
         "mediapipe_recentre" => {
             mediapipe::recentre();
             true
@@ -101,6 +107,10 @@ pub fn answer(args: &str) -> String {
                     Ok(mut c) => {
                         for phone in [&mut c.ifacialmocap, &mut c.meowface, &mut c.telemetry] {
                             phone.ip = phone.ip.trim().to_string();
+                        }
+                        // Input from another computer: a pairing code once it's on
+                        if c.network.enabled && c.network.code.trim().is_empty() {
+                            c.network.code = super::network::new_code();
                         }
                         config::set(c);
                         true
@@ -173,6 +183,8 @@ pub fn answer(args: &str) -> String {
         "ifacialmocap_status": status(Source::IFacialMocap, c.ifacialmocap.enabled),
         "mediapipe": c.mediapipe,
         "mediapipe_status": status(Source::MediaPipe, c.mediapipe),
+        "network_status": if c.network.enabled { super::network::status() } else { "off".to_string() },
+        "network_addresses": super::network::addresses(),
         "done": done,
     });
     if args.get("lists").and_then(|v| v.as_bool()).unwrap_or(false) {

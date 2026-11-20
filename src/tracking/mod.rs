@@ -27,6 +27,7 @@ pub mod gamepad;
 pub mod ifacialmocap;
 pub mod leap;
 pub mod mediapipe;
+pub mod network;
 pub mod menu;
 pub mod steamvr;
 pub mod telemetry;
@@ -404,6 +405,7 @@ pub fn start() {
     mediapipe::restart(&cfg);
     gamepad::restart(&cfg.controller);
     desk::restart(&cfg.desk);
+    network::restart(&cfg.network);
 }
 
 #[cfg(test)]

@@ -1,0 +1,7 @@
+# A Linux sender built on Windows (or anywhere): static (musl), linked by
+# Rust's own linker, so it runs on any x86_64 Linux without its libraries.
+#   rustup target add x86_64-unknown-linux-musl
+#   cargo build --release --target x86_64-unknown-linux-musl
+[target.x86_64-unknown-linux-musl]
+linker = "rust-lld"
+rustflags = ["-C", "target-feature=+crt-static"]

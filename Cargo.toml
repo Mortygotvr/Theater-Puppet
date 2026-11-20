@@ -10,6 +10,7 @@ license = "GPL-2.0-or-later"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+
 [dependencies]
 # The avatar: glTF binary, its textures decoded (PNG, JPEG), material extras
 gltf = { version = "1.4", features = ["extras", "names", "utils", "import", "image", "extensions", "KHR_texture_transform"] }
@@ -20,3 +21,5 @@ serde_json = "1.0"
 image = { version = "0.25", default-features = false, features = ["png"] }
 # Styles: Rhai scripts, like Theater Scene's filters
 rhai = { version = "1.26", features = ["sync"] }
+# Input from another computer (tracking/network.rs; its sender: sender/)
+tungstenite = "0.24"

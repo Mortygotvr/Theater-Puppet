@@ -87,6 +87,8 @@ pub struct Config {
     pub controller: super::gamepad::Settings,
     /// The keyboard and mouse, the avatar at a desk (desk.rs)
     pub desk: super::desk::Settings,
+    /// Input from another computer: its keyboard, mouse and controller (network.rs)
+    pub network: super::network::Settings,
     /// A Python of your own that has mediapipe and opencv (only in the file;
     /// empty: Puppet's own, which it installs by itself the first time)
     pub python: String,
@@ -125,6 +127,7 @@ impl Default for Config {
             python: String::new(),
             controller: Default::default(),
             desk: Default::default(),
+            network: Default::default(),
             assign: Assign::default(),
             mirror: false,
             head_strength: 1.0,
