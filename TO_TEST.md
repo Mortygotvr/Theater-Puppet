@@ -3,6 +3,20 @@
 What's built but not yet tried live, newest first. Tick it (or tell Claude
 what went wrong) and it comes off the list.
 
+## GLB prefab redeem (Scene → Puppet → Scene)
+- [ ] In Blender: an animated GLB, timeline markers named "contact" on the
+      hit frames, exported with Theater Rig enabled.
+- [ ] Scene Studio: a 🎭 Puppet redeem → Action "📦 Spawn a GLB (prefab)":
+      pick the GLB (📂); the Animation list shows its animations; the line
+      under it says its length and how many contact frames it has.
+- [ ] Place it (right/left, up, forward, size, turn); Test: it appears in
+      the Puppet, plays once, fades out (0.3 s), is gone.
+- [ ] Contact section: Contact Audio (Audio & Screen Shake) plays at each
+      contact frame; Screen Shake and Impact Reaction set "On Contact" fire
+      at each one; "On Start" fires as it spawns.
+- [ ] Save the redeem, reopen it: the Contact Audio is still there.
+- [ ] Several at once (fire it quickly): each plays on its own.
+
 ## Also draw GLBs: their own animation
 - [ ] A GLB with a shape key animation (Shape Key Flipbook, or any made in
       Blender) as an Also draw GLB: its box has "Animation (loops; this

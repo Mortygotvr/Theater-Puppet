@@ -58,7 +58,8 @@
 //!   the camera), scale, turn (degrees), hold (seconds, with no animation)}:
 //!   spawns the GLB, plays its animation once, then it fades out (prefab.rs).
 //!   Answers {id, clip, duration, gone_after, contacts: [seconds from now]}.
-//!   `prefab_clear` {source}: every prefab there goes.
+//!   `prefab_clear` {source}: every prefab there goes. `prefab_info` {glb}:
+//!   its animations, each {name, duration, contacts}.
 //!
 //! It answers `{"ok", "error"?, "puppets"?, "previews"?, "settings"?}`;
 //! each of `puppets` says whether it's on screen (`showing`).
@@ -720,6 +721,14 @@ pub fn answer(args: &str) -> String {
                 plan["source"] = json!(name);
                 plan.to_string()
             }
+            Err(e) => json!({ "ok": false, "error": e }).to_string(),
+        };
+    }
+    // A GLB's animations, each with its length and contacts (the redeem form's lists)
+    if action == "prefab_info" {
+        let glb = args.get("glb").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+        return match crate::prefab::model(std::path::Path::new(&glb)) {
+            Ok(m) => json!({ "ok": true, "clips": m.clips.iter().map(|c| json!({ "name": c.name, "duration": c.duration, "contacts": c.contacts })).collect::<Vec<_>>() }).to_string(),
             Err(e) => json!({ "ok": false, "error": e }).to_string(),
         };
     }
