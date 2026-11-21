@@ -308,6 +308,8 @@ struct Puppet {
     parts: crate::parts::Shared,
     /// What Control Panel and Scene ask of it, and what it tells them (remote.rs)
     remote: crate::remote::Shared,
+    /// GLB prefabs on screen (prefab.rs): stepped by video_tick, drawn by video_render
+    prefabs: Mutex<Vec<crate::prefab::Prefab>>,
     /// Colour slots given a colour (sRGB, 0–1)
     colors: Mutex<HashMap<u32, [f32; 3]>>,
     running: Mutex<[Option<Running>; SLOTS]>,
@@ -916,6 +918,7 @@ unsafe extern "C" fn create(settings: Ptr, source: Ptr) -> Ptr {
         source,
         parts,
         remote,
+        prefabs: Mutex::new(Vec::new()),
         colors: Mutex::new(HashMap::new()),
         width: AtomicU32::new(1080),
         height: AtomicU32::new(1080),
@@ -1469,6 +1472,21 @@ fn placed(puppet: &Puppet) -> View {
 unsafe extern "C" fn video_tick(data: Ptr, dt: f32) {
     let puppet = unsafe { &*(data as *const Puppet) };
     crate::snapshot::poll();
+    // The GLB prefabs: new ones from the procedure, each a frame on, the ended ones gone
+    {
+        let (new, clear) = {
+            let mut r = puppet.remote.lock().unwrap();
+            (std::mem::take(&mut r.prefabs), std::mem::take(&mut r.prefab_clear))
+        };
+        let mut prefabs = puppet.prefabs.lock().unwrap();
+        if clear {
+            prefabs.clear();
+        }
+        prefabs.retain_mut(|p| p.step(dt));
+        prefabs.extend(new);
+        let over = prefabs.len().saturating_sub(crate::prefab::MAX);
+        prefabs.drain(..over);
+    }
     // Arms moved between the controller and the desk: the other GLB
     load_prop(puppet);
     // The avatar's pose and springs, skinned (the render uploads them)
@@ -1633,6 +1651,16 @@ unsafe extern "C" fn video_render(data: Ptr, _effect: Ptr) {
         if let Some(rig) = puppet.rig.lock().unwrap().as_mut() {
             rig.set_extras(&extras);
             rig.set_prop(prop);
+        }
+    }
+    // The GLB prefabs: their meshes (a new one's made, a gone one's freed), posed
+    if let Some(g) = gpu.as_mut() {
+        let mut prefabs = puppet.prefabs.lock().unwrap();
+        let now: Vec<(u64, String, Arc<Model>, f32)> = prefabs.iter().map(|p| (p.id, p.key.clone(), p.model.clone(), p.fade)).collect();
+        g.sync_prefabs(&now);
+        for p in prefabs.iter_mut().filter(|p| p.dirty) {
+            g.update_prefab(p.id, &p.points, &p.normals);
+            p.dirty = false;
         }
     }
     let Some(g) = gpu.as_ref() else { return };

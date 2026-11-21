@@ -45,6 +45,18 @@ pub struct Clip {
     /// From its first key to its last
     pub duration: f32,
     pub channels: Vec<Channel>,
+    /// Its contact frames (Theater Rig writes Blender's "contact" markers as
+    /// the animation's extras, `theater_contacts`): seconds from its start
+    pub contacts: Vec<f32>,
+}
+
+/// An animation's contact times (seconds from its start), from its extras
+fn contacts_of(anim: &gltf::Animation) -> Vec<f32> {
+    let Some(raw) = anim.extras().as_ref() else { return Vec::new() };
+    let Ok(v) = serde_json::from_str::<Value>(raw.get()) else { return Vec::new() };
+    let mut out: Vec<f32> = v.get("theater_contacts").and_then(|c| c.as_array()).map(|a| a.iter().filter_map(|t| t.as_f64()).map(|t| t as f32).filter(|t| t.is_finite() && *t >= 0.0).collect()).unwrap_or_default();
+    out.sort_by(f32::total_cmp);
+    out
 }
 
 /// The file's clips: bones, and shape keys (by name, as `morph_names` has them)
@@ -111,7 +123,7 @@ pub fn load(doc: &gltf::Document, buffers: &[gltf::buffer::Data], morph_names: &
         let start = if start.is_finite() { start.min(end) } else { 0.0 };
         let duration = end - start;
         let name = anim.name().map(str::to_string).unwrap_or_else(|| format!("Animation {}", i + 1));
-        clips.push(Clip { name, start, duration, channels });
+        clips.push(Clip { name, start, duration, channels, contacts: contacts_of(&anim) });
     }
     clips
 }
@@ -342,6 +354,7 @@ mod tests {
         let f = 1.0 / 24.0;
         let clip = Clip {
             name: "Flipbook".into(),
+            contacts: Vec::new(),
             start: f,
             duration: 2.0 * f,
             channels: vec![Channel {
@@ -366,6 +379,7 @@ mod tests {
     fn lift(name: &str, duration: f32) -> Clip {
         Clip {
             name: name.into(),
+            contacts: Vec::new(),
             start: 0.0,
             duration,
             channels: vec![Channel { node: 0, times: vec![0.0, duration], values: Values::Translation(vec![Vec3::Y, Vec3::Y]), step: false }],

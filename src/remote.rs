@@ -53,6 +53,13 @@
 //!   places, hands, models…), and `avatar_set` {source, values}: changes
 //!   some. For the Puppet Configuration window. Only that source.
 //!
+//! - `prefab` {source, glb, clip ("" its first, "random", a name), position
+//!   [x, y, z] (metres from the avatar's feet: its right as seen, up, toward
+//!   the camera), scale, turn (degrees), hold (seconds, with no animation)}:
+//!   spawns the GLB, plays its animation once, then it fades out (prefab.rs).
+//!   Answers {id, clip, duration, gone_after, contacts: [seconds from now]}.
+//!   `prefab_clear` {source}: every prefab there goes.
+//!
 //! It answers `{"ok", "error"?, "puppets"?, "previews"?, "settings"?}`;
 //! each of `puppets` says whether it's on screen (`showing`).
 
@@ -258,6 +265,10 @@ pub struct Remote {
     pub tile_fade: Vec<((usize, usize), f32)>,
     /// Timed commands, to undo
     pub timers: Vec<Timer>,
+    /// GLB prefabs spawned, not yet taken by the source (prefab.rs)
+    pub prefabs: Vec<crate::prefab::Prefab>,
+    /// The prefabs on screen to go at once (`prefab_clear`)
+    pub prefab_clear: bool,
 }
 
 impl Remote {
@@ -695,6 +706,28 @@ pub fn answer(args: &str) -> String {
             }
         }
         return json!({ "ok": true, "settings": crate::source::avatar_settings(*source) }).to_string();
+    }
+    // A GLB prefab: spawned in one Puppet; its plan (animation, how long,
+    // contacts as seconds from now) for Scene to time its contact effects
+    if action == "prefab" {
+        let Some((_, name, remote)) = targets.first() else {
+            return json!({ "ok": false, "error": "no Puppet source" }).to_string();
+        };
+        return match crate::prefab::Spawn::from_args(&args).and_then(|s| crate::prefab::Prefab::new(&s)) {
+            Ok((prefab, mut plan)) => {
+                remote.lock().unwrap().prefabs.push(prefab);
+                plan["ok"] = json!(true);
+                plan["source"] = json!(name);
+                plan.to_string()
+            }
+            Err(e) => json!({ "ok": false, "error": e }).to_string(),
+        };
+    }
+    if action == "prefab_clear" {
+        for (_, _, remote) in &targets {
+            remote.lock().unwrap().prefab_clear = true;
+        }
+        return json!({ "ok": true }).to_string();
     }
     if action == "tile_previews" {
         return match targets.first() {

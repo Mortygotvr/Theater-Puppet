@@ -13,6 +13,7 @@ pub mod motion;
 pub mod obs;
 pub mod parts;
 pub mod place;
+pub mod prefab;
 pub mod remote;
 pub mod pose;
 pub mod render;

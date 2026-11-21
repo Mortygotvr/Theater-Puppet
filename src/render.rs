@@ -365,6 +365,12 @@ fn placed_uvs(uvs: &[[f32; 2]], st: [f32; 4]) -> Vec<[f32; 2]> {
 /// A model's meshes, textures and materials on the GPU, as layer `layer`
 /// (its materials' and textures' places after `materials` and `textures`)
 fn upload_meshes(model: &Model, layer: usize, materials: usize, textures: usize) -> (Vec<Mesh>, Vec<Ptr>, Vec<Material>) {
+    let (new_textures, new_materials) = upload_looks(model, textures);
+    (make_meshes(model, layer, materials), new_textures, new_materials)
+}
+
+/// A model's textures, and its materials pointing at them (from `textures` on)
+fn upload_looks(model: &Model, textures: usize) -> (Vec<Ptr>, Vec<Material>) {
     let api = obs::api();
     let new_textures = model
         .images
@@ -380,6 +386,12 @@ fn upload_meshes(model: &Model, layer: usize, materials: usize, textures: usize)
         .iter()
         .map(|m| Material { image: shift(m.image), emissive_image: shift(m.emissive_image), normal_image: shift(m.normal_image), mr_image: shift(m.mr_image), ..m.clone() })
         .collect();
+    (new_textures, new_materials)
+}
+
+/// A model's meshes (its own vertex buffers), their materials from `materials` on
+fn make_meshes(model: &Model, layer: usize, materials: usize) -> Vec<Mesh> {
+    let api = obs::api();
     let mut meshes = Vec::new();
     for (prim, p) in model.primitives.iter().enumerate() {
         let n = p.positions.len();
@@ -413,7 +425,53 @@ fn upload_meshes(model: &Model, layer: usize, materials: usize, textures: usize)
         }
         meshes.push(Mesh { vb, ib, count: p.indices.len() as u32, material: p.material + materials, prim, vertices: n, layer, local_material: p.material, uvs: p.uvs.clone() });
     }
-    (meshes, new_textures, new_materials)
+    meshes
+}
+
+/// Posed vertices into meshes' vertex buffers (each its primitive's)
+fn write_vertices<'a>(meshes: impl Iterator<Item = &'a Mesh>, points: &[Vec<[f32; 4]>], normals: &[Vec<[f32; 4]>]) {
+    let api = obs::api();
+    for mesh in meshes {
+        let (Some(p), Some(n)) = (points.get(mesh.prim), normals.get(mesh.prim)) else { continue };
+        if p.len() != mesh.vertices || n.len() != mesh.vertices {
+            continue;
+        }
+        unsafe {
+            let data = (api.gs_vertexbuffer_get_data)(mesh.vb);
+            if data.is_null() || (*data).num != mesh.vertices {
+                continue;
+            }
+            std::ptr::copy_nonoverlapping(p.as_ptr(), (*data).points, mesh.vertices);
+            std::ptr::copy_nonoverlapping(n.as_ptr(), (*data).normals, mesh.vertices);
+            (api.gs_vertexbuffer_flush)(mesh.vb);
+        }
+    }
+}
+
+/// GLB prefabs on screen (prefab.rs): each GLB's textures and materials,
+/// uploaded once and shared by every copy of it; each copy's own meshes, and
+/// how much of it shows
+#[derive(Default)]
+struct PrefabGpu {
+    looks: std::collections::HashMap<String, (Vec<Ptr>, Vec<Material>)>,
+    shown: Vec<(u64, String, Vec<Mesh>, f32)>,
+}
+
+fn destroy_meshes(meshes: Vec<Mesh>) {
+    let api = obs::api();
+    for m in meshes {
+        unsafe {
+            (api.gs_vertexbuffer_destroy)(m.vb);
+            (api.gs_indexbuffer_destroy)(m.ib);
+        }
+    }
+}
+
+fn destroy_textures(textures: Vec<Ptr>) {
+    let api = obs::api();
+    for t in textures.into_iter().filter(|t| !t.is_null()) {
+        unsafe { (api.gs_texture_destroy)(t) };
+    }
 }
 
 pub struct Gpu {
@@ -455,6 +513,8 @@ pub struct Gpu {
     main_bounds: (Vec3, Vec3),
     /// The first frame's line in the log is written
     logged: AtomicBool,
+    /// GLB prefabs on screen (sync_prefabs)
+    prefabs: PrefabGpu,
 }
 
 // Its pointers are GPU objects, used under OBS's graphics lock only
@@ -631,6 +691,7 @@ impl Gpu {
             min: model.min,
             max: model.max,
             logged: AtomicBool::new(false),
+            prefabs: PrefabGpu::default(),
         })
     }
 
@@ -861,21 +922,42 @@ impl Gpu {
     /// Layer `layer`'s posed vertices (pose::skin's, per primitive) into the
     /// GPU's buffers. Call on the graphics thread.
     pub fn update_vertices(&self, layer: usize, points: &[Vec<[f32; 4]>], normals: &[Vec<[f32; 4]>]) {
-        let api = obs::api();
-        for mesh in self.meshes.iter().filter(|m| m.layer == layer) {
-            let (Some(p), Some(n)) = (points.get(mesh.prim), normals.get(mesh.prim)) else { continue };
-            if p.len() != mesh.vertices || n.len() != mesh.vertices {
+        write_vertices(self.meshes.iter().filter(|m| m.layer == layer), points, normals);
+    }
+
+    /// The prefabs on screen now (id, its GLB's key, its model, how much
+    /// shows): a new one gets its meshes (its GLB's textures uploaded the
+    /// first time), a gone one's are freed, a GLB no copy uses any more too.
+    /// Call on the graphics thread.
+    pub fn sync_prefabs(&mut self, now: &[(u64, String, std::sync::Arc<Model>, f32)]) {
+        let pf = &mut self.prefabs;
+        let (keep, gone): (Vec<_>, Vec<_>) = std::mem::take(&mut pf.shown).into_iter().partition(|(id, ..)| now.iter().any(|(n, ..)| n == id));
+        pf.shown = keep;
+        for (_, _, meshes, _) in gone {
+            destroy_meshes(meshes);
+        }
+        for (id, key, model, fade) in now {
+            if let Some(s) = pf.shown.iter_mut().find(|(i, ..)| i == id) {
+                s.3 = *fade;
                 continue;
             }
-            unsafe {
-                let data = (api.gs_vertexbuffer_get_data)(mesh.vb);
-                if data.is_null() || (*data).num != mesh.vertices {
-                    continue;
-                }
-                std::ptr::copy_nonoverlapping(p.as_ptr(), (*data).points, mesh.vertices);
-                std::ptr::copy_nonoverlapping(n.as_ptr(), (*data).normals, mesh.vertices);
-                (api.gs_vertexbuffer_flush)(mesh.vb);
+            if !pf.looks.contains_key(key) {
+                pf.looks.insert(key.clone(), upload_looks(model, 0));
             }
+            pf.shown.push((*id, key.clone(), make_meshes(model, 0, 0), *fade));
+        }
+        let unused: Vec<String> = pf.looks.keys().filter(|k| !pf.shown.iter().any(|(_, key, ..)| key == *k)).cloned().collect();
+        for k in unused {
+            if let Some((textures, _)) = pf.looks.remove(&k) {
+                destroy_textures(textures);
+            }
+        }
+    }
+
+    /// A prefab's posed vertices
+    pub fn update_prefab(&self, id: u64, points: &[Vec<[f32; 4]>], normals: &[Vec<[f32; 4]>]) {
+        if let Some((_, _, meshes, _)) = self.prefabs.shown.iter().find(|(i, ..)| *i == id) {
+            write_vertices(meshes.iter(), points, normals);
         }
     }
 
@@ -1106,7 +1188,7 @@ impl Gpu {
             let recoloured = m.color_slot.and_then(|s| colors.get(&s)).map(|rgb| crate::model::recoloured(m, *rgb));
             unsafe {
                 shader.set_frame(values);
-                self.set_material(shader, recoloured.as_ref().unwrap_or(m));
+                self.set_material(shader, recoloured.as_ref().unwrap_or(m), &self.textures);
                 // Its GLB fading, its tile crossfading (set after set_frame zeroed them)
                 let p = &shader.params;
                 (api.gs_effect_set_float)(p.glb_fade, shows.min(1.0));
@@ -1125,12 +1207,43 @@ impl Gpu {
                 }
             }
         }
+        // The prefabs, after (not body parts to hit: not in the parts map)
+        if technique == c"Parts" {
+            return;
+        }
+        for (_, key, meshes, shows) in &self.prefabs.shown {
+            let Some((textures, materials)) = self.prefabs.looks.get(key) else { continue };
+            if *shows <= 0.0 {
+                continue;
+            }
+            for mesh in meshes {
+                let Some(m) = materials.get(mesh.material) else { continue };
+                if !wanted(m) {
+                    continue;
+                }
+                let recoloured = m.color_slot.and_then(|s| colors.get(&s)).map(|rgb| crate::model::recoloured(m, *rgb));
+                unsafe {
+                    shader.set_frame(values);
+                    self.set_material(shader, recoloured.as_ref().unwrap_or(m), textures);
+                    let p = &shader.params;
+                    (api.gs_effect_set_float)(p.glb_fade, shows.min(1.0));
+                    (api.gs_effect_set_vec4)(p.tile_map, &[1.0, 1.0, 0.0, 0.0]);
+                    (api.gs_effect_set_float)(p.tile_mix, 1.0);
+                    (api.gs_load_vertexbuffer)(mesh.vb);
+                    (api.gs_load_indexbuffer)(mesh.ib);
+                    while (api.gs_effect_loop)(shader.effect, technique.as_ptr()) {
+                        (api.gs_draw)(obs::GS_TRIS, 0, mesh.count);
+                    }
+                }
+            }
+        }
     }
 
-    unsafe fn set_material(&self, shader: &Shader, m: &Material) {
+    /// A material's settings and textures (`textures`: the list its indices are in)
+    unsafe fn set_material(&self, shader: &Shader, m: &Material, textures: &[Ptr]) {
         let api = obs::api();
         let p = &shader.params;
-        let texture = m.image.and_then(|i| self.textures.get(i).copied()).filter(|t| !t.is_null());
+        let texture = m.image.and_then(|i| textures.get(i).copied()).filter(|t| !t.is_null());
         let cutoff = match m.alpha {
             Alpha::Mask(c) => c,
             // Blended: skip only what's fully clear (keeps the depth clean)
@@ -1147,7 +1260,7 @@ impl Gpu {
             (api.gs_effect_set_float)(p.alpha_cutoff, cutoff);
             (api.gs_effect_set_float)(p.blended, if m.alpha == Alpha::Blend { 1.0 } else { 0.0 });
             // What it gives off, its normal map, its gloss (each texture when it has one)
-            let tex = |i: Option<usize>| i.and_then(|i| self.textures.get(i).copied()).filter(|t| !t.is_null());
+            let tex = |i: Option<usize>| i.and_then(|i| textures.get(i).copied()).filter(|t| !t.is_null());
             for (texture, param, flag) in [(tex(m.emissive_image), p.emissive_tex, p.use_emissive), (tex(m.normal_image), p.normal_tex, p.use_normal), (tex(m.mr_image), p.mr_tex, p.use_mr)] {
                 (api.gs_effect_set_float)(flag, if texture.is_some() { 1.0 } else { 0.0 });
                 if let Some(t) = texture {
@@ -1173,6 +1286,12 @@ impl Gpu {
             }
             for t in self.textures.into_iter().filter(|t| !t.is_null()) {
                 (api.gs_texture_destroy)(t);
+            }
+            for (_, _, meshes, _) in self.prefabs.shown {
+                destroy_meshes(meshes);
+            }
+            for (_, (textures, _)) in self.prefabs.looks {
+                destroy_textures(textures);
             }
             (api.gs_texrender_destroy)(self.target);
             (api.gs_texrender_destroy)(self.gbuf);
