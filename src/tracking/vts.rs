@@ -87,7 +87,7 @@ const SILENT: u64 = 6;
 /// answers (VSeeFace) doesn't mean OBS can: Windows Firewall allows each
 /// program by itself, and a dismissed prompt blocks OBS without a word.
 fn silent_status(ip: &str, port: u16) -> String {
-    format!("no answer from {ip}:{port}: check the phone's address (MeowFace shows it), that MeowFace is open on the same network, and that Windows Firewall lets OBS Studio in on Private networks (a program allowed, like VSeeFace, doesn't count for OBS)")
+    format!("no answer from {ip}:{port}: check the phone's address (MeowFace shows it), that MeowFace is open on the same network, and that Windows Firewall lets OBS in (see below: a program allowed, like VSeeFace, doesn't count for OBS)")
 }
 
 /// The request: send to `port` for ASK_FOR seconds

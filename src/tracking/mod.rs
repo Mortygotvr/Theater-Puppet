@@ -22,6 +22,7 @@ pub fn obs_function<T>(name: &std::ffi::CStr) -> Option<T> {
 mod dll;
 pub mod desk;
 pub mod dock;
+pub mod firewall;
 mod fingers;
 pub mod gamepad;
 pub mod ifacialmocap;

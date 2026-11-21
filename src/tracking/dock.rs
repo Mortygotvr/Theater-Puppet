@@ -73,6 +73,12 @@ pub fn answer(args: &str) -> String {
             true
         }
         "leap_centre" => leap::centre(),
+        // Windows Firewall: check again, or let OBS in (Windows' administrator prompt)
+        "firewall_check" => {
+            super::firewall::check_now();
+            true
+        }
+        "firewall_allow" => super::firewall::allow(),
         "network_new_code" => {
             let mut c = config::get();
             c.network.code = super::network::new_code();
@@ -188,6 +194,7 @@ pub fn answer(args: &str) -> String {
         "ifacialmocap_status": status(Source::IFacialMocap, c.ifacialmocap.enabled),
         "mediapipe": c.mediapipe,
         "mediapipe_status": status(Source::MediaPipe, c.mediapipe),
+        "firewall": super::firewall::status(),
         "network_status": if c.network.enabled { super::network::status() } else { "off".to_string() },
         "network_addresses": super::network::addresses(),
         "done": done,

@@ -129,6 +129,33 @@ fn status_line(ui, s, source) {
     ui.small(`Now: ${s.statuses[source]}`);
 }
 
+/// Windows Firewall, for the inputs that receive from the network: whether
+/// OBS is let in, and a button that asks Windows to let it in
+fn firewall_line(ui, s) {
+    if !("firewall" in s) || s.firewall.state == "unsupported" { return; }
+    let fw = s.firewall;
+    ui.separator();
+    if fw.state == "allowed" {
+        ui.small(`🛡 ${fw.text}`);
+    } else {
+        ui.label(`🛡 ${fw.text}`);
+    }
+    ui.row();
+    if fw.can_fix {
+        if ui.button("🛡 Let OBS through Windows Firewall…") {
+            tracking(#{ action: "firewall_allow" });
+        }
+    }
+    if ui.button("Check again") {
+        tracking(#{ action: "firewall_check" });
+    }
+    ui.end();
+    if fw.can_fix {
+        ui.small("Windows asks for permission (an administrator prompt). OBS is let in on home (Private) networks only.");
+    }
+    if "asked" in fw { ui.small(fw.asked); }
+}
+
 fn ui(ui) {
     this.frames += 1;
     // The cameras and controllers now and then (asking OBS takes a moment)
@@ -230,6 +257,7 @@ fn ui(ui) {
         "IFacialMocap" => {
             input_on(ui, c, "ifacialmocap", "iFacialMocap (iPhone)");
             status_line(ui, s, "IFacialMocap");
+            firewall_line(ui, s);
             this.phone_address(ui, c, "ifacialmocap");
             if ui.button("Re-centre head") {
                 tracking(#{ action: "ifacialmocap_recentre" });
@@ -239,6 +267,7 @@ fn ui(ui) {
         "MeowFace" => {
             input_on(ui, c, "meowface", "MeowFace (Android)");
             status_line(ui, s, "MeowFace");
+            firewall_line(ui, s);
             this.phone_address(ui, c, "meowface");
         },
         "MediaPipe" => {
@@ -338,6 +367,7 @@ fn ui(ui) {
         "Network" => {
             input_on(ui, c, "network", "Input from another computer (its keyboard, mouse and controller)");
             ui.small(`Now: ${s.network_status}`);
+            firewall_line(ui, s);
             ui.small("For OBS on one computer and your game on another: Theater Puppet Sender, on the game's computer, sends its keyboard, mouse and controller here. While it sends, they drive the avatar instead of this computer's.");
             if c.network.enabled {
                 ui.separator();
