@@ -305,8 +305,97 @@ pub fn color_slot(name: &str) -> Option<u32> {
     None
 }
 
+/// A GLB whose all-zero accessors (no bufferView and no sparse: zeros, by
+/// glTF's rules; Blender writes a shape key that moves nothing that way) are
+/// given a block of zeros, as the gltf crate wants data behind each one. None
+/// when it has none (or isn't a GLB with its own binary chunk): read as it is.
+fn zeros_filled_in(bytes: &[u8]) -> Option<Vec<u8>> {
+    let u32_at = |i: usize| bytes.get(i..i + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize);
+    if bytes.get(0..4) != Some(b"glTF") {
+        return None;
+    }
+    let json_len = u32_at(12)?;
+    if u32_at(16)? != 0x4E4F_534A {
+        return None;
+    }
+    let mut json: serde_json::Value = serde_json::from_slice(bytes.get(20..20 + json_len)?).ok()?;
+    // The binary chunk (none: an empty one)
+    let bin_at = 20 + json_len;
+    let mut bin: Vec<u8> = match (u32_at(bin_at), u32_at(bin_at + 4)) {
+        (Some(len), Some(0x004E_4942)) => bytes.get(bin_at + 8..bin_at + 8 + len)?.to_vec(),
+        _ => Vec::new(),
+    };
+    let size = |a: &serde_json::Value| -> Option<usize> {
+        let component = match a.get("componentType")?.as_u64()? {
+            5120 | 5121 => 1,
+            5122 | 5123 => 2,
+            _ => 4,
+        };
+        let n = match a.get("type")?.as_str()? {
+            "SCALAR" => 1,
+            "VEC2" => 2,
+            "VEC3" => 3,
+            "VEC4" | "MAT2" => 4,
+            "MAT3" => 9,
+            _ => 16,
+        };
+        Some(a.get("count")?.as_u64()? as usize * component * n)
+    };
+    let empty: Vec<usize> = json.get("accessors")?.as_array()?.iter().enumerate().filter(|(_, a)| a.get("bufferView").is_none() && a.get("sparse").is_none()).map(|(i, _)| i).collect();
+    if empty.is_empty() {
+        return None;
+    }
+    // A buffer with a file of its own isn't the binary chunk: left alone
+    if json.get("buffers").and_then(|b| b.get(0)).and_then(|b| b.get("uri")).is_some() {
+        return None;
+    }
+    for i in empty {
+        let length = size(&json["accessors"][i])?;
+        while bin.len() % 4 != 0 {
+            bin.push(0);
+        }
+        let offset = bin.len();
+        bin.resize(offset + length, 0);
+        let views = json.as_object_mut()?.entry("bufferViews").or_insert_with(|| serde_json::json!([]));
+        let view = views.as_array()?.len();
+        views.as_array_mut()?.push(serde_json::json!({ "buffer": 0, "byteOffset": offset, "byteLength": length.max(1) }));
+        json["accessors"][i]["bufferView"] = serde_json::json!(view);
+        json["accessors"][i]["byteOffset"] = serde_json::json!(0);
+    }
+    while bin.len() % 4 != 0 {
+        bin.push(0);
+    }
+    let buffers = json.as_object_mut()?.entry("buffers").or_insert_with(|| serde_json::json!([{}]));
+    if buffers.as_array()?.is_empty() {
+        buffers.as_array_mut()?.push(serde_json::json!({}));
+    }
+    buffers[0]["byteLength"] = serde_json::json!(bin.len());
+    let mut text = serde_json::to_vec(&json).ok()?;
+    while text.len() % 4 != 0 {
+        text.push(b' ');
+    }
+    let total = 12 + 8 + text.len() + 8 + bin.len();
+    let mut out = Vec::with_capacity(total);
+    out.extend_from_slice(b"glTF");
+    out.extend_from_slice(&2u32.to_le_bytes());
+    out.extend_from_slice(&(total as u32).to_le_bytes());
+    out.extend_from_slice(&(text.len() as u32).to_le_bytes());
+    out.extend_from_slice(&0x4E4F_534Au32.to_le_bytes());
+    out.extend_from_slice(&text);
+    out.extend_from_slice(&(bin.len() as u32).to_le_bytes());
+    out.extend_from_slice(&0x004E_4942u32.to_le_bytes());
+    out.extend_from_slice(&bin);
+    Some(out)
+}
+
 pub fn load(path: &Path) -> Result<Model, String> {
-    let (doc, buffers, images) = gltf::import(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    // (A GLB with all-zero accessors: read with zeros filled in)
+    let fixed = std::fs::read(path).ok().and_then(|b| zeros_filled_in(&b));
+    let imported = match &fixed {
+        Some(bytes) => gltf::import_slice(bytes),
+        None => gltf::import(path),
+    };
+    let (doc, buffers, images) = imported.map_err(|e| format!("{}: {e}", path.display()))?;
 
     // Every node's place in the scene
     let mut world = vec![Mat4::IDENTITY; doc.nodes().len()];
@@ -638,6 +727,51 @@ fn widen(values: &[u8], channels: usize) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_glb_with_all_zero_accessors_loads() {
+        // A triangle with a shape key whose normals move nothing: Blender
+        // writes those with no bufferView (zeros, by glTF's rules)
+        let positions: Vec<u8> = [0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0].iter().flat_map(|v| v.to_le_bytes()).collect();
+        let json = serde_json::json!({
+            "asset": { "version": "2.0" },
+            "scene": 0, "scenes": [{ "nodes": [0] }],
+            "nodes": [{ "mesh": 0 }],
+            "meshes": [{ "primitives": [{ "attributes": { "POSITION": 0 }, "targets": [{ "POSITION": 1, "NORMAL": 2 }] }], "extras": { "targetNames": ["Moves"] } }],
+            "accessors": [
+                { "bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0.0, 0.0, 0.0], "max": [1.0, 1.0, 0.0] },
+                { "bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0.0, 0.0, 0.0], "max": [1.0, 1.0, 0.0] },
+                { "componentType": 5126, "count": 3, "type": "VEC3" }
+            ],
+            "bufferViews": [{ "buffer": 0, "byteOffset": 0, "byteLength": 36 }],
+            "buffers": [{ "byteLength": 36 }]
+        });
+        let mut text = serde_json::to_vec(&json).unwrap();
+        while text.len() % 4 != 0 {
+            text.push(b' ');
+        }
+        let mut glb = Vec::new();
+        glb.extend_from_slice(b"glTF");
+        glb.extend_from_slice(&2u32.to_le_bytes());
+        glb.extend_from_slice(&((12 + 8 + text.len() + 8 + 36) as u32).to_le_bytes());
+        glb.extend_from_slice(&(text.len() as u32).to_le_bytes());
+        glb.extend_from_slice(&0x4E4F_534Au32.to_le_bytes());
+        glb.extend_from_slice(&text);
+        glb.extend_from_slice(&36u32.to_le_bytes());
+        glb.extend_from_slice(&0x004E_4942u32.to_le_bytes());
+        glb.extend_from_slice(&positions);
+        let path = std::env::temp_dir().join("theater_puppet_zero_accessor.glb");
+        std::fs::write(&path, &glb).unwrap();
+        // As the gltf crate reads it alone: refused
+        assert!(gltf::import(&path).is_err());
+        // As Puppet reads it: loaded, the shape key there
+        let m = load(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(m.primitives.len(), 1);
+        assert_eq!(m.morph_names, vec!["Moves".to_string()]);
+        // A GLB with nothing to fill in is read as it is
+        assert!(zeros_filled_in(b"not a glb").is_none());
+    }
 
     #[test]
     fn coat_is_read() {

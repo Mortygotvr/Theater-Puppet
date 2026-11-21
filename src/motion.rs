@@ -1313,10 +1313,12 @@ mod tests {
         hear(Mouth { open: 0.6, vowels: [1.0, 0.0, 0.0, 0.0, 0.0], keys, ..Default::default() });
         rig.step_with(1.0 / 60.0, still(), &Snapshot::default(), &config);
         assert!((rig.morph[o] - 0.6).abs() < 1e-6 && rig.morph[a] == 0.0);
-        // ARKit: "A" is jawOpen (here, on a VRoid face, its stand-in key Fcl_MTH_A), at 0.9
+        // ARKit: "A" is jawOpen, at 0.9: the face's own jawOpen key, or (a
+        // VRoid face without ARKit keys) its stand-in, Fcl_MTH_A
         hear(Mouth { open: 1.0, vowels: [1.0, 0.0, 0.0, 0.0, 0.0], shapes: crate::lipsync::Shapes::Arkit, ..Default::default() });
         rig.step_with(1.0 / 60.0, still(), &Snapshot::default(), &config);
-        assert!((rig.morph[a] - 0.9).abs() < 1e-6, "{}", rig.morph[a]);
+        let jaw = rig.model.morph("jawOpen").unwrap_or(a);
+        assert!((rig.morph[jaw] - 0.9).abs() < 1e-6, "{}", rig.morph[jaw]);
         // Fallback with a tracked face: the microphone stays out of it
         hear(Mouth { open: 1.0, vowels: [1.0, 0.0, 0.0, 0.0, 0.0], mode: Mode::Fallback, ..Default::default() });
         let face = Snapshot { shapes: Some([0.0; 52]), ..Default::default() };

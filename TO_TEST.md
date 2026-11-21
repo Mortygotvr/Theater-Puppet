@@ -3,6 +3,10 @@
 What's built but not yet tried live, newest first. Tick it (or tell Claude
 what went wrong) and it comes off the list.
 
+## GLBs with all-zero shape key data
+- [ ] Desktop\Armature.glb (Theater Rig export) draws (it showed nothing:
+      Puppet refused it). Set that Puppet's Zoom back to about 1.
+
 ## GLB prefab redeem (Scene → Puppet → Scene)
 - [ ] In Blender: an animated GLB, timeline markers named "contact" on the
       hit frames, exported with Theater Rig enabled.
