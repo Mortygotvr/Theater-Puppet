@@ -80,6 +80,16 @@ pub fn read(text: &str) -> Packet {
     Packet::Face(face, unknown)
 }
 
+/// Seconds without an answer before the status says what to check
+const SILENT: u64 = 6;
+
+/// What to check when the phone doesn't answer. Another app getting its
+/// answers (VSeeFace) doesn't mean OBS can: Windows Firewall allows each
+/// program by itself, and a dismissed prompt blocks OBS without a word.
+fn silent_status(ip: &str, port: u16) -> String {
+    format!("no answer from {ip}:{port}: check the phone's address (MeowFace shows it), that MeowFace is open on the same network, and that Windows Firewall lets OBS Studio in on Private networks (a program allowed, like VSeeFace, doesn't count for OBS)")
+}
+
 /// The request: send to `port` for ASK_FOR seconds
 fn request(port: u16) -> String {
     serde_json::json!({ "messageType": "iOSTrackingDataRequest", "time": ASK_FOR, "sendForSeconds": ASK_FOR, "sentBy": "Theater Puppet", "ports": [port] }).to_string()
@@ -124,6 +134,9 @@ pub fn restart(config: &Config) {
         let request = request(LISTEN_PORT);
         let mut asked: Option<Instant> = None;
         let mut received = false;
+        // Since the first request, or the last answer: no answer for a while is said
+        let mut heard = Instant::now();
+        let mut told_silent = false;
         let mut buf = [0u8; 16384];
         while GENERATION.load(Ordering::SeqCst) == generation {
             // Asked again well before the phone stops
@@ -131,7 +144,17 @@ pub fn restart(config: &Config) {
                 let _ = socket.send_to(request.as_bytes(), (ip.as_str(), port));
                 asked = Some(Instant::now());
             }
-            let Ok((len, _)) = socket.recv_from(&mut buf) else { continue };
+            let Ok((len, _)) = socket.recv_from(&mut buf) else {
+                if !ip.is_empty() && heard.elapsed() > Duration::from_secs(SILENT) {
+                    super::set_status(Source::MeowFace, silent_status(&ip, port));
+                    if !told_silent {
+                        told_silent = true;
+                        crate::log(&format!("[Puppet] ⚠️ MeowFace: no answer from {ip}:{port} after {SILENT} s ({})", silent_status(&ip, port)));
+                    }
+                }
+                continue;
+            };
+            heard = Instant::now();
             let Ok(text) = std::str::from_utf8(&buf[..len]) else { continue };
             match read(text) {
                 Packet::Face(face, unknown) => {
