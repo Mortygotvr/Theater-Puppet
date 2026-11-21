@@ -7,6 +7,9 @@ what went wrong) and it comes off the list.
 - [ ] With General → Expressions on iFacialMocap only, MeowFace's tab says
       "receiving, but General gives Expressions, Head turn to iFacialMocap…".
       Set them to Auto (or MeowFace): its shapes move the face.
+- [ ] With a real phone: MeowFace keeps sending (Puppet now asks with
+      "sendForSeconds" as VSeeFace does, and "time"). Without one:
+      python tools/fake_meowface.py (MeowFace's address 127.0.0.1).
 - [ ] theater_puppet.log, MeowFace's first face: how many ARKit shapes move,
       and which of its names aren't ARKit's (skipped). Send it to Claude if
       the face still doesn't move.

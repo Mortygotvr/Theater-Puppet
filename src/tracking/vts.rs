@@ -4,12 +4,16 @@
 //! request names:
 //!
 //! ```text
-//! -> {"messageType":"iOSTrackingDataRequest","time":10,"sentBy":"Theater Puppet","ports":[50506]}
+//! -> {"messageType":"iOSTrackingDataRequest","time":10,"sendForSeconds":10,"sentBy":"Theater Puppet","ports":[50506]}
 //! <- {"Timestamp":…,"FaceFound":true,"Rotation":{"x":…,"y":…,"z":…},"Position":{…},
 //!     "EyeLeft":{"x":…,"y":…,"z":…},"EyeRight":{…},"BlendShapes":[{"k":"EyeBlinkLeft","v":0.1},…]}
 //! ```
 //!
 //! Shapes are ARKit's, capitalised, 0–1; the turns are Unity's, in degrees.
+//!
+//! How long to send is "time" in VTube Studio's own documentation, and
+//! "sendForSeconds" in VSeeFace's request (which MeowFace answers): both are
+//! sent, so a phone reading either keeps sending.
 
 use std::net::UdpSocket;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -76,6 +80,11 @@ pub fn read(text: &str) -> Packet {
     Packet::Face(face, unknown)
 }
 
+/// The request: send to `port` for ASK_FOR seconds
+fn request(port: u16) -> String {
+    serde_json::json!({ "messageType": "iOSTrackingDataRequest", "time": ASK_FOR, "sendForSeconds": ASK_FOR, "sentBy": "Theater Puppet", "ports": [port] }).to_string()
+}
+
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 
 pub fn restart(config: &Config) {
@@ -112,7 +121,7 @@ pub fn restart(config: &Config) {
             super::set_status(Source::MeowFace, format!("asking {ip}:{port}"));
         }
         crate::log(&format!("[Puppet] 📱 MeowFace: asking {ip}:{port}, listening on UDP {LISTEN_PORT}"));
-        let request = serde_json::json!({ "messageType": "iOSTrackingDataRequest", "time": ASK_FOR, "sentBy": "Theater Puppet", "ports": [LISTEN_PORT] }).to_string();
+        let request = request(LISTEN_PORT);
         let mut asked: Option<Instant> = None;
         let mut received = false;
         let mut buf = [0u8; 16384];
@@ -174,6 +183,9 @@ mod tests {
         assert!(parse(r#"{"FaceFound":false,"BlendShapes":[{"k":"JawOpen","v":0.3}]}"#).is_none());
         assert!(parse("not json").is_none());
         assert!(parse(r#"{"BlendShapes":[]}"#).is_none());
+        // How long to send, both ways phones read it
+        let ask: serde_json::Value = serde_json::from_str(&request(50506)).unwrap();
+        assert_eq!((ask["messageType"].as_str(), ask["time"].as_u64(), ask["sendForSeconds"].as_u64(), ask["ports"][0].as_u64()), (Some("iOSTrackingDataRequest"), Some(ASK_FOR), Some(ASK_FOR), Some(50506)));
         // Shapes none of which are ARKit's: said, not taken for "no face"
         match read(r#"{"FaceFound":true,"BlendShapes":[{"k":"MouthOpenWide","v":0.3}]}"#) {
             Packet::Unknown(names) => assert_eq!(names, vec!["MouthOpenWide".to_string()]),
