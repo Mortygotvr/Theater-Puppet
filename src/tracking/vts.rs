@@ -29,21 +29,43 @@ fn turn(v: &serde_json::Value) -> Option<glam::Quat> {
 
 /// A packet's face; None if it isn't one, or the phone sees no face
 pub fn parse(text: &str) -> Option<Face> {
-    let v: serde_json::Value = serde_json::from_str(text).ok()?;
-    if v.get("FaceFound").and_then(|f| f.as_bool()) == Some(false) {
-        return None;
+    match read(text) {
+        Packet::Face(face, _) => Some(face),
+        _ => None,
     }
+}
+
+/// What a packet is
+pub enum Packet {
+    /// A face, and the shape names in it that aren't ARKit's (skipped)
+    Face(Face, Vec<String>),
+    /// Shapes, none of them ARKit's: their names
+    Unknown(Vec<String>),
+    /// No face in view, or not a packet of this protocol
+    Nothing,
+}
+
+pub fn read(text: &str) -> Packet {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else { return Packet::Nothing };
+    if v.get("FaceFound").and_then(|f| f.as_bool()) == Some(false) {
+        return Packet::Nothing;
+    }
+    let Some(shapes) = v.get("BlendShapes").and_then(|b| b.as_array()) else { return Packet::Nothing };
     let mut face = Face::default();
     let mut found = 0;
-    for shape in v.get("BlendShapes")?.as_array()? {
+    let mut unknown = Vec::new();
+    for shape in shapes {
         let (Some(k), Some(val)) = (shape.get("k").and_then(|k| k.as_str()), shape.get("v").and_then(|x| x.as_f64())) else { continue };
-        if let Some(i) = super::arkit_index(k) {
-            face.shapes[i] = (val as f32).clamp(0.0, 1.0);
-            found += 1;
+        match super::arkit_index(k) {
+            Some(i) => {
+                face.shapes[i] = (val as f32).clamp(0.0, 1.0);
+                found += 1;
+            }
+            None => unknown.push(k.to_string()),
         }
     }
     if found == 0 {
-        return None;
+        return if unknown.is_empty() { Packet::Nothing } else { Packet::Unknown(unknown) };
     }
     if let Some(head) = v.get("Rotation").and_then(turn) {
         face.head = head;
@@ -51,7 +73,7 @@ pub fn parse(text: &str) -> Option<Face> {
     if let (Some(l), Some(r)) = (v.get("EyeLeft").and_then(turn), v.get("EyeRight").and_then(turn)) {
         face.eyes = Some([l, r]);
     }
-    Some(face)
+    Packet::Face(face, unknown)
 }
 
 static GENERATION: AtomicU64 = AtomicU64::new(0);
@@ -102,16 +124,26 @@ pub fn restart(config: &Config) {
             }
             let Ok((len, _)) = socket.recv_from(&mut buf) else { continue };
             let Ok(text) = std::str::from_utf8(&buf[..len]) else { continue };
-            match parse(text) {
-                Some(face) => {
+            match read(text) {
+                Packet::Face(face, unknown) => {
+                    let known = face.shapes.iter().filter(|w| **w > 0.0).count();
                     super::set_face(Source::MeowFace, face);
                     super::set_status(Source::MeowFace, "receiving");
                     if !received {
                         received = true;
-                        crate::log("[Puppet] 📱 MeowFace: receiving the face");
+                        // Which shapes it sends that Puppet doesn't know (they're skipped)
+                        let skipped = if unknown.is_empty() { String::new() } else { format!("; not ARKit's, skipped: {}", unknown.join(", ")) };
+                        crate::log(&format!("[Puppet] 📱 MeowFace: receiving the face ({known} ARKit shape(s) moving{skipped})"));
                     }
                 }
-                None => super::set_status(Source::MeowFace, "connected, no face in view"),
+                Packet::Unknown(names) => {
+                    super::set_status(Source::MeowFace, format!("connected, but its shapes aren't ARKit's ({}…): Puppet can't use them", names.iter().take(3).cloned().collect::<Vec<_>>().join(", ")));
+                    if !received {
+                        received = true;
+                        crate::log(&format!("[Puppet] ⚠️ MeowFace: its shapes aren't ARKit's, so none is used: {}", names.join(", ")));
+                    }
+                }
+                Packet::Nothing => super::set_status(Source::MeowFace, "connected, no face in view"),
             }
         }
     });
@@ -142,5 +174,18 @@ mod tests {
         assert!(parse(r#"{"FaceFound":false,"BlendShapes":[{"k":"JawOpen","v":0.3}]}"#).is_none());
         assert!(parse("not json").is_none());
         assert!(parse(r#"{"BlendShapes":[]}"#).is_none());
+        // Shapes none of which are ARKit's: said, not taken for "no face"
+        match read(r#"{"FaceFound":true,"BlendShapes":[{"k":"MouthOpenWide","v":0.3}]}"#) {
+            Packet::Unknown(names) => assert_eq!(names, vec!["MouthOpenWide".to_string()]),
+            _ => panic!("not told apart"),
+        }
+        // Some ARKit's, some not: the face, and the ones skipped
+        match read(r#"{"FaceFound":true,"BlendShapes":[{"k":"JawOpen","v":0.3},{"k":"Wink","v":1}]}"#) {
+            Packet::Face(face, unknown) => {
+                assert_eq!(face.shapes[arkit_index("jawOpen").unwrap()], 0.3);
+                assert_eq!(unknown, vec!["Wink".to_string()]);
+            }
+            _ => panic!("no face"),
+        }
     }
 }

@@ -248,6 +248,34 @@ impl Part {
     }
 }
 
+/// What an input sends but the avatar doesn't take, by General's "What
+/// tracks what" (its parts given to another input, or off): the note its
+/// status ends with, so "receiving" doesn't look like a bug. None: it drives
+/// every part it can (Auto, or its own).
+pub fn sidelined(source: Source, assign: &config::Assign) -> Option<String> {
+    let mut to_others: Vec<(Part, Source)> = Vec::new();
+    let mut off: Vec<Part> = Vec::new();
+    for part in Part::ALL.into_iter().filter(|p| p.inputs().contains(&source)) {
+        match assign.get(part) {
+            Pick::Only(other) if other != source => to_others.push((part, other)),
+            Pick::Off => off.push(part),
+            _ => {}
+        }
+    }
+    let names = |parts: &[Part]| parts.iter().map(|p| p.name()).collect::<Vec<_>>().join(", ");
+    let mut why = Vec::new();
+    let mut givers: Vec<Source> = to_others.iter().map(|(_, s)| *s).collect();
+    givers.dedup();
+    for g in givers {
+        let parts: Vec<Part> = to_others.iter().filter(|(_, s)| *s == g).map(|(p, _)| *p).collect();
+        why.push(format!("{} to {}", names(&parts), g.name()));
+    }
+    if !off.is_empty() {
+        why.push(format!("{} off", names(&off)));
+    }
+    (!why.is_empty()).then(|| format!("but General gives {}: set them to Auto or {} to use it", why.join("; "), source.name()))
+}
+
 /// Which input drives a part
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Pick {
@@ -410,6 +438,24 @@ pub fn start() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_input_sidelined_by_general_is_told() {
+        use super::*;
+        let mut assign = config::Assign::default();
+        assert_eq!(sidelined(Source::MeowFace, &assign), None, "Auto: it drives its parts");
+        assign.expressions = Pick::Only(Source::IFacialMocap);
+        assign.head_turn = Pick::Only(Source::IFacialMocap);
+        let note = sidelined(Source::MeowFace, &assign).unwrap();
+        assert!(note.contains("Expressions, Head turn to iFacialMocap") && note.contains("Auto or MeowFace"), "{note}");
+        assert_eq!(sidelined(Source::IFacialMocap, &assign), None, "iFacialMocap has them");
+        assign.expressions = Pick::Off;
+        assert!(sidelined(Source::MeowFace, &assign).unwrap().contains("Expressions off"));
+        // Parts it can't drive don't count (MeowFace has no arms)
+        let mut arms = config::Assign::default();
+        arms.arms = Pick::Only(Source::Desk);
+        assert_eq!(sidelined(Source::MeowFace, &arms), None);
+    }
+
     use super::*;
 
     #[test]

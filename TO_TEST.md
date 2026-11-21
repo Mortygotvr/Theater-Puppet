@@ -3,6 +3,14 @@
 What's built but not yet tried live, newest first. Tick it (or tell Claude
 what went wrong) and it comes off the list.
 
+## MeowFace / inputs sidelined by General
+- [ ] With General → Expressions on iFacialMocap only, MeowFace's tab says
+      "receiving, but General gives Expressions, Head turn to iFacialMocap…".
+      Set them to Auto (or MeowFace): its shapes move the face.
+- [ ] theater_puppet.log, MeowFace's first face: how many ARKit shapes move,
+      and which of its names aren't ARKit's (skipped). Send it to Claude if
+      the face still doesn't move.
+
 ## GLBs with all-zero shape key data
 - [ ] Desktop\Armature.glb (Theater Rig export) draws (it showed nothing:
       Puppet refused it). Set that Puppet's Zoom back to about 1.

@@ -140,11 +140,16 @@ pub fn answer(args: &str) -> String {
     };
     let c = config::get();
     let statuses = super::statuses();
+    // An input receiving what General gives to another: said at the end of its line
+    let noted = |s: Source, text: String| match super::sidelined(s, &c.assign) {
+        Some(note) if text.starts_with("receiving") => format!("{text}, {note}"),
+        _ => text,
+    };
     let status = |s: Source, on: bool| {
         if !on {
             return "off (turn it on in the Configuration window)".to_string();
         }
-        statuses.iter().find(|(src, _, _)| *src == s).map(|(_, _, t)| t.clone()).unwrap_or_else(|| "starting".into())
+        noted(s, statuses.iter().find(|(src, _, _)| *src == s).map(|(_, _, t)| t.clone()).unwrap_or_else(|| "starting".into()))
     };
     let pick_value = |p: super::Pick| match p {
         super::Pick::Auto => "auto".to_string(),
@@ -164,7 +169,7 @@ pub fn answer(args: &str) -> String {
         .collect();
     let all_statuses: serde_json::Map<String, Value> = Source::ALL
         .into_iter()
-        .map(|s| (format!("{s:?}"), json!(statuses.iter().find(|(src, _, _)| *src == s).map(|(_, _, t)| t.clone()).unwrap_or_else(|| "off".into()))))
+        .map(|s| (format!("{s:?}"), json!(noted(s, statuses.iter().find(|(src, _, _)| *src == s).map(|(_, _, t)| t.clone()).unwrap_or_else(|| "off".into())))))
         .collect();
     let mut out = json!({
         "config": serde_json::to_value(&c).unwrap_or(json!({})),
