@@ -39,6 +39,10 @@ pub struct Channel {
 
 pub struct Clip {
     pub name: String,
+    /// Its first key's time (Blender's exporter starts a clip at its first
+    /// frame: frame 1 is 1/24 s, not 0): played and looped from there
+    pub start: f32,
+    /// From its first key to its last
     pub duration: f32,
     pub channels: Vec<Channel>,
 }
@@ -102,9 +106,12 @@ pub fn load(doc: &gltf::Document, buffers: &[gltf::buffer::Data], morph_names: &
         if channels.is_empty() {
             continue;
         }
-        let duration = channels.iter().filter_map(|c| c.times.last().copied()).fold(0.0, f32::max);
+        let end = channels.iter().filter_map(|c| c.times.last().copied()).fold(0.0, f32::max);
+        let start = channels.iter().filter_map(|c| c.times.first().copied()).fold(f32::INFINITY, f32::min);
+        let start = if start.is_finite() { start.min(end) } else { 0.0 };
+        let duration = end - start;
         let name = anim.name().map(str::to_string).unwrap_or_else(|| format!("Animation {}", i + 1));
-        clips.push(Clip { name, duration, channels });
+        clips.push(Clip { name, start, duration, channels });
     }
     clips
 }
@@ -126,11 +133,13 @@ fn keys(times: &[f32], time: f32, step: bool) -> (usize, usize, f32) {
 }
 
 impl Clip {
-    /// The clip at `time` over `pose`'s local transforms, `weight` of the way
+    /// The clip at `time` (from its start) over `pose`'s local transforms,
+    /// `weight` of the way
     pub fn apply(&self, pose: &mut Pose, time: f32, weight: f32) {
         if weight <= 0.0 {
             return;
         }
+        let time = self.start + time;
         for c in &self.channels {
             let n = c.node;
             if n >= pose.rotation.len() {
@@ -152,6 +161,7 @@ impl Clip {
         if weight <= 0.0 {
             return;
         }
+        let time = self.start + time;
         for c in &self.channels {
             let Values::Weights { targets, values } = &c.values else { continue };
             let (a, b, f) = keys(&c.times, time, c.step);
@@ -326,9 +336,37 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_clip_loops_over_its_own_span() {
+        // Exported from frame 1: keys at 1/24, 2/24, 3/24 s, shape 0 then 1 then 2, held
+        let f = 1.0 / 24.0;
+        let clip = Clip {
+            name: "Flipbook".into(),
+            start: f,
+            duration: 2.0 * f,
+            channels: vec![Channel {
+                node: 0,
+                times: vec![f, 2.0 * f, 3.0 * f],
+                values: Values::Weights { targets: vec![Some(0), Some(1), Some(2)], values: vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0] },
+                step: true,
+            }],
+        };
+        let shown = |t: f32| {
+            let mut m = [0.0f32; 3];
+            clip.apply_shapes(&mut m, t, 1.0);
+            m.iter().position(|w| *w > 0.5)
+        };
+        // From its start: its first key at once, the next a frame later
+        assert_eq!(shown(0.0), Some(0));
+        assert_eq!(shown(0.5 * f), Some(0));
+        assert_eq!(shown(1.5 * f), Some(1));
+        assert_eq!(shown(2.0 * f - 1e-4), Some(1));
+    }
+
     fn lift(name: &str, duration: f32) -> Clip {
         Clip {
             name: name.into(),
+            start: 0.0,
             duration,
             channels: vec![Channel { node: 0, times: vec![0.0, duration], values: Values::Translation(vec![Vec3::Y, Vec3::Y]), step: false }],
         }

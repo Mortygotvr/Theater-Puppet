@@ -3,6 +3,14 @@
 What's built but not yet tried live, newest first. Tick it (or tell Claude
 what went wrong) and it comes off the list.
 
+## Also draw GLBs: their own animation
+- [ ] A GLB with a shape key animation (Shape Key Flipbook, or any made in
+      Blender) as an Also draw GLB: its box has "Animation (loops; this
+      GLB's own)", listing its clips. Pick one: it loops on that GLB.
+- [ ] A flipbook: one shape per frame, no blending, the loop seamless.
+- [ ] The avatar's own animations start at once (they used to hold their
+      first frame a moment when exported from frame 1).
+
 ## Input from another computer (🌐 Network)
 - [ ] Configuration → 🌐 Network: turn it on; it shows this computer's
       address and a pairing code. Allow OBS through the firewall if asked.

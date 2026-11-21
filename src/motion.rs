@@ -720,6 +720,8 @@ pub struct Follower {
     morph: Vec<f32>,
     springs: Springs,
     settled: bool,
+    /// Its own clip playing (FollowSettings::clip): which, and how far in
+    playing: Option<(usize, f32)>,
     pub points: Vec<Vec<[f32; 4]>>,
     pub normals: Vec<Vec<[f32; 4]>>,
     pub dirty: bool,
@@ -737,11 +739,13 @@ pub struct FollowSettings {
     pub rotate_on: bool,
     pub rotate_from: String,
     pub shapes: bool,
+    /// Its own clip, looping ("" none): bones and shape keys, over what it copies
+    pub clip: String,
 }
 
 impl Default for FollowSettings {
     fn default() -> Self {
-        FollowSettings { move_on: true, move_from: String::new(), rotate_on: true, rotate_from: String::new(), shapes: true }
+        FollowSettings { move_on: true, move_from: String::new(), rotate_on: true, rotate_from: String::new(), shapes: true, clip: String::new() }
     }
 }
 
@@ -763,6 +767,7 @@ impl Follower {
             morph_from,
             springs,
             settled: false,
+            playing: None,
             dirty: false,
             model,
         }
@@ -795,6 +800,16 @@ impl Follower {
             if copy_move || copy_rotate {
                 pose.scale[i] = self.rest.scale[i] * main_pose.scale[j] / main_rest.scale[j].max(Vec3::splat(1e-6));
             }
+        }
+        // Its own clip, looping (from its start when it's chosen), over what it copies
+        let clip = model.clips.iter().position(|c| !how.clip.is_empty() && c.name == how.clip);
+        self.playing = clip.map(|c| {
+            let d = model.clips[c].duration;
+            let t = self.playing.filter(|(p, _)| *p == c).map_or(0.0, |(_, t)| t + dt);
+            (c, if d > 0.0 { t % d } else { 0.0 })
+        });
+        if let Some((c, t)) = self.playing {
+            model.clips[c].apply(pose, t, 1.0);
         }
         // The whole GLB with one bone: turned about it as it turned, moved as it moved
         let turned = rotate_bone.filter(|_| how.rotate_on);
@@ -840,6 +855,9 @@ impl Follower {
                     self.morph[k] = self.morph[k].max(*w);
                 }
             }
+        }
+        if let Some((c, t)) = self.playing {
+            model.clips[c].apply_shapes(&mut self.morph, t, 1.0);
         }
         apply_overrides(&model, overrides, layer, &mut self.morph);
         pose::skin(&model, pose, &self.morph, &mut self.points, &mut self.normals);
@@ -1004,6 +1022,38 @@ mod tests {
             println!("box from the hand: before {before:?}, after the hand moved {after:?}");
             assert!(before.length() < 0.1 && after.length() < 0.1, "the box isn't in the hand");
         }
+    }
+
+    /// THEATER_PUPPET_FLIPBOOK_GLB: a GLB with a Shape Key Flipbook clip
+    /// "Mouths" (mouth_A, mouth_E, mouth_O; shapekey-flipbook's test exports one)
+    #[test]
+    fn an_also_draw_glb_loops_its_own_shape_key_clip() {
+        let Some(mut rig) = rig() else { return };
+        let Ok(path) = std::env::var("THEATER_PUPPET_FLIPBOOK_GLB") else { return };
+        let book = Arc::new(crate::model::load(std::path::Path::new(&path)).unwrap());
+        rig.set_extras(&[book.clone()]);
+        // Its own clip only (nothing copied from the avatar)
+        rig.follow = vec![FollowSettings { move_on: false, rotate_on: false, shapes: false, clip: "Mouths".into(), ..Default::default() }];
+        let config = tracking::config::Config::default();
+        let frame = 1.0 / 24.0;
+        let mut seen = Vec::new();
+        for _ in 0..7 {
+            rig.step_with(frame, still(), &Snapshot::default(), &config);
+            let f = &rig.followers[0];
+            let on: Vec<&str> = f.model.morph_names.iter().zip(&f.morph).filter(|(_, w)| **w > 0.5).map(|(n, _)| n.as_str()).collect();
+            assert_eq!(on.len(), 1, "one shape at a time: {on:?} {:?}", f.morph);
+            seen.push(on[0].to_string());
+        }
+        println!("frames: {seen:?}");
+        // One frame each, in order, looping
+        let first = seen[0].clone();
+        let at = ["mouth_A", "mouth_E", "mouth_O"].iter().position(|n| *n == first).unwrap();
+        let want: Vec<String> = (0..7).map(|i| ["mouth_A", "mouth_E", "mouth_O"][(at + i) % 3].to_string()).collect();
+        assert_eq!(seen, want);
+        // (none): it stays still
+        rig.follow[0].clip = String::new();
+        rig.step_with(frame, still(), &Snapshot::default(), &config);
+        assert!(rig.followers[0].morph.iter().all(|w| *w == 0.0));
     }
 
     #[test]

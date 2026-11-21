@@ -62,8 +62,14 @@ unsafe fn follow_of(settings: Ptr, n: usize) -> crate::motion::FollowSettings {
             rotate_on: (api.obs_data_get_bool)(settings, rt.as_ptr()),
             rotate_from: get_string(settings, &rf),
             shapes: (api.obs_data_get_bool)(settings, sh.as_ptr()),
+            clip: get_string(settings, &extra_clip_key(n)),
         }
     }
+}
+
+/// An Also draw GLB's own looping clip ("" none)
+fn extra_clip_key(n: usize) -> CString {
+    cstring(&format!("extra{n}.animation"))
 }
 
 /// How many Also draw GLBs a source has: its count, or (a source from
@@ -655,6 +661,15 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
                     }
                 }
                 (api.obs_properties_add_bool)(group, sh.as_ptr(), c"Copy shape keys".as_ptr());
+                // Its own animations (made in Blender, in this GLB), one looping
+                let clips: Vec<String> = puppet.extras.lock().unwrap().iter().find(|(slot, _)| *slot == n).map(|(_, m)| m.clips.iter().map(|c| c.name.clone()).collect()).unwrap_or_default();
+                let list = (api.obs_properties_add_list)(group, extra_clip_key(n).as_ptr(), c"Animation (loops; this GLB's own)".as_ptr(), obs::OBS_COMBO_TYPE_LIST, obs::OBS_COMBO_FORMAT_STRING);
+                (api.obs_property_list_add_string)(list, c"(none)".as_ptr(), c"".as_ptr());
+                for clip in &clips {
+                    let c = cstring(clip);
+                    (api.obs_property_list_add_string)(list, c.as_ptr(), c.as_ptr());
+                }
+                (api.obs_property_set_visible)(list, !clips.is_empty());
                 (api.obs_properties_add_button2)(group, cstring(&format!("extra{n}.remove")).as_ptr(), c"Remove".as_ptr(), remove_extra, n as Ptr);
                 let b = (api.obs_properties_add_group)(props, extra_box(n).as_ptr(), cstring(&format!("Also draw {n}")).as_ptr(), obs::OBS_GROUP_NORMAL, group);
                 (api.obs_property_set_visible)(b, n <= count);
