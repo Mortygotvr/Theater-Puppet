@@ -139,6 +139,14 @@ what went wrong) and it comes off the list.
       weighted on nothing, it asks first, lists it, deletes it; Ctrl+Z
       brings it back.
 
+## Scene: 🎬 Puppet animation with an impact reaction
+- [ ] A throwable redeem aimed at the Puppet → 💥 IMPACT REACTIONS → tick
+      "🎬 Puppet animation", pick "Knocked Out" (▾ lists the Puppets' clips),
+      On Contact. Test: the pie hits, the avatar bounces AND plays it once.
+- [ ] Same with On Start: it plays as the redeem fires.
+- [ ] Aimed at something that isn't a Puppet (a webcam): it plays on every Puppet.
+- [ ] A GLB prefab redeem with it On Contact: plays at the GLB's contact frame.
+
 ## Animations (any avatar, not through the avatar's GLB)
 - [ ] Puppet source → 🎬 Pose and animation → Animation folder: a folder with
       Mixamo DAE ("With Skin") and Rig's animation GLBs. Their clips show in
