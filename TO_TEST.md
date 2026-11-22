@@ -147,6 +147,15 @@ what went wrong) and it comes off the list.
 - [ ] Aimed at something that isn't a Puppet (a webcam): it plays on every Puppet.
 - [ ] A GLB prefab redeem with it On Contact: plays at the GLB's contact frame.
 
+## The avatar's Default animation
+- [ ] Rig (reinstall the zip): "Default animation" above Export GLB: pick an
+      action (breathing, a tail…). Export GLB: open the GLB in Windows 3D
+      Viewer: it plays that animation.
+- [ ] Puppet with the Animation setting on "(the avatar's default…)": the
+      avatar loops it. "(the idle motion only)": back to the idle motion.
+      A redeem animation plays over it, then it comes back.
+- [ ] Scene: export a redeem playing that default: not listed as missing.
+
 ## Scene: a redeem exported is one file
 - [ ] Export (.red) a prefab redeem whose reaction plays an Animation folder
       clip, with sounds and a custom script. On another PC (or after renaming
