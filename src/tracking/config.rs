@@ -24,6 +24,61 @@ impl Default for Phone {
     }
 }
 
+/// One Puppet source's own assignment: for each part (Part::ALL's order),
+/// its own pick, or None: the same as every Puppet's (Config::assign). Kept
+/// in the source's settings ("assign.<Part>")
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct OwnAssign(pub [Option<Pick>; 6]);
+
+impl OwnAssign {
+    /// Every Puppet's assignment with this one's own picks over it
+    pub fn over(&self, all: &Assign) -> Assign {
+        let mut out = *all;
+        for (i, part) in Part::ALL.into_iter().enumerate() {
+            if let Some(p) = self.0[i] {
+                out.set(part, p);
+            }
+        }
+        out
+    }
+
+    /// The setting's key for `part`
+    pub fn key(part: Part) -> String {
+        format!("assign.{part:?}")
+    }
+}
+
+/// Each Puppet source's own picks (by its address), for the inputs that
+/// need to know every part anyone wants from them (MediaPipe)
+static OWN: std::sync::Mutex<Vec<(usize, OwnAssign)>> = std::sync::Mutex::new(Vec::new());
+
+/// Source `key`'s own picks now (None: it's gone); true when they changed
+pub fn set_own(key: usize, own: Option<OwnAssign>) -> bool {
+    let mut all = OWN.lock().unwrap();
+    let before = all.iter().find(|(k, _)| *k == key).map(|(_, o)| *o);
+    all.retain(|(k, _)| *k != key);
+    if let Some(o) = own.filter(|o| *o != OwnAssign::default()) {
+        all.push((key, o));
+    }
+    before.filter(|o| *o != OwnAssign::default()) != own.filter(|o| *o != OwnAssign::default())
+}
+
+/// Every assignment a Puppet goes by: every Puppet's, and each one's own over it
+pub fn assigns_in_use(all: &Assign) -> Vec<Assign> {
+    std::iter::once(*all).chain(OWN.lock().unwrap().iter().map(|(_, o)| o.over(all))).collect()
+}
+
+/// A pick as the settings and the window write it: "" none (the same as
+/// every Puppet's), "auto", "off", or an input's name ("IFacialMocap"…)
+pub fn pick_from(text: &str) -> Option<Pick> {
+    match text.trim() {
+        "" => None,
+        "auto" => Some(Pick::Auto),
+        "off" => Some(Pick::Off),
+        v => Some(super::Source::ALL.into_iter().find(|s| format!("{s:?}") == v).map(Pick::Only).unwrap_or(Pick::Auto)),
+    }
+}
+
 /// Which input drives each part of the avatar
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -208,6 +263,22 @@ pub fn set(config: Config) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_puppets_own_picks_go_over_every_puppets() {
+        use super::super::Source;
+        let all = Assign { arms: Pick::Only(Source::Desk), expressions: Pick::Only(Source::IFacialMocap), ..Assign::default() };
+        // Nothing of its own: every Puppet's
+        assert_eq!(OwnAssign::default().over(&all), all);
+        // Its own arms (the controller) and no face; the rest as every Puppet's
+        let mut own = OwnAssign::default();
+        own.0[3] = pick_from("Controller");
+        own.0[0] = pick_from("off");
+        let mine = own.over(&all);
+        assert_eq!((mine.arms, mine.expressions, mine.head_turn), (Pick::Only(Source::Controller), Pick::Off, Pick::Auto));
+        assert_eq!((pick_from(""), pick_from("auto"), pick_from("Desk")), (None, Some(Pick::Auto), Some(Pick::Only(Source::Desk))));
+        assert_eq!(OwnAssign::key(Part::HeadTurn), "assign.HeadTurn");
+    }
+
     use super::*;
     use crate::tracking::Source;
 

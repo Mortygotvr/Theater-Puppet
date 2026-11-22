@@ -470,10 +470,11 @@ pub fn restart(config: &Config) {
         } else {
             config.python.trim().to_string()
         };
-        let a = &config.assign;
-        let face = may(a.expressions) || may(a.head_turn) || may(a.head_position);
-        let pose = may(a.arms) || may(a.lower_body);
-        let hands = may(a.fingers);
+        // What any Puppet wants from it (each one's own picks too)
+        let uses = super::config::assigns_in_use(&config.assign);
+        let face = uses.iter().any(|a| may(a.expressions) || may(a.head_turn) || may(a.head_position));
+        let pose = uses.iter().any(|a| may(a.arms) || may(a.lower_body));
+        let hands = uses.iter().any(|a| may(a.fingers));
         if !(face || pose || hands) {
             return status("nothing is set to follow it (What tracks what)".into());
         }

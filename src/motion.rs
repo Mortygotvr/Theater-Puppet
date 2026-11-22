@@ -47,11 +47,13 @@ pub struct Motion {
     pub desk_look: crate::desk::Look,
     /// The desk moved from its place: up (+) or down (-), forward (metres)
     pub desk_offset: [f32; 2],
+    /// This Puppet's own tracking assignment, over every Puppet's
+    pub own_assign: tracking::config::OwnAssign,
 }
 
 impl Default for Motion {
     fn default() -> Self {
-        Motion { arms_down: 65.0, idle: 0.5, yaw: 0.0, springs: true, adjust: Adjust::default(), tracked: true, controller_offset: [0.0, 0.0], hand_offset: [0.0, 0.03], hand_roll: 0.0, hand_forward: 0.0, thumb_lift: 0.0, desk_look: Default::default(), desk_offset: [0.0, 0.0] }
+        Motion { arms_down: 65.0, idle: 0.5, yaw: 0.0, springs: true, adjust: Adjust::default(), tracked: true, controller_offset: [0.0, 0.0], hand_offset: [0.0, 0.03], hand_roll: 0.0, hand_forward: 0.0, thumb_lift: 0.0, desk_look: Default::default(), desk_offset: [0.0, 0.0], own_assign: Default::default() }
     }
 }
 
@@ -346,7 +348,9 @@ impl Rig {
     }
 
     pub fn step(&mut self, dt: f32, motion: Motion) {
-        let config = tracking::config::get();
+        let mut config = tracking::config::get();
+        // This Puppet's own picks over every Puppet's
+        config.assign = motion.own_assign.over(&config.assign);
         let tracked = if motion.tracked { tracking::snapshot(&config.assign) } else { Snapshot::default() };
         self.step_with(dt, motion, &tracked, &config);
     }

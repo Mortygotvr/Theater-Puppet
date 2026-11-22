@@ -1048,6 +1048,7 @@ unsafe extern "C" fn create(settings: Ptr, source: Ptr) -> Ptr {
 
 unsafe extern "C" fn destroy(data: Ptr) {
     let puppet = unsafe { Box::from_raw(data as *mut Puppet) };
+    crate::tracking::config::set_own(puppet.source as usize, None);
     crate::parts::remove_source(puppet.source);
     crate::remote::remove_source(puppet.source);
     puppet.generation.fetch_add(1, Ordering::SeqCst);
@@ -1154,7 +1155,16 @@ unsafe extern "C" fn update(data: Ptr, settings: Ptr) {
                 curl: (api.obs_data_get_double)(settings, S_DESK_CURL.as_ptr()) as f32,
             },
             desk_offset: [(api.obs_data_get_double)(settings, S_DESK_UP.as_ptr()) as f32, (api.obs_data_get_double)(settings, S_DESK_FORWARD.as_ptr()) as f32],
+            own_assign: crate::tracking::config::OwnAssign(crate::tracking::Part::ALL.map(|p| crate::tracking::config::pick_from(&get_string(settings, &cstring(&crate::tracking::config::OwnAssign::key(p)))))),
         };
+    }
+    // Its own tracking picks: MediaPipe tracks what any Puppet wants from it
+    let own = puppet.motion.lock().unwrap().own_assign;
+    if crate::tracking::config::set_own(puppet.source as usize, Some(own)) {
+        let c = crate::tracking::config::get();
+        if c.mediapipe {
+            crate::tracking::mediapipe::restart(&c);
+        }
     }
     puppet.remote.lock().unwrap().animation.loop_clip = get_string(settings, S_ANIMATION);
     *puppet.reflection.lock().unwrap() = ReflectionSettings {
@@ -1380,7 +1390,9 @@ fn filter_chain(puppet: &Puppet) -> Vec<FilterPass> {
 /// Loads the prop the Arms setting asks for (the controller, or the desk
 /// while Arms are on the Keyboard & mouse input), when it isn't the one loaded
 fn load_prop(puppet: &Puppet) {
-    let at_desk = crate::tracking::config::get().assign.arms == crate::tracking::Pick::Only(crate::tracking::Source::Desk);
+    // (This Puppet's own Arms pick, else every Puppet's)
+    let own = puppet.motion.lock().unwrap().own_assign;
+    let at_desk = own.over(&crate::tracking::config::get().assign).arms == crate::tracking::Pick::Only(crate::tracking::Source::Desk);
     let prop_file = {
         let files = puppet.prop_files.lock().unwrap();
         if at_desk { files.1.clone() } else { files.0.clone() }
@@ -1499,6 +1511,13 @@ pub(crate) fn set_color_setting(source: Ptr, slot: u32, rgb: Option<[f32; 3]>) {
 /// properties: (name, 'd' a number, 'b' on / off, 's' text)
 pub(crate) const AVATAR_SETTINGS: &[(&str, char)] = &[
     ("tracked", 'b'),
+    // Its own tracking assignment, part by part ("" the same as every Puppet's)
+    ("assign.Expressions", 's'),
+    ("assign.HeadTurn", 's'),
+    ("assign.HeadPosition", 's'),
+    ("assign.Arms", 's'),
+    ("assign.Fingers", 's'),
+    ("assign.LowerBody", 's'),
     // The Animation folder (Scene sets it when a redeem it imports brings animations)
     ("animation_folder", 's'),
     ("controller_model", 's'),

@@ -236,7 +236,8 @@ mod tests {
             }
             n += 1;
         }
-        assert!(n >= 2);
+        // (The Configuration window; the animation dock is gone)
+        assert!(n >= 1);
     }
 
     #[test]
