@@ -23,6 +23,10 @@ uniform float glb_fade;
 // to (uv * xy + zw), and how far the new one has come in (1 = all of it)
 uniform float4 tile_map;
 uniform float tile_mix;
+// Where the base colour's placement (its tile) put the UVs (uv * xy + zw):
+// undone for the other maps, which have none (glTF's placement is each
+// texture's own): a face's normal map isn't cut to its colour's tile
+uniform float4 uv_place;
 // A reflection (the source's "Reflection" settings): an OBS source's picture,
 // how much of it (0 = none), a flat picture (1) or a 360 one (0), and how the
 // 360 one is turned (radians)
@@ -207,20 +211,28 @@ float3 env_at(float3 r)
 	return env.Sample(env_sampler, at).rgb;
 }
 
+// The mesh's own UVs: the base colour's placement undone
+float2 own_uv(float2 uv)
+{
+	float2 s = float2(abs(uv_place.x) > 1e-6 ? uv_place.x : 1.0, abs(uv_place.y) > 1e-6 ? uv_place.y : 1.0);
+	return (uv - uv_place.zw) / s;
+}
+
 float4 PSPuppet(VertOut v) : TARGET
 {
 	float4 t = texel(v.uv);
-	// The other maps, read here in the order they're declared
-	float3 emitted = emissive_tex.Sample(emissive_sampler, v.uv).rgb;
-	float3 nmap = normal_tex.Sample(normal_sampler, v.uv).xyz * 2.0 - 1.0;
-	float3 mrmap = mr_tex.Sample(mr_sampler, v.uv).rgb;
+	// The other maps, read here in the order they're declared, on the mesh's own UVs
+	float2 ouv = own_uv(v.uv);
+	float3 emitted = emissive_tex.Sample(emissive_sampler, ouv).rgb;
+	float3 nmap = normal_tex.Sample(normal_sampler, ouv).xyz * 2.0 - 1.0;
+	float3 mrmap = mr_tex.Sample(mr_sampler, ouv).rgb;
 	float4 albedo = base_color * t;
 	if (albedo.a < alpha_cutoff || faded_out(v.pos.xy))
 		discard;
 	Surface s;
 	s.albedo = albedo;
 	s.shade = shade_color.rgb * t.rgb;
-	s.normal = mapped_normal(normalize(v.norm), v.wpos, v.uv, nmap);
+	s.normal = mapped_normal(normalize(v.norm), v.wpos, ouv, nmap);
 	float3 mr = lerp(float3(1.0, 1.0, 1.0), mrmap, saturate(use_mr));
 	s.metallic = saturate(metallic * mr.b);
 	s.roughness = saturate(roughness * mr.g);

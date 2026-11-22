@@ -119,6 +119,7 @@ struct Params {
     time: Ptr,
     glb_fade: Ptr,
     tile_map: Ptr,
+    uv_place: Ptr,
     tile_mix: Ptr,
     env: Ptr,
     env_strength: Ptr,
@@ -226,6 +227,7 @@ impl Shader {
             time: p("time"),
             glb_fade: p("glb_fade"),
             tile_map: p("tile_map"),
+            uv_place: p("uv_place"),
             tile_mix: p("tile_mix"),
             env: p("env"),
             env_strength: p("env_strength"),
@@ -1196,6 +1198,8 @@ impl Gpu {
                 let (map, mix) = crossfade.unwrap_or(([1.0, 1.0, 0.0, 0.0], 1.0));
                 (api.gs_effect_set_vec4)(p.tile_map, &map);
                 (api.gs_effect_set_float)(p.tile_mix, mix);
+                // Where its UVs are placed now (its tile): undone for the other maps
+                (api.gs_effect_set_vec4)(p.uv_place, uv_now.get(i).unwrap_or(&m.uv));
                 if first {
                     first = false;
                     shader.log_unset(technique);
@@ -1229,6 +1233,7 @@ impl Gpu {
                     (api.gs_effect_set_float)(p.glb_fade, shows.min(1.0));
                     (api.gs_effect_set_vec4)(p.tile_map, &[1.0, 1.0, 0.0, 0.0]);
                     (api.gs_effect_set_float)(p.tile_mix, 1.0);
+                    (api.gs_effect_set_vec4)(p.uv_place, &m.uv);
                     (api.gs_load_vertexbuffer)(mesh.vb);
                     (api.gs_load_indexbuffer)(mesh.ib);
                     while (api.gs_effect_loop)(shader.effect, technique.as_ptr()) {

@@ -147,6 +147,13 @@ what went wrong) and it comes off the list.
 - [ ] Aimed at something that isn't a Puppet (a webcam): it plays on every Puppet.
 - [ ] A GLB prefab redeem with it On Contact: plays at the GLB's contact frame.
 
+## Tiles and the normal map
+- [ ] Amouri (face atlas 2x2 "Emotion", a normal map on the face): in OBS,
+      the face's bumps (nose, eyelids, lips) sit where they should, on
+      Normal and on each tile (shy, gloom, salty), not shrunk to a quarter.
+      (The shader change only compiles in OBS: watch the log for an effect
+      error when it loads.)
+
 ## A GLB prefab following the avatar
 - [ ] A prefab GLB with an armature named like the avatar's (a hat or wings
       skinned to Head / Spine2…, exported with Blender's glTF export): spawn
