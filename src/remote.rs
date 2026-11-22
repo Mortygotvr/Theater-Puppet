@@ -254,6 +254,10 @@ pub struct Remote {
     pub glbs: Vec<GlbInfo>,
     /// Its colour slots
     pub slots: Vec<u32>,
+    /// Each colour slot with its own colour (every GLB's), for the colours' animation
+    pub slot_colors: Vec<(u32, [f32; 3])>,
+    /// The colours as they show: glides and the rainbow (colorfx.rs)
+    pub color_fx: crate::colorfx::ColorFx,
     /// Tiles showing (not saved)
     pub tiles: Vec<ActiveTile>,
     /// How much of each layer shows now (0–1), easing toward its Show
@@ -693,16 +697,41 @@ fn ask(args: &Value, source: Ptr, remote: &Shared, shown: &mut Option<Vec<bool>>
             r.put_tiles(layer, &materials, if on { vec![tile] } else { Vec::new() }, fade);
         }
         // Every slot at once: { slot: colour } (one each), undone together
+        // The rainbow: every slot its own hue, still or turning; false: off
+        "color" if args.get("rainbow").is_some() => {
+            let fade = args.get("fade").and_then(|v| v.as_f64()).unwrap_or(0.0).clamp(0.0, 30.0) as f32;
+            match &args["rainbow"] {
+                Value::Bool(false) | Value::Null => r.color_fx.set_rainbow(None, Some(fade)),
+                v => {
+                    let speed = v.get("speed").and_then(|s| s.as_f64()).unwrap_or(0.0).clamp(-5.0, 5.0) as f32;
+                    r.color_fx.set_rainbow(Some(crate::colorfx::Rainbow { speed, fade }), None);
+                    *undo = Some(("rainbow".into(), Undo::Args(json!({ "action": "color", "rainbow": false, "fade": fade }))));
+                }
+            }
+        }
         "color" if args.get("colors").is_some_and(|c| c.is_object()) => {
+            // Over this long (red, green and blue gliding)
+            let fade = args.get("fade").and_then(|v| v.as_f64()).unwrap_or(0.0).clamp(0.0, 30.0) as f32;
+            r.color_fx.fade_next(fade);
             drop(r);
             let mut set = Vec::new();
+            // "random" on several slots: each its own hue (golden-ratio steps round the wheel)
+            let base = parse_color("random").map_or(0.0, |c| c[0] * 0.37 + c[1] * 0.11 + c[2] * 0.53);
+            let mut randoms = 0;
             for (slot, c) in args["colors"].as_object().unwrap() {
                 let slot: u32 = slot.trim().parse().map_err(|_| format!("slot \"{slot}\": a number"))?;
                 let color = c.as_str().unwrap_or("").trim().to_string();
                 if color.is_empty() {
                     continue; // left as it is
                 }
-                let rgb = if color.eq_ignore_ascii_case("reset") { None } else { Some(parse_color(&color).ok_or_else(|| format!("slot {slot}: colour \"{color}\": #rrggbb, a name (red, pink…), random or reset"))?) };
+                let rgb = if color.eq_ignore_ascii_case("reset") {
+                    None
+                } else if color.eq_ignore_ascii_case("random") {
+                    randoms += 1;
+                    Some(crate::colorfx::hue(base + randoms as f32 * 0.618_034))
+                } else {
+                    Some(parse_color(&color).ok_or_else(|| format!("slot {slot}: colour \"{color}\": #rrggbb, a name (red, pink…), random or reset"))?)
+                };
                 set.push((slot, rgb));
             }
             if set.is_empty() {
@@ -714,15 +743,17 @@ fn ask(args: &Value, source: Ptr, remote: &Shared, shown: &mut Option<Vec<bool>>
                 before.insert(slot.to_string(), json!(was));
                 crate::source::set_color_setting(source, slot, rgb);
             }
-            *undo = Some(("colors".into(), Undo::Args(json!({ "action": "color", "colors": before }))));
+            *undo = Some(("colors".into(), Undo::Args(json!({ "action": "color", "colors": before, "fade": fade }))));
         }
         "color" => {
             let slot = args.get("slot").and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))).ok_or("no slot")? as u32;
             let color = text("color");
+            let fade = args.get("fade").and_then(|v| v.as_f64()).unwrap_or(0.0).clamp(0.0, 30.0) as f32;
+            r.color_fx.fade_next(fade);
             drop(r);
             let rgb = if color.eq_ignore_ascii_case("reset") { None } else { Some(parse_color(&color).ok_or_else(|| format!("colour \"{color}\": #rrggbb, a name (red, pink…), random or reset"))?) };
             let before = crate::source::get_color_setting(source, slot).map_or_else(|| "reset".to_string(), |c| format!("#{:02x}{:02x}{:02x}", (c[0] * 255.0).round() as u8, (c[1] * 255.0).round() as u8, (c[2] * 255.0).round() as u8));
-            *undo = Some((format!("color {slot}"), Undo::Args(json!({ "action": "color", "slot": slot, "color": before }))));
+            *undo = Some((format!("color {slot}"), Undo::Args(json!({ "action": "color", "slot": slot, "color": before, "fade": fade }))));
             crate::source::set_color_setting(source, slot, rgb);
         }
         "list" | "" => {}

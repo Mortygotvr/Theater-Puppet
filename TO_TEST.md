@@ -156,15 +156,16 @@ what went wrong) and it comes off the list.
 - [ ] MediaPipe on, one Puppet's face on iFacialMocap, the other's on
       MediaPipe: MediaPipe tracks the face for that one.
 
-## Scene: every colour slot at once
-- [ ] A 🎭 Puppet redeem, 🎨 colour, "Every slot at once": each of the
-      avatar's slots listed, its own colour (one left empty stays as it is).
-      Test: they all change together. With a timer: all come back together.
-- [ ] A wildcard in one ({1}) takes the redeem's text.
-- [ ] The "🎨 Colour" redeem (made for you: slot 3, the iris, "random", back
-      after 2 min): Test it in the Studio: Amouri's eyes take a bright random
-      colour, then come back. Give it a trigger. With {1} in the slot instead,
-      a viewer's "pink", "gold" or "#33ccff" works too.
+## Scene: colours (each slot, rainbow, transition)
+- [ ] 🎭 Puppet redeem → 🎨 colour → "Each slot its own": the avatar's slots
+      listed (a new list), each its own colour; ➕ Add slot takes any number
+      (one this avatar lacks says so and is skipped). Several "random": each a
+      different colour. Transition 2 s: the colours glide (red, green, blue
+      moving), not jump. The timer: all back, gliding too.
+- [ ] "🌈 Rainbow" (the redeem made for you: turning, 1 s in and out, 1 min):
+      every slot its own hue, turning; it fades out at the end. Speed 0: still.
+- [ ] "One slot" works as before; a viewer's "pink", "gold", "#33ccff",
+      "random" in {1} too.
 
 ## Tiles and the normal map
 - [ ] Amouri (face atlas 2x2 "Emotion", a normal map on the face): in OBS,

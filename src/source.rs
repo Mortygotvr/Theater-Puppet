@@ -318,6 +318,8 @@ struct Puppet {
     prefabs: Mutex<Vec<crate::prefab::Prefab>>,
     /// Colour slots given a colour (sRGB, 0–1)
     colors: Mutex<HashMap<u32, [f32; 3]>>,
+    /// The colours as they show this frame (glides, the rainbow: colorfx.rs)
+    colors_shown: Mutex<HashMap<u32, [f32; 3]>>,
     running: Mutex<[Option<Running>; SLOTS]>,
     /// Bumped by each new file, so a slow load that finishes late is dropped
     generation: Arc<AtomicU64>,
@@ -1008,6 +1010,7 @@ unsafe extern "C" fn create(settings: Ptr, source: Ptr) -> Ptr {
         remote,
         prefabs: Mutex::new(Vec::new()),
         colors: Mutex::new(HashMap::new()),
+        colors_shown: Mutex::new(HashMap::new()),
         width: AtomicU32::new(1080),
         height: AtomicU32::new(1080),
         view: Mutex::new(View { zoom: 1.0, height: 0.0, yaw: 0.0, orbit: 0.0, orthographic: false, position: glam::Vec3::ZERO, light: View::LIGHT, light_color: [1.0; 3] }),
@@ -1453,7 +1456,8 @@ fn sync_remote(puppet: &Puppet, rig: &mut Rig) -> Option<Vec<bool>> {
             .collect();
         // A new avatar: the tiles of the old one go
         r.tiles.clear();
-        r.slots = color_slots(&models).into_iter().map(|(s, _)| s).collect();
+        r.slot_colors = color_slots(&models);
+        r.slots = r.slot_colors.iter().map(|(s, _)| *s).collect();
     }
     shown
 }
@@ -1653,6 +1657,15 @@ unsafe extern "C" fn video_tick(data: Ptr, dt: f32) {
         puppet.remote.lock().unwrap().step_fade(dt);
         rig.step(dt, motion);
         crate::timing::tick(started.elapsed());
+    }
+    // The colour slots as they show: glides and the rainbow, a frame on
+    {
+        let set = puppet.colors.lock().unwrap().clone();
+        let mut r = puppet.remote.lock().unwrap();
+        let slots = r.slot_colors.clone();
+        let shown = r.color_fx.step(dt, &set, &slots);
+        drop(r);
+        *puppet.colors_shown.lock().unwrap() = shown;
     }
     // The GLB prefabs posed: those with the avatar's bones following its pose of this frame
     {
@@ -1874,7 +1887,7 @@ unsafe extern "C" fn video_render(data: Ptr, _effect: Ptr) {
             Err(e) => crate::log(&format!("[Puppet] ⚠️ The plain shader didn't compile: {e}")),
         }
     }
-    *g.colors.lock().unwrap() = puppet.colors.lock().unwrap().clone();
+    *g.colors.lock().unwrap() = puppet.colors_shown.lock().unwrap().clone();
     {
         let mut fade = puppet.remote.lock().unwrap().fade.clone();
         // The controller: shown as much as it's held
