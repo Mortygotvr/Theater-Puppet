@@ -455,6 +455,38 @@ technique GBuffer
 	}
 }
 
+// The colliders shown (the source's "Show colliders"): plain lines, one colour
+uniform float4 line_color;
+
+struct LineIn {
+	float4 pos : POSITION;
+};
+
+struct LineOut {
+	float4 pos : POSITION;
+};
+
+LineOut VSLine(LineIn v)
+{
+	LineOut o;
+	o.pos = mul(float4(v.pos.xyz, 1.0), mvp);
+	return o;
+}
+
+float4 PSLine(LineOut v) : TARGET
+{
+	return line_color;
+}
+
+technique Lines
+{
+	pass
+	{
+		vertex_shader = VSLine(v);
+		pixel_shader  = PSLine(v);
+	}
+}
+
 technique Draw
 {
 	pass

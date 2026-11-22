@@ -342,6 +342,29 @@ impl Rig {
     }
 
     /// One frame: `dt` seconds later, with what's tracked now
+    /// Its colliders where they are now (ends, how thick at each): the
+    /// avatar's, and a GLB's on bones the avatar hasn't
+    pub fn capsules(&self) -> Vec<(Vec3, Vec3, f32, f32)> {
+        let mut seen: Vec<String> = Vec::new();
+        let mut out = Vec::new();
+        let mut add = |model: &Model, pose: &Pose, colliders: &[crate::springs::Collider]| {
+            for c in colliders {
+                let key = format!("{}{}", model.nodes[c.from].name, c.base != Vec3::ZERO);
+                if seen.contains(&key) {
+                    continue;
+                }
+                seen.push(key);
+                let (a, b) = c.ends(pose);
+                out.push((a, b, c.radius, c.tip_radius));
+            }
+        };
+        add(&self.model, &self.pose, &self.springs.colliders);
+        for f in &self.followers {
+            add(&f.model, &f.pose, &f.springs.colliders);
+        }
+        out
+    }
+
     /// What a GLB prefab following the avatar copies (prefab.rs)
     pub fn main(&self) -> crate::prefab::Main<'_> {
         crate::prefab::Main { model: &self.model, rest: &self.rest, pose: &self.pose, morph: &self.morph }

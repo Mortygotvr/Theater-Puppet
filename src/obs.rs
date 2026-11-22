@@ -89,6 +89,7 @@ pub const GS_Z24_S8: u32 = 2;
 pub const GS_UNSIGNED_LONG: u32 = 1;
 /// A buffer updated after creation (gs_vertexbuffer_flush)
 pub const GS_DYNAMIC: u32 = 1 << 1;
+pub const GS_LINES: u32 = 1;
 pub const GS_TRIS: u32 = 3;
 pub const GS_CLEAR_COLOR: u32 = 1 << 0;
 pub const GS_CLEAR_DEPTH: u32 = 1 << 1;
@@ -171,6 +172,10 @@ api! {
     obs_source_enum_filters: fn(Ptr, unsafe extern "C" fn(Ptr, Ptr, *mut std::ffi::c_void), *mut std::ffi::c_void);
     obs_source_get_unversioned_id: fn(Ptr) -> *const c_char;
     obs_source_get_ref: fn(Ptr) -> Ptr;
+    // Lines drawn on the spot (the colliders shown: render.rs)
+    gs_render_start: fn(bool);
+    gs_vertex3f: fn(f32, f32, f32);
+    gs_render_stop: fn(u32);
     obs_queue_task: fn(u32, unsafe extern "C" fn(*mut std::ffi::c_void), *mut std::ffi::c_void, bool);
     obs_source_skip_video_filter: fn(Ptr);
     obs_data_set_default_bool: fn(Ptr, *const c_char, bool);

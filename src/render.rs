@@ -114,6 +114,7 @@ struct Params {
     grad_axis: Ptr,
     grad_range: Ptr,
     grad_flow: Ptr,
+    line_color: Ptr,
     light_dir: Ptr,
     light_color: Ptr,
     eye: Ptr,
@@ -227,6 +228,7 @@ impl Shader {
             grad_axis: p("grad_axis"),
             grad_range: p("grad_range"),
             grad_flow: p("grad_flow"),
+            line_color: p("line_color"),
             light_dir: p("light_dir"),
             light_color: p("light_color"),
             eye: p("eye"),
@@ -372,6 +374,40 @@ fn tile_map(from: [f32; 4], now: [f32; 4]) -> Option<[f32; 4]> {
     Some([ax, ay, from[2] - now[2] * ax, from[3] - now[3] * ay])
 }
 
+/// A capsule a..b (thick r0 at a, r1 at b) as lines (pairs of points): a ring
+/// at each end, four lines along it, and its rounded ends
+pub fn capsule_lines(a: Vec3, b: Vec3, r0: f32, r1: f32) -> Vec<Vec3> {
+    const N: usize = 16;
+    let u = (b - a).normalize_or(Vec3::Y);
+    let v = u.any_orthonormal_vector();
+    let w = u.cross(v);
+    let mut out = Vec::with_capacity(N * 8 + 8);
+    let ring = |c: Vec3, r: f32, out: &mut Vec<Vec3>| {
+        for i in 0..N {
+            let (t0, t1) = (i as f32 / N as f32 * std::f32::consts::TAU, (i + 1) as f32 / N as f32 * std::f32::consts::TAU);
+            out.push(c + (v * t0.cos() + w * t0.sin()) * r);
+            out.push(c + (v * t1.cos() + w * t1.sin()) * r);
+        }
+    };
+    ring(a, r0, &mut out);
+    ring(b, r1, &mut out);
+    for k in [v, w, -v, -w] {
+        out.push(a + k * r0);
+        out.push(b + k * r1);
+    }
+    // The rounded ends: half circles, two ways
+    for (c, r, dir) in [(a, r0, -u), (b, r1, u)] {
+        for side in [v, w] {
+            for i in 0..N / 2 {
+                let (t0, t1) = (i as f32 / N as f32 * std::f32::consts::TAU, (i + 1) as f32 / N as f32 * std::f32::consts::TAU);
+                out.push(c + (side * t0.cos() + dir * t0.sin()) * r);
+                out.push(c + (side * t1.cos() + dir * t1.sin()) * r);
+            }
+        }
+    }
+    out
+}
+
 /// UVs placed by `st` (scale x, y, offset x, y): uv * scale + offset
 fn placed_uvs(uvs: &[[f32; 2]], st: [f32; 4]) -> Vec<[f32; 2]> {
     uvs.iter().map(|[u, v]| [u * st[0] + st[2], v * st[1] + st[3]]).collect()
@@ -507,6 +543,8 @@ pub struct Gpu {
     /// Colour slots given a colour (sRGB, 0–1), by slot: their materials
     /// show it in place of their own (every layer's)
     pub colors: std::sync::Mutex<std::collections::HashMap<u32, crate::colorfx::Look>>,
+    /// The colliders to show this frame (their ends, and how thick at each): empty, none
+    pub capsules: std::sync::Mutex<Vec<(Vec3, Vec3, f32, f32)>>,
     /// How much of each layer shows (0 not drawn, below 1 dissolving; missing: 1)
     pub fade: std::sync::Mutex<Vec<f32>>,
     /// Where a reflection source is drawn (render_source)
@@ -694,6 +732,7 @@ impl Gpu {
             main_materials: materials.len(),
             main_textures: textures.len(),
             colors: Default::default(),
+            capsules: Default::default(),
             fade: Default::default(),
             prop_layer: Default::default(),
             uv_now: Default::default(),
@@ -756,6 +795,26 @@ impl Gpu {
                 (api.gs_enable_blending)(true);
                 (api.gs_blend_function_separate)(obs::GS_BLEND_SRCALPHA, obs::GS_BLEND_INVSRCALPHA, obs::GS_BLEND_ONE, obs::GS_BLEND_INVSRCALPHA);
                 self.pass(shader, &values, c"Draw", |m| m.alpha == Alpha::Blend);
+                // The colliders, over everything (inside the mesh too)
+                let capsules = self.capsules.lock().unwrap().clone();
+                if !capsules.is_empty() {
+                    (api.gs_enable_depth_test)(false);
+                    shader.set_frame(&values);
+                    (api.gs_effect_set_vec4)(shader.params.line_color, &[1.0, 0.55, 0.1, 1.0]);
+                    (api.gs_load_vertexbuffer)(std::ptr::null_mut());
+                    (api.gs_load_indexbuffer)(std::ptr::null_mut());
+                    while (api.gs_effect_loop)(shader.effect, c"Lines".as_ptr()) {
+                        // One capsule a batch: OBS takes 512 points at most in one
+                        for &(a, b, r0, r1) in &capsules {
+                            (api.gs_render_start)(true);
+                            for p in capsule_lines(a, b, r0, r1) {
+                                (api.gs_vertex3f)(p.x, p.y, p.z);
+                            }
+                            (api.gs_render_stop)(obs::GS_LINES);
+                        }
+                    }
+                    (api.gs_enable_depth_test)(true);
+                }
 
                 (api.gs_load_vertexbuffer)(std::ptr::null_mut());
                 (api.gs_load_indexbuffer)(std::ptr::null_mut());

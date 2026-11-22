@@ -173,6 +173,14 @@ what went wrong) and it comes off the list.
       outside the arms, the chest, the shoulders (it went through them).
 - [ ] The front bangs don't lean out more than before (the head's collider
       is the face's).
+- [ ] The forearm too: the hair no longer passes through the lower arm
+      (colliders now thicker at the shoulder, thinner at the wrist, sized
+      from the outer part of the skin).
+- [ ] Puppet properties → 🪢 Spring bones → "Show colliders": orange wire
+      capsules over the picture, following the arms / head / chest as they
+      move. Each should cover its limb about to the skin. Off: gone.
+- [ ] With the setting on, OBS's log has no "tried to use over 512"
+      warnings, and the frame time stays about the same.
 
 ## 🎥 Puppet Camera filter (every Puppet has one)
 - [ ] Each Puppet source has "🎥 Puppet Camera" in its filters by itself (a

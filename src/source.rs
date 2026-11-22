@@ -122,6 +122,8 @@ const S_ANIM_FOLDER: &CStr = c"animation_folder";
 const S_ARMS: &CStr = c"arms_down";
 const S_IDLE: &CStr = c"idle";
 const S_SPRINGS: &CStr = c"springs";
+/// The spring bones' colliders drawn over the picture (to see them)
+const S_SHOW_COLLIDERS: &CStr = c"show_colliders";
 const S_TRACKED: &CStr = c"tracked";
 /// The controller it holds moved from its place on the chest (metres)
 const S_CONTROLLER_UP: &CStr = c"controller_up";
@@ -320,6 +322,9 @@ struct Puppet {
     colors: Mutex<HashMap<u32, [f32; 3]>>,
     /// The colours as they show this frame (glides, the rainbow: colorfx.rs)
     colors_shown: Mutex<HashMap<u32, crate::colorfx::Look>>,
+    /// Its colliders shown (the setting), and where they are this frame
+    show_colliders: std::sync::atomic::AtomicBool,
+    capsules: Mutex<Vec<(glam::Vec3, glam::Vec3, f32, f32)>>,
     running: Mutex<[Option<Running>; SLOTS]>,
     /// Bumped by each new file, so a slow load that finishes late is dropped
     generation: Arc<AtomicU64>,
@@ -861,6 +866,7 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
         };
         let group = (api.obs_properties_create)();
         (api.obs_properties_add_bool)(group, S_SPRINGS.as_ptr(), c"Spring bones (hair, skirt…)".as_ptr());
+        (api.obs_properties_add_bool)(group, S_SHOW_COLLIDERS.as_ptr(), c"Show colliders (orange: where the hair stops; drawn on the picture)".as_ptr());
         (api.obs_properties_add_text)(
             group,
             c"tune_info".as_ptr(),
@@ -1013,6 +1019,8 @@ unsafe extern "C" fn create(settings: Ptr, source: Ptr) -> Ptr {
         prefabs: Mutex::new(Vec::new()),
         colors: Mutex::new(HashMap::new()),
         colors_shown: Mutex::new(HashMap::new()),
+        show_colliders: std::sync::atomic::AtomicBool::new(false),
+        capsules: Mutex::new(Vec::new()),
         width: AtomicU32::new(1080),
         height: AtomicU32::new(1080),
         view: Mutex::new(View { zoom: 1.0, height: 0.0, yaw: 0.0, orbit: 0.0, orthographic: false, position: glam::Vec3::ZERO, light: View::LIGHT, light_color: [1.0; 3] }),
@@ -1172,6 +1180,7 @@ unsafe extern "C" fn update(data: Ptr, settings: Ptr) {
             crate::tracking::mediapipe::restart(&c);
         }
     }
+    puppet.show_colliders.store(unsafe { (api.obs_data_get_bool)(settings, S_SHOW_COLLIDERS.as_ptr()) }, Ordering::Relaxed);
     puppet.remote.lock().unwrap().animation.loop_clip = get_string(settings, S_ANIMATION);
     *puppet.reflection.lock().unwrap() = ReflectionSettings {
         source: get_string(settings, S_REFLECTION_SOURCE),
@@ -1691,6 +1700,8 @@ unsafe extern "C" fn video_tick(data: Ptr, dt: f32) {
         }
         puppet.remote.lock().unwrap().step_fade(dt);
         rig.step(dt, motion);
+        // Its colliders where they are now, to draw (when shown)
+        *puppet.capsules.lock().unwrap() = if puppet.show_colliders.load(Ordering::Relaxed) { rig.capsules() } else { Vec::new() };
         crate::timing::tick(started.elapsed());
     }
     // The colour slots as they show: glides and the rainbow, a frame on
@@ -1923,6 +1934,7 @@ unsafe extern "C" fn video_render(data: Ptr, _effect: Ptr) {
         }
     }
     *g.colors.lock().unwrap() = puppet.colors_shown.lock().unwrap().clone();
+    *g.capsules.lock().unwrap() = puppet.capsules.lock().unwrap().clone();
     {
         let mut fade = puppet.remote.lock().unwrap().fade.clone();
         // The controller: shown as much as it's held

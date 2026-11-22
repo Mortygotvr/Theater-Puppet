@@ -84,7 +84,10 @@ pub struct Collider {
     pub base: Vec3,
     /// The capsule's far end, in the bone's own space
     pub tip: Vec3,
+    /// How thick at its near end, and at its far end (an arm thicker at the
+    /// shoulder than at the elbow): between, in proportion
     pub radius: f32,
+    pub tip_radius: f32,
 }
 
 impl Collider {
@@ -141,10 +144,11 @@ const COLLIDER_BONES: &[(&str, &[&str])] = &[
     ("RightLeg", &["RightFoot"]),
 ];
 
-fn closest_on_segment(p: Vec3, a: Vec3, b: Vec3) -> Vec3 {
+/// The closest point of a..b to `p`, and how far along (0 at a, 1 at b)
+fn closest_at(p: Vec3, a: Vec3, b: Vec3) -> (Vec3, f32) {
     let ab = b - a;
     let t = if ab.length_squared() > 1e-10 { ((p - a).dot(ab) / ab.length_squared()).clamp(0.0, 1.0) } else { 0.0 };
-    a + ab * t
+    (a + ab * t, t)
 }
 
 impl Springs {
@@ -211,6 +215,7 @@ pub struct Shared {
     pub bone: String,
     pub ends: (Vec3, Vec3),
     pub radius: f32,
+    pub tip_radius: f32,
     rank: u8,
     across: bool,
 }
@@ -223,7 +228,7 @@ pub fn shared_colliders(models: &[(&Model, &Pose)]) -> Vec<Shared> {
     let mut out: Vec<Shared> = Vec::new();
     for (model, pose) in models {
         for (c, rank) in rated_colliders(model, pose) {
-            let s = Shared { bone: model.nodes[c.from].name.clone(), ends: c.ends(pose), radius: c.radius, rank, across: c.base != Vec3::ZERO };
+            let s = Shared { bone: model.nodes[c.from].name.clone(), ends: c.ends(pose), radius: c.radius, tip_radius: c.tip_radius, rank, across: c.base != Vec3::ZERO };
             match out.iter_mut().find(|o| o.bone == s.bone && o.across == s.across) {
                 // Only more the body than the one before (the avatar's, listed first, keeps a tie)
                 Some(o) if s.rank > o.rank => *o = s,
@@ -242,7 +247,7 @@ pub fn colliders_for(model: &Model, pose: &Pose, shared: &[Shared]) -> Vec<Colli
         .filter_map(|s| {
             let from = model.node(&s.bone)?;
             let (at, turn) = (pose.position(from), pose.world_rotation(from).inverse());
-            Some(Collider { from, base: turn * (s.ends.0 - at), tip: turn * (s.ends.1 - at), radius: s.radius })
+            Some(Collider { from, base: turn * (s.ends.0 - at), tip: turn * (s.ends.1 - at), radius: s.radius, tip_radius: s.tip_radius })
         })
         .collect()
 }
@@ -288,25 +293,39 @@ pub fn rated_colliders(model: &Model, pose: &Pose) -> Vec<(Collider, u8)> {
                 Some(to) => pose.position(to),
                 None => moved.iter().sum::<Vec3>() / moved.len() as f32,
             };
-            let mut distances: Vec<f32> = moved.iter().map(|&v| (v - closest_on_segment(v, a, b)).length()).collect();
-            distances.sort_by(f32::total_cmp);
-            // Skin is the surface itself: the middle of it. Anything else
-            // has insides (and clothes stand off the body): a little under.
-            let radius = distances[distances.len() / 2] * if skin { 1.0 } else { 0.85 };
+            // How thick, at each end: from the mesh nearer that end. Skin is
+            // the surface itself: its outer part (three quarters of it in: a
+            // limb isn't round, the middle left hair sinking into its thick
+            // side). Anything else has insides (and clothes stand off the
+            // body): its middle, a little under.
+            let thick = |near: &dyn Fn(f32) -> bool| -> Option<f32> {
+                let mut d: Vec<f32> = moved.iter().filter_map(|&v| {
+                    let (c, t) = closest_at(v, a, b);
+                    near(t).then(|| (v - c).length())
+                }).collect();
+                if d.len() < 4 {
+                    return None;
+                }
+                d.sort_by(f32::total_cmp);
+                Some(if skin { d[d.len() * 3 / 4] } else { d[d.len() / 2] * 0.85 })
+            };
+            let Some(whole) = thick(&|_| true) else { continue };
+            let radius = thick(&|t| t < 0.5).unwrap_or(whole);
+            let tip_radius = thick(&|t| t >= 0.5).unwrap_or(whole);
             let tip = pose.world_rotation(from).inverse() * (b - a);
-            colliders.push((Collider { from, base: Vec3::ZERO, tip, radius }, rank));
+            colliders.push((Collider { from, base: Vec3::ZERO, tip, radius, tip_radius }, rank));
         }
         // A body is wider than deep: the spine's capsules leave the chest's
         // sides open, so one more goes across it, from arm to arm
         if let (Some(chest), Some(left), Some(right)) = (model.node("Spine2").or_else(|| model.node("Spine1")), model.node("LeftArm"), model.node("RightArm")) {
-            let thick = colliders.iter().find(|(c, _)| c.from == chest).map(|(c, r)| (c.radius, *r));
+            let thick = colliders.iter().find(|(c, _)| c.from == chest).map(|(c, r)| ((c.radius + c.tip_radius) * 0.5, *r));
             if let Some((radius, rank)) = thick {
                 let (at, turn) = (pose.position(chest), pose.world_rotation(chest).inverse());
                 // (a little in from the arms' joints, and under them: the chest, not the shoulders' tops)
                 let (l, r) = (pose.position(left), pose.position(right));
                 let down = Vec3::NEG_Y * radius * 0.5;
                 let (l, r) = (l.lerp(r, 0.12) + down, r.lerp(l, 0.12) + down);
-                colliders.push((Collider { from: chest, base: turn * (l - at), tip: turn * (r - at), radius: radius * 0.85 }, rank));
+                colliders.push((Collider { from: chest, base: turn * (l - at), tip: turn * (r - at), radius: radius * 0.85, tip_radius: radius * 0.85 }, rank));
             }
         }
         colliders
@@ -343,12 +362,13 @@ impl Springs {
         // Small steps: stable whatever OBS's frame rate
         let steps = ((dt / (1.0 / 60.0)).ceil() as usize).clamp(1, 4);
         let dt = (dt / steps as f32).min(1.0 / 30.0);
-        let capsules: Vec<(Vec3, Vec3, f32)> = self
+        let k = adjust.colliders.max(0.0);
+        let capsules: Vec<(Vec3, Vec3, f32, f32)> = self
             .colliders
             .iter()
             .map(|c| {
                 let (a, b) = c.ends(pose);
-                (a, b, c.radius * adjust.colliders.max(0.0))
+                (a, b, c.radius * k, c.tip_radius * k)
             })
             .collect();
         for _ in 0..steps {
@@ -364,10 +384,10 @@ impl Springs {
                 let inertia = (j.tail - j.prev_tail) * (1.0 - drag);
                 let mut next = j.tail + inertia + rest_dir * s.stiffness * t.stiffness * dt + Vec3::NEG_Y * s.gravity * t.gravity * dt;
                 next = head + (next - head).normalize_or(rest_dir) * j.length;
-                for &(a, b, r) in &capsules {
-                    let c = closest_on_segment(next, a, b);
+                for &(a, b, r0, r1) in &capsules {
+                    let (c, t) = closest_at(next, a, b);
                     let away = next - c;
-                    let min = r + s.radius;
+                    let min = r0 + (r1 - r0) * t + s.radius;
                     if away.length_squared() < min * min {
                         next = c + away.normalize_or(Vec3::Z) * min;
                         next = head + (next - head).normalize_or(rest_dir) * j.length;
