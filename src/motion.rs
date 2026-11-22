@@ -741,15 +741,22 @@ pub struct FollowSettings {
     pub shapes: bool,
     /// Its own clip, looping ("" none): bones and shape keys, over what it copies
     pub clip: String,
+    /// Its own spring bones' adjustments (its kinds; the avatar's are the source's)
+    pub adjust: Adjust,
 }
 
 impl Default for FollowSettings {
     fn default() -> Self {
-        FollowSettings { move_on: true, move_from: String::new(), rotate_on: true, rotate_from: String::new(), shapes: true, clip: String::new() }
+        FollowSettings { move_on: true, move_from: String::new(), rotate_on: true, rotate_from: String::new(), shapes: true, clip: String::new(), adjust: Adjust::default() }
     }
 }
 
 impl Follower {
+    /// The kinds of spring bones it has (KINDS' places)
+    pub fn spring_kinds(&self) -> Vec<usize> {
+        self.springs.kinds()
+    }
+
     pub fn new(model: Arc<Model>, main: &Model) -> Follower {
         let pose = Pose::rest(&model);
         let from = model.nodes.iter().map(|n| main.node(n.name.strip_prefix("mixamorig:").unwrap_or(&n.name))).collect();
@@ -830,7 +837,8 @@ impl Follower {
                 self.springs.reset(pose);
                 self.settled = true;
             }
-            self.springs.step(&model, pose, dt, &motion.adjust);
+            // (Its own adjustments: each GLB's springs are tuned in its box)
+            self.springs.step(&model, pose, dt, &how.adjust);
         } else {
             self.settled = false;
         }
@@ -1054,6 +1062,30 @@ mod tests {
         rig.follow[0].clip = String::new();
         rig.step_with(frame, still(), &Snapshot::default(), &config);
         assert!(rig.followers[0].morph.iter().all(|w| *w == 0.0));
+    }
+
+    #[test]
+    fn an_also_draw_glb_s_springs_follow_its_own_adjustments() {
+        let Some(mut rig) = rig() else { return };
+        // The avatar drawn twice: the Also draw copy's hair made heavy, the avatar's as made
+        let copy = rig.model.clone();
+        rig.set_extras(&[copy]);
+        let hair = crate::springs::KINDS.iter().position(|k| *k == "hair").unwrap();
+        if !rig.followers[0].spring_kinds().contains(&hair) {
+            return;
+        }
+        let mut heavy = crate::springs::Adjust::default();
+        heavy.kinds[hair] = crate::springs::Tuning { stiffness: 0.2, gravity: 4.0, drag: 1.0 };
+        rig.follow = vec![FollowSettings { adjust: heavy, ..Default::default() }];
+        let config = tracking::config::Config::default();
+        let motion = Motion { idle: 0.0, springs: true, ..Motion::default() };
+        for _ in 0..180 {
+            rig.step_with(1.0 / 60.0, motion, &Snapshot::default(), &config);
+        }
+        let tip = rig.model.node("spring_hair_1_3").or_else(|| rig.model.node("spring_hair_1_1")).unwrap();
+        let (avatar, copy) = (rig.pose.position(tip), rig.followers[0].pose.position(tip));
+        println!("hair tip: the avatar's {avatar:?}, the Also draw copy's (heavy) {copy:?}");
+        assert!(copy.y < avatar.y - 0.005, "the Also draw GLB's own adjustments aren't used");
     }
 
     #[test]

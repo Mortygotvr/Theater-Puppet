@@ -63,6 +63,7 @@ unsafe fn follow_of(settings: Ptr, n: usize) -> crate::motion::FollowSettings {
             rotate_from: get_string(settings, &rf),
             shapes: (api.obs_data_get_bool)(settings, sh.as_ptr()),
             clip: get_string(settings, &extra_clip_key(n)),
+            adjust: read_adjust_for(settings, &extra_prefix(n)),
         }
     }
 }
@@ -423,34 +424,65 @@ unsafe extern "C" fn get_defaults(settings: Ptr) {
         (api.obs_data_set_default_double)(settings, S_HAND_APART.as_ptr(), m.hand_offset[1] as f64);
         (api.obs_data_set_default_string)(settings, S_DESK_KEYS.as_ptr(), c"area".as_ptr());
         (api.obs_data_set_default_string)(settings, S_DESK_HANDS.as_ptr(), c"gaming".as_ptr());
-        for kind in 0..KINDS.len() {
-            for what in TUNING {
-                (api.obs_data_set_default_double)(settings, tune_key(kind, what).as_ptr(), 1.0);
+        // The springs' adjustments: the avatar's, and each Also draw GLB's
+        for prefix in std::iter::once(String::new()).chain((1..=MAX_EXTRAS).map(extra_prefix)) {
+            for kind in 0..KINDS.len() {
+                for what in TUNING {
+                    (api.obs_data_set_default_double)(settings, tune_key_for(&prefix, kind, what).as_ptr(), 1.0);
+                }
             }
+            (api.obs_data_set_default_double)(settings, colliders_key_for(&prefix).as_ptr(), 1.0);
         }
-        (api.obs_data_set_default_double)(settings, S_COLLIDERS.as_ptr(), 1.0);
     }
 }
 
 /// The spring tuning each kind gets (springs::Tuning's fields), with their labels
 const TUNING: [&str; 3] = ["stiffness", "gravity", "drag"];
-const S_COLLIDERS: &CStr = c"tune.colliders";
 
-/// A spring kind's tuning setting (tune.hair.stiffness)
-fn tune_key(kind: usize, what: &str) -> CString {
-    cstring(&format!("tune.{}.{what}", KINDS[kind]))
+/// Its settings' prefix: "" for the avatar, "extra<n>." for an Also draw GLB
+fn extra_prefix(n: usize) -> String {
+    format!("extra{n}.")
 }
 
-/// The spring tuning in `settings`
+/// A spring kind's tuning setting for the avatar ("") or an Also draw GLB
+/// ("extra2."): extra2.tune.hair.stiffness
+fn tune_key_for(prefix: &str, kind: usize, what: &str) -> CString {
+    cstring(&format!("{prefix}tune.{}.{what}", KINDS[kind]))
+}
+
+fn colliders_key_for(prefix: &str) -> CString {
+    cstring(&format!("{prefix}tune.colliders"))
+}
+
+/// The spring tuning in `settings`: the avatar's
 fn read_adjust(settings: Ptr) -> Adjust {
+    read_adjust_for(settings, "")
+}
+
+/// The spring tuning of the avatar ("") or of an Also draw GLB ("extra2.")
+fn read_adjust_for(settings: Ptr, prefix: &str) -> Adjust {
     let api = obs::api();
     let get = |key: &CStr| unsafe { (api.obs_data_get_double)(settings, key.as_ptr()) as f32 };
     let mut adjust = Adjust::default();
     for (kind, t) in adjust.kinds.iter_mut().enumerate() {
-        *t = Tuning { stiffness: get(&tune_key(kind, "stiffness")), gravity: get(&tune_key(kind, "gravity")), drag: get(&tune_key(kind, "drag")) };
+        *t = Tuning { stiffness: get(&tune_key_for(prefix, kind, "stiffness")), gravity: get(&tune_key_for(prefix, kind, "gravity")), drag: get(&tune_key_for(prefix, kind, "drag")) };
     }
-    adjust.colliders = get(S_COLLIDERS);
+    adjust.colliders = get(&colliders_key_for(prefix));
     adjust
+}
+
+/// A spring box's sliders: each of `kinds` (its stiffness, gravity, damping),
+/// then the colliders' thickness, for the avatar ("") or an Also draw GLB
+unsafe fn spring_sliders(group: Ptr, prefix: &str, kinds: &[usize]) {
+    let api = obs::api();
+    for &kind in kinds {
+        let name = KINDS[kind];
+        let title = format!("{}{}", name[..1].to_uppercase(), &name[1..]);
+        for (what, label, max) in [("stiffness", "stiffness", 4.0), ("gravity", "gravity", 4.0), ("drag", "damping", 2.0)] {
+            unsafe { (api.obs_properties_add_float_slider)(group, tune_key_for(prefix, kind, what).as_ptr(), cstring(&format!("{title}: {label}")).as_ptr(), 0.0, max, 0.05) };
+        }
+    }
+    unsafe { (api.obs_properties_add_float_slider)(group, colliders_key_for(prefix).as_ptr(), c"Colliders: thickness".as_ptr(), 0.0, 3.0, 0.05) };
 }
 
 /// Every slot's settings for every style: given its script's defaults, then
@@ -780,29 +812,25 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
         let folder = cstring(&format!("Your own filters (.rhai) go in {} (Theater Scene's are listed too)", crate::config_dir().join("filters").display()));
         (api.obs_properties_add_text)(props, c"filters_info".as_ptr(), folder.as_ptr(), obs::OBS_TEXT_INFO);
 
-        // The springs' tuning: the avatar's own kinds (all, before it's loaded)
+        // The springs' tuning: the kinds the avatar has (each Also draw GLB's are in its box)
         let kinds: Vec<usize> = if data.is_null() {
             Vec::new()
         } else {
             (&*(data as *const Puppet)).rig.lock().unwrap().as_ref().map(|r| r.spring_kinds()).unwrap_or_default()
         };
-        let kinds = if kinds.is_empty() { (0..KINDS.len()).collect() } else { kinds };
         let group = (api.obs_properties_create)();
         (api.obs_properties_add_bool)(group, S_SPRINGS.as_ptr(), c"Spring bones (hair, skirt…)".as_ptr());
         (api.obs_properties_add_text)(
             group,
             c"tune_info".as_ptr(),
-            c"Multipliers on what the avatar's file says (1 = as made). Stiffness: how fast it springs back. Gravity: how much it hangs. Damping: how quickly a swing dies down.".as_ptr(),
+            c"The avatar's: multipliers on what its file says (1 = as made). Stiffness: how fast it springs back. Gravity: how much it hangs. Damping: how quickly a swing dies down. An Also draw GLB's are in its own box.".as_ptr(),
             obs::OBS_TEXT_INFO,
         );
-        for kind in kinds {
-            let name = KINDS[kind];
-            let title = format!("{}{}", name[..1].to_uppercase(), &name[1..]);
-            for (what, label, max) in [("stiffness", "stiffness", 4.0), ("gravity", "gravity", 4.0), ("drag", "damping", 2.0)] {
-                (api.obs_properties_add_float_slider)(group, tune_key(kind, what).as_ptr(), cstring(&format!("{title}: {label}")).as_ptr(), 0.0, max, 0.05);
-            }
+        if kinds.is_empty() {
+            (api.obs_properties_add_text)(group, c"tune_none".as_ptr(), c"The avatar has no spring bones (Theater Rig: Rename Springs, or Make Cloth Bones).".as_ptr(), obs::OBS_TEXT_INFO);
+        } else {
+            spring_sliders(group, "", &kinds);
         }
-        (api.obs_properties_add_float_slider)(group, S_COLLIDERS.as_ptr(), c"Colliders: thickness".as_ptr(), 0.0, 3.0, 0.05);
         (api.obs_properties_add_group)(props, c"spring_tuning".as_ptr(), c"🪢 Spring bones".as_ptr(), obs::OBS_GROUP_NORMAL, group);
         // 📦 The GLBs drawn with it, last (the longest)
         (api.obs_properties_add_text)(props, c"extras_heading".as_ptr(), c"📦 Also draw: GLBs drawn with the avatar (props, outfits, a head…)".as_ptr(), obs::OBS_TEXT_INFO);
@@ -854,6 +882,16 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
                     (api.obs_property_list_add_string)(list, c.as_ptr(), c.as_ptr());
                 }
                 (api.obs_property_set_visible)(list, !clips.is_empty());
+                // Its spring bones: the kinds it has, its own adjustments
+                let spring_kinds: Vec<usize> = {
+                    let place = puppet.extras.lock().unwrap().iter().position(|(slot, _)| *slot == n);
+                    let rig = puppet.rig.lock().unwrap();
+                    place.and_then(|i| rig.as_ref().and_then(|r| r.followers.get(i)).map(|f| f.spring_kinds())).unwrap_or_default()
+                };
+                if !spring_kinds.is_empty() {
+                    (api.obs_properties_add_text)(group, cstring(&format!("extra{n}.springs_info")).as_ptr(), c"🪢 Its spring bones (1 = as made):".as_ptr(), obs::OBS_TEXT_INFO);
+                    spring_sliders(group, &extra_prefix(n), &spring_kinds);
+                }
                 (api.obs_properties_add_button2)(group, cstring(&format!("extra{n}.remove")).as_ptr(), c"Remove".as_ptr(), remove_extra, n as Ptr);
                 let b = (api.obs_properties_add_group)(props, extra_box(n).as_ptr(), cstring(&format!("Also draw {n}")).as_ptr(), obs::OBS_GROUP_NORMAL, group);
                 (api.obs_property_set_visible)(b, n <= count);

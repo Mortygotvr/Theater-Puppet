@@ -3,6 +3,12 @@
 What's built but not yet tried live, newest first. Tick it (or tell Claude
 what went wrong) and it comes off the list.
 
+## Spring bones per GLB
+- [ ] 🪢 Spring bones (the avatar's box) lists only the kinds the avatar has
+      (no avatar springs: says so).
+- [ ] An Also draw GLB with springs: its box has "🪢 Its spring bones" with
+      its own kinds' sliders; they change that GLB's springs only.
+
 ## Inputs sidelined by General; MeowFace removed
 - [ ] With General → Expressions on MediaPipe only, iFacialMocap's tab says
       "receiving, but General gives Expressions… to MediaPipe".
