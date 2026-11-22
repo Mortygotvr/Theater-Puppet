@@ -117,6 +117,10 @@ const S_LIGHT_COLOR: &CStr = c"light_color";
 const S_LIGHT_STRENGTH: &CStr = c"light_strength";
 /// The avatar's own clip looping in place of the idle motion ("" = none)
 pub(crate) const S_ANIMATION: &CStr = c"animation";
+/// A folder of animation GLBs (Theater Rig's conversions): every avatar plays them (retarget.rs)
+const S_ANIM_FOLDER: &CStr = c"animation_folder";
+/// Seconds between looks at the animation folder for new or changed files
+const ANIM_FOLDER_CHECK: f32 = 2.0;
 const S_ARMS: &CStr = c"arms_down";
 const S_IDLE: &CStr = c"idle";
 const S_SPRINGS: &CStr = c"springs";
@@ -296,6 +300,11 @@ struct Puppet {
     height: AtomicU32,
     view: Mutex<View>,
     file: Mutex<String>,
+    /// The animation folder, its GLBs as last loaded (with their times), and
+    /// seconds since it was last looked at
+    anim_folder: Mutex<String>,
+    anim_stamp: Mutex<Vec<(String, u64)>>,
+    anim_checked: Mutex<f32>,
     /// Each slot's style id ("" = empty)
     slots: Mutex<[String; SLOTS]>,
     /// Each slot's settings, by (slot, style id) (read in update, and again
@@ -666,6 +675,7 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
             let c = cstring(clip);
             (api.obs_property_list_add_string)(list, c.as_ptr(), c.as_ptr());
         }
+        (api.obs_properties_add_path)(pose, S_ANIM_FOLDER.as_ptr(), c"Animation folder (Theater Rig's animation GLBs: any avatar plays them)".as_ptr(), obs::OBS_PATH_DIRECTORY, std::ptr::null(), std::ptr::null());
         (api.obs_properties_add_float_slider)(pose, S_ARMS.as_ptr(), c"Arms down (degrees from the T-pose)".as_ptr(), 0.0, 85.0, 1.0);
         (api.obs_properties_add_float_slider)(pose, S_IDLE.as_ptr(), c"Idle motion".as_ptr(), 0.0, 1.0, 0.01);
         (api.obs_properties_add_group)(props, c"pose_box".as_ptr(), c"🎬 Pose and animation".as_ptr(), obs::OBS_GROUP_NORMAL, pose);
@@ -975,6 +985,9 @@ unsafe extern "C" fn create(settings: Ptr, source: Ptr) -> Ptr {
         height: AtomicU32::new(1080),
         view: Mutex::new(View { zoom: 1.0, height: 0.0, yaw: 0.0, orbit: 0.0, orthographic: false, position: glam::Vec3::ZERO, light: View::LIGHT, light_color: [1.0; 3] }),
         file: Mutex::new(String::new()),
+        anim_folder: Mutex::new(String::new()),
+        anim_stamp: Mutex::new(Vec::new()),
+        anim_checked: Mutex::new(0.0),
         slots: Mutex::new(Default::default()),
         style_settings: Mutex::new(HashMap::new()),
         running: Mutex::new(Default::default()),
@@ -1189,11 +1202,27 @@ unsafe extern "C" fn update(data: Ptr, settings: Ptr) {
     drop(current_extras);
 
     let file = get_string(settings, S_FILE);
-    let mut current = puppet.file.lock().unwrap();
-    if *current == file {
-        return;
+    let folder = get_string(settings, S_ANIM_FOLDER).trim().to_string();
+    let stamp = crate::retarget::folder_stamp(&folder);
+    {
+        let mut current = puppet.file.lock().unwrap();
+        let mut current_folder = puppet.anim_folder.lock().unwrap();
+        let mut current_stamp = puppet.anim_stamp.lock().unwrap();
+        if *current == file && *current_folder == folder && *current_stamp == stamp {
+            return;
+        }
+        *current = file;
+        *current_folder = folder;
+        *current_stamp = stamp;
     }
-    *current = file.clone();
+    load_avatar(puppet);
+}
+
+/// Loads the avatar (puppet.file) in the background, with the animation
+/// folder's clips put on it
+fn load_avatar(puppet: &Puppet) {
+    let file = puppet.file.lock().unwrap().clone();
+    let folder = puppet.anim_folder.lock().unwrap().clone();
     let generation = puppet.generation.fetch_add(1, Ordering::SeqCst) + 1;
     if file.is_empty() {
         // No avatar: an empty one, so its Also draw GLBs (props, parts) still draw
@@ -1205,7 +1234,18 @@ unsafe extern "C" fn update(data: Ptr, settings: Ptr) {
         .name("theater-puppet-load".into())
         .spawn(move || {
             let started = std::time::Instant::now();
-            let result = model::load(&PathBuf::from(&file));
+            let mut result = model::load(&PathBuf::from(&file));
+            // The animation folder's clips, put on this avatar
+            if let (Ok(m), false) = (&mut result, folder.is_empty()) {
+                let (clips, notes) = crate::retarget::folder_onto(std::path::Path::new(&folder), m);
+                for n in notes {
+                    crate::log(&format!("[Puppet] ⚠️ Animation folder: {n}"));
+                }
+                if !clips.is_empty() {
+                    crate::log(&format!("[Puppet] 🎞 Animation folder {folder}: {} clip(s) put on the avatar", clips.len()));
+                }
+                m.clips.extend(clips);
+            }
             match &result {
                 Ok(m) => crate::log(&format!(
                     "[Puppet] 📦 Loaded {file}: {} meshes, {} materials, {} textures, animations [{}] in {} ms",
@@ -1540,6 +1580,28 @@ unsafe extern "C" fn video_tick(data: Ptr, dt: f32) {
     }
     // Arms moved between the controller and the desk: the other GLB
     load_prop(puppet);
+    // A file added to (or changed in, or gone from) the animation folder: the avatar again, with it
+    {
+        let mut checked = puppet.anim_checked.lock().unwrap();
+        *checked += dt;
+        if *checked >= ANIM_FOLDER_CHECK {
+            *checked = 0.0;
+            drop(checked);
+            let folder = puppet.anim_folder.lock().unwrap().clone();
+            if !folder.is_empty() {
+                let stamp = crate::retarget::folder_stamp(&folder);
+                let changed = {
+                    let mut current = puppet.anim_stamp.lock().unwrap();
+                    let changed = *current != stamp;
+                    *current = stamp;
+                    changed
+                };
+                if changed {
+                    load_avatar(puppet);
+                }
+            }
+        }
+    }
     // The avatar's pose and springs, skinned (the render uploads them)
     let mut shown = None;
     if let Some(rig) = puppet.rig.lock().unwrap().as_mut() {

@@ -389,6 +389,16 @@ fn zeros_filled_in(bytes: &[u8]) -> Option<Vec<u8>> {
 }
 
 pub fn load(path: &Path) -> Result<Model, String> {
+    load_with(path, true)
+}
+
+/// An animation GLB (Theater Rig's conversion: a skeleton and its clips, no
+/// mesh): its nodes and clips (retarget.rs)
+pub fn load_animation(path: &Path) -> Result<Model, String> {
+    load_with(path, false)
+}
+
+fn load_with(path: &Path, meshes_needed: bool) -> Result<Model, String> {
     // (A GLB with all-zero accessors: read with zeros filled in)
     let fixed = std::fs::read(path).ok().and_then(|b| zeros_filled_in(&b));
     let imported = match &fixed {
@@ -582,7 +592,7 @@ pub fn load(path: &Path) -> Result<Model, String> {
             });
         }
     }
-    if primitives.is_empty() {
+    if meshes_needed && primitives.is_empty() {
         return Err(format!("{}: no triangle meshes", path.display()));
     }
     // A material whose image is missing draws untextured

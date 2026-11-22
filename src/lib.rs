@@ -17,6 +17,7 @@ pub mod prefab;
 pub mod remote;
 pub mod pose;
 pub mod render;
+pub mod retarget;
 pub mod snapshot;
 pub mod source;
 pub mod springs;

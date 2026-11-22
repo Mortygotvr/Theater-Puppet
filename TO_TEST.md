@@ -134,6 +134,34 @@ what went wrong) and it comes off the list.
       changes at once; Export, load in Puppet: it swings the same way there.
 - [ ] Stop: every bone back as it was. Ctrl+Z or opening a file while it
       runs doesn't break anything.
+- [ ] Springs panel → "Delete Unused Spring Chains": on Rosia it says none
+      (every chain bends the hair; end bones kept). On a model with a chain
+      weighted on nothing, it asks first, lists it, deletes it; Ctrl+Z
+      brings it back.
+
+## Animation GLBs (any avatar)
+- [ ] Rig: "Convert Mixamo to Animation GLB" (top of the panel, no avatar
+      needed): pick Mixamo FBX files; a .glb of the same name appears next to each.
+- [ ] Puppet source → 🎬 Pose and animation → Animation folder: that folder.
+      Its clips show in the Animation list and 🎬 Puppet Animations; they play
+      on the avatar (try two different avatars).
+- [ ] Drop a new converted .glb in the folder while OBS runs: within a few
+      seconds it's in the list (the avatar reloads).
+
+## Theater Rig: Import Mixamo Animations
+- [ ] Reinstall the Rig zip. Rename to Mixamo, T-Pose, then Import Mixamo
+      Animations: pick one or several Mixamo FBX (FBX Binary, with or without
+      skin). Each shows in the NLA editor as its own track, named after the file.
+- [ ] Unmute a track (or set it as the action) and play: it moves like on
+      Mixamo; the hips go down when the character falls.
+- [ ] Export GLB, load in Puppet: 🎬 Puppet Animations lists it; it plays.
+
+## Theater Rig: Pick from Selected (colour slot, tiles)
+- [ ] Edit Mode on the body, L on the hair (or a few of its faces), Pick:
+      the hair's texture, not the skin's. Faces of two textures: the one with
+      most faces, the other named in the message.
+- [ ] Object Mode on a body with several textures: Pick shows a list with
+      thumbnails; clicking one sets it.
 
 ## ⚙ Puppet Configuration window
 - [ ] 🎭 Theater menu: Puppet's part (its icon) has "🎬 Puppet Animations"

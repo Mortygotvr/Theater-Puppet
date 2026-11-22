@@ -1,7 +1,7 @@
-//! The avatar's own animations: clips made in Blender on the avatar's own
-//! skeleton and exported in its GLB. Puppet plays them as they are, with no
-//! retargeting: an animation made for another skeleton (Mixamo's…) is put on
-//! the avatar in Blender first.
+//! The avatar's animations: clips made in Blender on the avatar's own
+//! skeleton and exported in its GLB, played as they are; and those of the
+//! source's Animation folder (Theater Rig's animation GLBs, Mixamo's…),
+//! retargeted onto the avatar when it loads (retarget.rs) into clips like them.
 //!
 //! Two layers: the source's looping clip (its "Animation" setting) in place
 //! of the idle motion, and a clip played once over it (the dock, a redeem),
