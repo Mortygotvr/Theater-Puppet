@@ -670,6 +670,30 @@ fn ask(args: &Value, source: Ptr, remote: &Shared, shown: &mut Option<Vec<bool>>
             tile.weight = weight;
             r.put_tiles(layer, &materials, if on { vec![tile] } else { Vec::new() }, fade);
         }
+        // Every slot at once: { slot: colour } (one each), undone together
+        "color" if args.get("colors").is_some_and(|c| c.is_object()) => {
+            drop(r);
+            let mut set = Vec::new();
+            for (slot, c) in args["colors"].as_object().unwrap() {
+                let slot: u32 = slot.trim().parse().map_err(|_| format!("slot \"{slot}\": a number"))?;
+                let color = c.as_str().unwrap_or("").trim().to_string();
+                if color.is_empty() {
+                    continue; // left as it is
+                }
+                let rgb = if color.eq_ignore_ascii_case("reset") { None } else { Some(parse_color(&color).ok_or_else(|| format!("slot {slot}: colour \"{color}\": #rrggbb or reset"))?) };
+                set.push((slot, rgb));
+            }
+            if set.is_empty() {
+                return Err("no colour given".into());
+            }
+            let mut before = serde_json::Map::new();
+            for (slot, rgb) in set {
+                let was = crate::source::get_color_setting(source, slot).map_or_else(|| "reset".to_string(), |c| format!("#{:02x}{:02x}{:02x}", (c[0] * 255.0).round() as u8, (c[1] * 255.0).round() as u8, (c[2] * 255.0).round() as u8));
+                before.insert(slot.to_string(), json!(was));
+                crate::source::set_color_setting(source, slot, rgb);
+            }
+            *undo = Some(("colors".into(), Undo::Args(json!({ "action": "color", "colors": before }))));
+        }
         "color" => {
             let slot = args.get("slot").and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))).ok_or("no slot")? as u32;
             let color = text("color");

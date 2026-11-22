@@ -147,6 +147,12 @@ what went wrong) and it comes off the list.
 - [ ] Aimed at something that isn't a Puppet (a webcam): it plays on every Puppet.
 - [ ] A GLB prefab redeem with it On Contact: plays at the GLB's contact frame.
 
+## Scene: every colour slot at once
+- [ ] A 🎭 Puppet redeem, 🎨 colour, "Every slot at once": each of the
+      avatar's slots listed, its own colour (one left empty stays as it is).
+      Test: they all change together. With a timer: all come back together.
+- [ ] A wildcard in one ({1}) takes the redeem's text.
+
 ## Tiles and the normal map
 - [ ] Amouri (face atlas 2x2 "Emotion", a normal map on the face): in OBS,
       the face's bumps (nose, eyelids, lips) sit where they should, on
