@@ -179,8 +179,12 @@ what went wrong) and it comes off the list.
       Mixamo DAE ("With Skin") and Rig's animation GLBs. Their clips show in
       the Animation list and 🎬 Puppet Animations; they play (try two avatars).
 - [ ] A DAE downloaded Without Skin: the OBS log says to download it With Skin.
-- [ ] Drop a new file in the folder while OBS runs: within a few seconds it's
-      in the list (the avatar reloads).
+- [ ] Drop a new file in the folder while OBS runs, then "🔄 Reload GLBs"
+      (top of the source's properties): it's in the list.
+- [ ] Export the avatar again to the same file (no animation now): pick
+      that file again in the source's properties (or Reload GLBs): the new
+      one shows, its old animations gone from the lists. Nothing is polled:
+      without one of those, OBS keeps the one it had.
 - [ ] Rig (reinstall the zip), box "Animations" at the top, no avatar needed:
       Import Mixamo (FBX or DAE): its own skeleton next to the avatar, named
       after the file, playing in the timeline. Change it (add a "contact"
