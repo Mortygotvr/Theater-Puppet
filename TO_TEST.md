@@ -175,6 +175,9 @@ what went wrong) and it comes off the list.
 - [ ] Gradient direction "Left → right (as seen)" and "Front → back"; Slots
       "2" only: the other slots untouched.
 - [ ] 🌈 Rainbow, Flow "Down the part", turning: the hues run down each part.
+- [ ] "⏹ Colours back to normal" (made for you): a rainbow or gradient on
+      with Timer 0 goes (over 1 s), and every slot is its own colour again.
+      The colour form warns when a rainbow/gradient has Timer 0.
 - [ ] (The shader change only compiles in OBS: the avatar draws, no effect
       error in the log.)
 

@@ -697,6 +697,22 @@ fn ask(args: &Value, source: Ptr, remote: &Shared, shown: &mut Option<Vec<bool>>
             r.put_tiles(layer, &materials, if on { vec![tile] } else { Vec::new() }, fade);
         }
         // Every slot at once: { slot: colour } (one each), undone together
+        // Back to normal: the rainbow and the gradient off, every slot its own
+        // colour again (over the fade), the colour timers still to come dropped
+        "color" if args.get("reset").is_some_and(|v| v.as_bool() != Some(false)) => {
+            let fade = args.get("fade").and_then(|v| v.as_f64()).unwrap_or(0.0).clamp(0.0, 30.0) as f32;
+            r.color_fx.set_rainbow(None, Some(fade));
+            r.color_fx.set_gradient(None, Some(fade));
+            r.color_fx.fade_next(fade);
+            r.timers.retain(|t| !(t.target == "rainbow" || t.target == "gradient" || t.target == "colors" || t.target.starts_with("color ")));
+            let slots = r.slots.clone();
+            drop(r);
+            for slot in slots {
+                if crate::source::get_color_setting(source, slot).is_some() {
+                    crate::source::set_color_setting(source, slot, None);
+                }
+            }
+        }
         // The rainbow: every slot its own hue, still or turning; false: off
         "color" if args.get("rainbow").is_some() => {
             let fade = args.get("fade").and_then(|v| v.as_f64()).unwrap_or(0.0).clamp(0.0, 30.0) as f32;
@@ -1137,6 +1153,40 @@ mod tests {
         remote.lock().unwrap().shapes.clear();
         run_due_at(std::ptr::null_mut(), &remote, start + Duration::from_secs(3));
         assert_eq!(remote.lock().unwrap().shapes, vec![(0, "Fcl_MTH_A".to_string(), None)]);
+    }
+
+    #[test]
+    fn a_timed_rainbow_and_gradient_go_off() {
+        let slots = [(1u32, [1.0, 0.0, 0.0]), (2, [0.0, 0.0, 1.0])];
+        for cmd in [
+            json!({ "action": "color", "rainbow": { "speed": 0.25 }, "fade": 1.0, "timer": 2 }),
+            json!({ "action": "color", "rainbow": { "speed": 0.25, "flow": "down" }, "fade": 1.0, "timer": 2 }),
+            json!({ "action": "color", "gradient": { "top": "pink", "bottom": "blue", "direction": "down" }, "fade": 1.0, "timer": 2 }),
+        ] {
+            let remote: Shared = Arc::new(Mutex::new(Remote::default()));
+            let start = Instant::now();
+            apply_at(&cmd, std::ptr::null_mut(), &remote, start).unwrap();
+            let step = |dt: f32| remote.lock().unwrap().color_fx.step(dt, &std::collections::HashMap::new(), &slots);
+            assert_eq!(step(1.5).len(), 2, "{cmd}: on");
+            run_due_at(std::ptr::null_mut(), &remote, start + Duration::from_secs(3));
+            step(0.5);
+            assert!(step(0.6).is_empty(), "{cmd}: still on after its timer and fade");
+        }
+    }
+
+    #[test]
+    fn back_to_normal_stops_the_rainbow_and_gradient_and_their_timers() {
+        let slots = [(1u32, [1.0, 0.0, 0.0])];
+        let remote: Shared = Arc::new(Mutex::new(Remote::default()));
+        let start = Instant::now();
+        apply_at(&json!({ "action": "color", "rainbow": { "speed": 0.25 }, "timer": 0 }), std::ptr::null_mut(), &remote, start).unwrap();
+        apply_at(&json!({ "action": "color", "gradient": { "top": "pink", "bottom": "blue" }, "timer": 60 }), std::ptr::null_mut(), &remote, start).unwrap();
+        let step = |dt: f32| remote.lock().unwrap().color_fx.step(dt, &std::collections::HashMap::new(), &slots);
+        assert_eq!(step(0.5).len(), 1);
+        apply_at(&json!({ "action": "color", "reset": true, "fade": 0.5 }), std::ptr::null_mut(), &remote, start).unwrap();
+        step(0.3);
+        assert!(step(0.3).is_empty(), "still coloured after Back to normal");
+        assert!(remote.lock().unwrap().timers.is_empty(), "a colour timer is left");
     }
 
     #[test]
