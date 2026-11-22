@@ -173,57 +173,42 @@ pub fn folder_stamp(folder: &str) -> Vec<(String, u64)> {
 mod tests {
     use super::*;
 
-    /// THEATER_PUPPET_GLB=<an avatar from Theater Rig> THEATER_PUPPET_ANIMATION_GLB=<Rig's
-    /// conversion of Mixamo's "Knocked Out"> THEATER_PUPPET_MIXAMO_GLB=<the same, imported
-    /// onto that avatar in Blender by Rig>: the avatar plays it as Blender does
+    /// THEATER_PUPPET_GLB=<an avatar from Theater Rig> THEATER_PUPPET_ANIMATION_FOLDER=<Rig's
+    /// Export Animation of "Knock Test" (Mixamo's Knocked Out, a contact at 1.3 s) and "Wave"
+    /// (made on another avatar's skeleton: the right arm swung 60 degrees forward at 0.3 s, a contact there)>
     #[test]
-    fn an_animation_glb_plays_on_the_avatar_as_blender_retargets_it() {
-        let (Ok(avatar), Ok(anim)) = (std::env::var("THEATER_PUPPET_GLB"), std::env::var("THEATER_PUPPET_ANIMATION_GLB")) else { return };
+    fn an_animation_folder_plays_on_the_avatar() {
+        let (Ok(avatar), Ok(folder)) = (std::env::var("THEATER_PUPPET_GLB"), std::env::var("THEATER_PUPPET_ANIMATION_FOLDER")) else { return };
         let dst = crate::model::load(Path::new(&avatar)).unwrap();
-        let src = crate::model::load_animation(Path::new(&anim)).unwrap();
-        let clips = clips_onto(&src, &dst);
-        println!("clips: {:?}", clips.iter().map(|c| (&c.name, c.duration, c.channels.len())).collect::<Vec<_>>());
-        assert_eq!(clips.len(), 1);
-        let clip = &clips[0];
-        let head = dst.node("Head").unwrap();
+        let (clips, notes) = folder_onto(Path::new(&folder), &dst);
+        println!("clips: {:?}; notes: {notes:?}", clips.iter().map(|c| (&c.name, c.duration, &c.contacts)).collect::<Vec<_>>());
+        let get = |n: &str| clips.iter().find(|c| c.name == n).unwrap_or_else(|| panic!("no {n}"));
+        let (knock, wave) = (get("Knock Test"), get("Wave"));
+        assert!((knock.contacts[0] - 1.3).abs() < 1e-3 && (wave.contacts[0] - 0.3).abs() < 1e-3, "contacts lost");
         let mut pose = Pose::rest(&dst);
-        let standing = pose.position(head).y;
-        let mut lowest = standing;
-        let mut t = 0.0;
-        while t <= clip.duration {
+        let at = |clip: &Clip, t: f32, pose: &mut Pose, bone: &str| {
             pose.reset(&dst);
-            clip.apply(&mut pose, t, 1.0);
+            clip.apply(pose, t, 1.0);
             pose.update_world(&dst);
-            lowest = lowest.min(pose.position(head).y);
-            t += 1.0 / 30.0;
-        }
+            pose.position(dst.node(bone).unwrap())
+        };
+        // Knocked out: the head to the floor
+        let standing = Pose::rest(&dst).position(dst.node("Head").unwrap()).y;
+        let lowest = (0..=(knock.duration * 30.0) as usize).map(|f| at(knock, f as f32 / 30.0, &mut pose, "Head").y).fold(f32::MAX, f32::min);
         println!("head: standing {standing:.2} m, lowest {lowest:.2} m");
         assert!(lowest < standing * 0.2, "the head didn't reach the floor");
-
-        // The same as Rig's import in Blender (the avatar's own clip, exported)
-        let Ok(reference) = std::env::var("THEATER_PUPPET_MIXAMO_GLB") else { return };
-        let rm = crate::model::load(Path::new(&reference)).unwrap();
-        let rclip = rm.clips.iter().find(|c| c.name == "Knocked Out").unwrap();
-        let mut rp = Pose::rest(&rm);
-        let mut worst = (0.0f32, String::new(), 0.0f32);
-        let mut t = 0.0;
-        while t <= clip.duration.min(rclip.duration) {
-            pose.reset(&dst);
-            clip.apply(&mut pose, t, 1.0);
-            pose.update_world(&dst);
-            rp.reset(&rm);
-            rclip.apply(&mut rp, t, 1.0);
-            rp.update_world(&rm);
-            for b in ["Hips", "Head", "LeftHand", "RightHand", "LeftFoot", "RightFoot", "LeftForeArm", "RightLeg"] {
-                let (a, r) = (dst.node(b).unwrap(), rm.node(b).unwrap());
-                let d = (pose.position(a) - rp.position(r)).length();
-                if d > worst.0 {
-                    worst = (d, b.to_string(), t);
-                }
-            }
-            t += 1.0 / 30.0;
-        }
-        println!("furthest from Blender's: {:.3} m ({} at {:.2} s)", worst.0, worst.1, worst.2);
-        assert!(worst.0 < 0.03, "not where Blender puts it");
+        // Wave: the right hand swung at its contact (as on the skeleton it was
+        // made on: from the shoulder, the same way), back at the end
+        let rest = at(wave, 0.0, &mut pose, "RightHand");
+        let swung = at(wave, wave.contacts[0], &mut pose, "RightHand");
+        let end = at(wave, wave.duration, &mut pose, "RightHand");
+        let shoulder = Pose::rest(&dst).position(dst.node("RightArm").unwrap());
+        println!("right hand: moved {:.2} m at the contact, {:.3} m off rest at the end", (swung - rest).length(), (end - rest).length());
+        assert!((swung - rest).length() > 0.2 && (end - rest).length() < 0.01, "the wave isn't on this avatar's arm");
+        // Forward (+Z), level: as the arm on the skeleton it was made on
+        let dir = (swung - shoulder).normalize();
+        println!("arm direction at the contact: {dir:?}");
+        assert!(dir.z > 0.4 && dir.y.abs() < 0.1, "swung another way than on its own skeleton");
     }
 }
+

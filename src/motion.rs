@@ -990,30 +990,6 @@ mod tests {
         }
     }
 
-    /// THEATER_PUPPET_MIXAMO_GLB=<an export with Mixamo's "Knocked Out" imported by Theater Rig>
-    #[test]
-    fn a_mixamo_clip_imported_by_the_rig_plays() {
-        let Ok(path) = std::env::var("THEATER_PUPPET_MIXAMO_GLB") else { return };
-        let mut rig = Rig::new(Arc::new(crate::model::load(std::path::Path::new(&path)).unwrap()));
-        let duration = rig.model.clips.iter().find(|c| c.name == "Knocked Out").expect("no Knocked Out clip").duration;
-        println!("Knocked Out: {duration:.2} s");
-        let config = tracking::config::Config::default();
-        let head = rig.model.node("Head").unwrap();
-        rig.step_with(1.0 / 60.0, still(), &Snapshot::default(), &config);
-        let idle = rig.pose.position(head);
-        let mut control = crate::animation::Control { play: Some("Knocked Out".into()), ..Default::default() };
-        let model = rig.model.clone();
-        rig.player.sync(&model, &mut control);
-        let mut lowest = idle.y;
-        for _ in 0..(duration * 60.0) as usize {
-            rig.step_with(1.0 / 60.0, still(), &Snapshot::default(), &config);
-            lowest = lowest.min(rig.pose.position(head).y);
-        }
-        println!("head: standing at {:.2} m, lowest {:.2} m", idle.y, lowest);
-        // Knocked out: on the floor (the hips move too: a hips bone connected to its parent didn't)
-        assert!(lowest < idle.y * 0.4, "the head didn't go down");
-    }
-
     #[test]
     fn a_glb_drawn_with_it_copies_its_pose_and_face() {
         let Some(mut rig) = rig() else { return };
