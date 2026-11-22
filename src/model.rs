@@ -627,11 +627,14 @@ fn material(m: gltf::Material) -> Material {
         Some([0, 1, 2].map(|i| a.get(i).and_then(|x| x.as_f64()).unwrap_or(1.0) as f32))
     };
     // A colour slot's material is plain grey; until the slot gets a colour
-    // it shows the one it had (Theater Rig keeps it as color_default)
+    // it shows the one it had (Theater Rig keeps it as color_default). That's
+    // the colour as the texture showed it (sRGB, measured on its pixels), not
+    // a linear factor: made linear here, as the factor it multiplies, so it
+    // comes back as it was (read as linear, an orange came out pale yellow)
     if color_slot.is_some() {
         if let Some(c) = rgb("color_default") {
             for k in 0..3 {
-                color[k] *= c[k];
+                color[k] *= srgb_to_linear(c[k]);
             }
         }
     }
@@ -690,6 +693,11 @@ fn read_coat(m: &gltf::Material) -> (f32, f32) {
 /// colour, as much darker as its own shade was
 pub fn recoloured(m: &Material, rgb: [f32; 3]) -> Material {
     Material { color: [rgb[0], rgb[1], rgb[2], m.color[3]], shade: rgb.map(|c| c * m.shade_ratio), ..m.clone() }
+}
+
+fn srgb_to_linear(c: f32) -> f32 {
+    let c = c.clamp(0.0, 1.0);
+    if c <= 0.040_45 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
 }
 
 fn linear_to_srgb(c: f32) -> f32 {
@@ -911,6 +919,28 @@ mod tests {
         // A person: about 1-2 m tall, standing up (Y), arms out (T-pose)
         assert!(size.y > 0.5 && size.y < 3.0, "height {}", size.y);
         assert!(m.images.iter().all(|i| i.rgba.len() == (i.width * i.height * 4) as usize));
+    }
+}
+
+#[cfg(test)]
+mod colour_slot_tests {
+    #[test]
+    fn srgb_and_linear_go_both_ways() {
+        for c in [0.0f32, 0.02, 0.2055, 0.5, 0.6915, 1.0] {
+            assert!((super::linear_to_srgb(super::srgb_to_linear(c)) - c).abs() < 1e-4, "{c}");
+        }
+    }
+
+    /// THEATER_PUPPET_COLOUR_GLB=<a Rig export with a colour slot> (Amouri's: its
+    /// iris, Color3, color_default [1.0, 0.6915, 0.2055]): it shows that colour
+    #[test]
+    fn a_colour_slot_shows_the_colour_it_had() {
+        let Ok(p) = std::env::var("THEATER_PUPPET_COLOUR_GLB") else { return };
+        let m = super::load(std::path::Path::new(&p)).unwrap();
+        let mat = m.materials.iter().find(|m| m.color_slot == Some(3)).expect("no Color3");
+        println!("{}: shows {:?}", mat.name, &mat.color[..3]);
+        let want = [1.0, 0.6915, 0.2055];
+        assert!(mat.color[..3].iter().zip(want).all(|(a, b)| (a - b).abs() < 0.01), "not the colour it had");
     }
 }
 
