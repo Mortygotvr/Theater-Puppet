@@ -1461,6 +1461,8 @@ pub(crate) fn set_color_setting(source: Ptr, slot: u32, rgb: Option<[f32; 3]>) {
 /// properties: (name, 'd' a number, 'b' on / off, 's' text)
 pub(crate) const AVATAR_SETTINGS: &[(&str, char)] = &[
     ("tracked", 'b'),
+    // The Animation folder (Scene sets it when a redeem it imports brings animations)
+    ("animation_folder", 's'),
     ("controller_model", 's'),
     ("controller_up", 'd'),
     ("controller_forward", 'd'),

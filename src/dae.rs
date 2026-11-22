@@ -164,7 +164,7 @@ pub fn load(path: &Path) -> Result<Model, String> {
         }
         d
     });
-    let clip = Clip { name: name.clone(), start: first, duration: (last - first).max(0.0), channels, contacts: Vec::new() };
+    let clip = Clip { name: name.clone(), start: first, duration: (last - first).max(0.0), channels, contacts: Vec::new(), file: None };
     let mut model = Model::empty();
     model.name = name;
     model.nodes = nodes;

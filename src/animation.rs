@@ -48,6 +48,9 @@ pub struct Clip {
     /// Its contact frames (Theater Rig writes Blender's "contact" markers as
     /// the animation's extras, `theater_contacts`): seconds from its start
     pub contacts: Vec<f32>,
+    /// The file it came from, for a clip of the Animation folder (Scene packs
+    /// it with a redeem that plays it); None for the avatar's own
+    pub file: Option<String>,
 }
 
 /// An animation's contact times (seconds from its start), from its extras
@@ -123,7 +126,7 @@ pub fn load(doc: &gltf::Document, buffers: &[gltf::buffer::Data], morph_names: &
         let start = if start.is_finite() { start.min(end) } else { 0.0 };
         let duration = end - start;
         let name = anim.name().map(str::to_string).unwrap_or_else(|| format!("Animation {}", i + 1));
-        clips.push(Clip { name, start, duration, channels, contacts: contacts_of(&anim) });
+        clips.push(Clip { name, start, duration, channels, contacts: contacts_of(&anim), file: None });
     }
     clips
 }
@@ -221,6 +224,8 @@ pub struct Control {
     pub stop: bool,
     /// The avatar's clips
     pub clips: Vec<String>,
+    /// (clip, the file it came from) for the Animation folder's
+    pub files: Vec<(String, String)>,
     /// The clip playing once now, "" for none
     pub playing: String,
 }
@@ -239,6 +244,7 @@ impl Player {
         let find = |name: &str| model.clips.iter().position(|c| c.name == name);
         if control.clips.iter().map(String::as_str).ne(model.clips.iter().map(|c| c.name.as_str())) {
             control.clips = model.clips.iter().map(|c| c.name.clone()).collect();
+            control.files = model.clips.iter().filter_map(|c| Some((c.name.clone(), c.file.clone()?))).collect();
         }
         let wanted = find(&control.loop_clip);
         if self.base.map(|b| b.clip) != wanted {
@@ -355,6 +361,7 @@ mod tests {
         let clip = Clip {
             name: "Flipbook".into(),
             contacts: Vec::new(),
+            file: None,
             start: f,
             duration: 2.0 * f,
             channels: vec![Channel {
@@ -380,6 +387,7 @@ mod tests {
         Clip {
             name: name.into(),
             contacts: Vec::new(),
+            file: None,
             start: 0.0,
             duration,
             channels: vec![Channel { node: 0, times: vec![0.0, duration], values: Values::Translation(vec![Vec3::Y, Vec3::Y]), step: false }],

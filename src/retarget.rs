@@ -114,7 +114,7 @@ pub fn clips_onto(src: &Model, dst: &Model) -> Vec<Clip> {
                 channels.push(Channel { node: 0, times, values: Values::Weights { targets, values: values.clone() }, step: c.step });
             }
         }
-        out.push(Clip { name: clip.name.clone(), start: 0.0, duration: clip.duration, channels, contacts: clip.contacts.clone() });
+        out.push(Clip { name: clip.name.clone(), start: 0.0, duration: clip.duration, channels, contacts: clip.contacts.clone(), file: None });
     }
     out
 }
@@ -140,7 +140,8 @@ pub fn folder_onto(folder: &Path, dst: &Model) -> (Vec<Clip>, Vec<String>) {
                 if made.is_empty() {
                     log.push(format!("{}: no clip on bones the avatar has (Hips, Spine…)", f.display()));
                 }
-                for c in made {
+                for mut c in made {
+                    c.file = Some(f.to_string_lossy().into_owned());
                     // The avatar's own clip (or an earlier file's) of that name stays
                     if dst.clips.iter().chain(clips.iter()).any(|o| o.name == c.name) {
                         log.push(format!("{}: \"{}\" already there, skipped", f.display(), c.name));

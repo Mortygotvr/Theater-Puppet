@@ -788,6 +788,9 @@ pub fn answer(args: &str) -> String {
                         "tiles_on": r.tiles.iter().filter(|t| t.layer == i).map(|t| if t.name.is_empty() { t.grid.map(|(c, rr, cell)| format!("{}x{} cell {cell}", c, rr)).unwrap_or_default() } else { t.name.clone() }).collect::<Vec<_>>() })).collect::<Vec<_>>(),
                     "groups": groups,
                     "animations": r.animation.clips,
+                    // The Animation folder's clips and their files (Scene packs them with a redeem)
+                    "animation_files": r.animation.files.iter().map(|(c, f)| json!({ "clip": c, "file": f })).collect::<Vec<_>>(),
+                    "animation_folder": crate::source::avatar_settings(*source).get("animation_folder").cloned().unwrap_or(json!("")),
                     "looping": r.animation.loop_clip,
                     "playing": r.animation.playing,
                     "colour_slots": r.slots,
