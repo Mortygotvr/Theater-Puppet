@@ -167,6 +167,17 @@ what went wrong) and it comes off the list.
 - [ ] "One slot" works as before; a viewer's "pink", "gold", "#33ccff",
       "random" in {1} too.
 
+## Theater Rig: Overlay
+- [ ] Restart Blender. Panel → Overlay: Edit Mode, select a few faces of
+      the body (or her painted material), Pick from Selected, Add Overlay…,
+      a PNG on the same UV layout (transparent where there's nothing): it
+      shows over the texture in Blender; posed / with a face shape key it
+      stays on the skin.
+- [ ] Make Colour Slot on the overlay's texture: the overlay recolours, the
+      skin under it doesn't. Export GLB → Puppet: the overlay shows over the
+      body, no flicker at its edges; the colour redeems work on it.
+- [ ] ✕ on the overlay in the list: gone, the body as it was.
+
 ## Tiles and the normal map
 - [ ] Amouri (face atlas 2x2 "Emotion", a normal map on the face): in OBS,
       the face's bumps (nose, eyelids, lips) sit where they should, on
