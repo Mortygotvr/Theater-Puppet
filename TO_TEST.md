@@ -167,19 +167,19 @@ what went wrong) and it comes off the list.
 - [ ] "One slot" works as before; a viewer's "pink", "gold", "#33ccff",
       "random" in {1} too.
 
-## Theater Rig: Overlay
-- [ ] Restart Blender. Overlay box: Edit Mode, select a few faces of the
-      garment, Pick from Selected; "Colour slot" ticked, a number (4); Add
-      Overlay… → red_overlay.png: it shows over the texture; the overlay is
-      …_Color4, the material under it keeps its own name and texture.
-- [ ] Export → Puppet: a colour redeem on slot 4 changes only the red (the
-      yellow, the stripes, the grey stay). Same with grey_overlay.png on the
-      top (another number): only the grey changes.
-- [ ] Make Colour Slot on a texture that has an overlay over it: it asks
-      first ("recolours everything UNDER the overlay").
-- [ ] Remove (next to Make Colour Slot) on a _Color texture: the material
-      back on its own texture, its colours as they were.
-- [ ] ✕ on the overlay in the list: gone, the body as it was.
+## Theater Rig: colour slots on some colours, and Overlay
+- [ ] Restart Blender. Colour slot box: Pick from Selected on her garment:
+      its colours show as swatches with their share (her reds as one).
+      Untick all but the red (or the grey top), a slot number, Make Colour
+      Slot: in Blender only that part takes the slot's colour (the Multiply
+      node "Theater colour slot"); the rest stays as painted.
+- [ ] Change the node's colour (B) to try one: Export GLB → Puppet starts
+      with that colour; a colour redeem on that slot changes only that part.
+- [ ] Remove (next to Make Colour Slot), the part's texture chosen: gone,
+      the garment as painted.
+- [ ] All swatches ticked: the whole texture follows the slot, as before.
+- [ ] Overlay box: Add Overlay… with a logo PNG: it shows over the texture
+      with its own colours (no slot); ✕ takes it off.
 
 ## Tiles and the normal map
 - [ ] Amouri (face atlas 2x2 "Emotion", a normal map on the face): in OBS,
