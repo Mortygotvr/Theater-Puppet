@@ -624,60 +624,50 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
         let props = (api.obs_properties_create)();
         (api.obs_properties_add_path)(props, S_FILE.as_ptr(), c"Avatar (GLB from Theater Rig)".as_ptr(), obs::OBS_PATH_FILE, c"glTF avatar (*.glb *.gltf)".as_ptr(), std::ptr::null());
         (api.obs_properties_add_bool)(props, shown_key(0).as_ptr(), c"Show the avatar".as_ptr());
-        // The Also draw GLBs: each one's file, Show, group, and a button to remove it
+        // 🎬 The avatar's pose: its own animation, its arms, the idle motion
+        let pose = (api.obs_properties_create)();
+        // The avatar's own animations (made in Blender, in its GLB)
+        let clips: Vec<String> = if data.is_null() { Vec::new() } else { (&*(data as *const Puppet)).remote.lock().unwrap().animation.clips.clone() };
+        let list = (api.obs_properties_add_list)(pose, S_ANIMATION.as_ptr(), c"Animation (loops; made in Blender, in the GLB)".as_ptr(), obs::OBS_COMBO_TYPE_LIST, obs::OBS_COMBO_FORMAT_STRING);
+        (api.obs_property_list_add_string)(list, c"(none: idle motion)".as_ptr(), c"".as_ptr());
+        for clip in &clips {
+            let c = cstring(clip);
+            (api.obs_property_list_add_string)(list, c.as_ptr(), c.as_ptr());
+        }
+        (api.obs_properties_add_float_slider)(pose, S_ARMS.as_ptr(), c"Arms down (degrees from the T-pose)".as_ptr(), 0.0, 85.0, 1.0);
+        (api.obs_properties_add_float_slider)(pose, S_IDLE.as_ptr(), c"Idle motion".as_ptr(), 0.0, 1.0, 0.01);
+        (api.obs_properties_add_group)(props, c"pose_box".as_ptr(), c"🎬 Pose and animation".as_ptr(), obs::OBS_GROUP_NORMAL, pose);
+        // 🎥 The camera: the picture's size, the lens, where it looks from
+        let camera = (api.obs_properties_create)();
+        (api.obs_properties_add_bool)(camera, S_CANVAS.as_ptr(), c"Canvas size (as OBS's canvas; off: the width and height below)".as_ptr());
+        (api.obs_properties_add_int)(camera, S_WIDTH.as_ptr(), c"Width".as_ptr(), 16, 8192, 1);
+        (api.obs_properties_add_int)(camera, S_HEIGHT.as_ptr(), c"Height".as_ptr(), 16, 8192, 1);
+        // (Far out: a big prop or scene beside the avatar fits)
+        (api.obs_properties_add_float_slider)(camera, S_ZOOM.as_ptr(), c"Zoom".as_ptr(), 0.05, 50.0, 0.01);
+        let projection = (api.obs_properties_add_list)(camera, S_PROJECTION.as_ptr(), c"Camera".as_ptr(), obs::OBS_COMBO_TYPE_LIST, obs::OBS_COMBO_FORMAT_STRING);
+        (api.obs_property_list_add_string)(projection, c"Perspective".as_ptr(), c"perspective".as_ptr());
+        (api.obs_property_list_add_string)(projection, c"Orthographic (no perspective)".as_ptr(), c"orthographic".as_ptr());
+        (api.obs_properties_add_float_slider)(camera, S_CENTRE.as_ptr(), c"Centre (feet to head)".as_ptr(), -1.0, 1.0, 0.01);
+        (api.obs_properties_add_float_slider)(camera, S_YAW.as_ptr(), c"Turn (the camera goes around the avatar)".as_ptr(), -180.0, 180.0, 1.0);
+        for (key, label, range) in [
+            (S_POSITION[0], c"Position: left / right (m)", 3.0),
+            (S_POSITION[1], c"Position: down / up (m)", 2.0),
+            (S_POSITION[2], c"Position: back / forward (m)", 3.0),
+        ] {
+            (api.obs_properties_add_float_slider)(camera, key.as_ptr(), label.as_ptr(), -range, range, 0.01);
+        }
+        (api.obs_properties_add_group)(props, c"camera_box".as_ptr(), c"🎥 Camera".as_ptr(), obs::OBS_GROUP_NORMAL, camera);
+        // The light (optional)
+        let light = (api.obs_properties_create)();
+        (api.obs_properties_add_bool)(light, S_LIGHT_ON.as_ptr(), c"Its own light (off: from the front, upper left, white)".as_ptr());
+        (api.obs_properties_add_float_slider)(light, S_LIGHT_TURN.as_ptr(), c"From: around (degrees; 0 the camera's side, + the picture's right)".as_ptr(), -180.0, 180.0, 1.0);
+        (api.obs_properties_add_float_slider)(light, S_LIGHT_HEIGHT.as_ptr(), c"From: height (degrees; 90 straight above)".as_ptr(), -90.0, 90.0, 1.0);
+        (api.obs_properties_add_color)(light, S_LIGHT_COLOR.as_ptr(), c"Colour".as_ptr());
+        (api.obs_properties_add_float_slider)(light, S_LIGHT_STRENGTH.as_ptr(), c"Strength".as_ptr(), 0.0, 4.0, 0.05);
+        (api.obs_properties_add_group)(props, c"light".as_ptr(), c"💡 Light".as_ptr(), obs::OBS_GROUP_NORMAL, light);
+        // 🌅 The sky: another source's picture lighting the avatar, or reflected on it
         if !data.is_null() {
             let puppet = &*(data as *const Puppet);
-            // The buttons find the source through the properties
-            (api.obs_properties_set_param)(props, puppet.source, std::ptr::null_mut());
-            let settings = (api.obs_source_get_settings)(puppet.source);
-            let count = if settings.is_null() { 0 } else { extra_count(settings) };
-            if !settings.is_null() {
-                (api.obs_data_release)(settings);
-            }
-            // The avatar's bones, for "from" (its skeleton's joints)
-            let bones: Vec<String> = puppet.rig.lock().unwrap().as_ref().map(|r| {
-                let mut names: Vec<String> = Vec::new();
-                for j in r.model.skins.iter().flat_map(|s| s.joints.iter()) {
-                    let name = r.model.nodes[*j].name.clone();
-                    if !names.contains(&name) {
-                        names.push(name);
-                    }
-                }
-                names
-            }).unwrap_or_default();
-            // Every box, hidden past the last GLB (Add shows the next)
-            for n in 1..=MAX_EXTRAS {
-                let group = (api.obs_properties_create)();
-                (api.obs_properties_add_path)(group, extra_key(n).as_ptr(), c"GLB".as_ptr(), obs::OBS_PATH_FILE, c"glTF (*.glb *.gltf)".as_ptr(), std::ptr::null());
-                (api.obs_properties_add_bool)(group, shown_key(n).as_ptr(), c"Show".as_ptr());
-                (api.obs_properties_add_text)(group, group_key(n).as_ptr(), c"Group (only one GLB of a group shows; empty: none)".as_ptr(), obs::OBS_TEXT_DEFAULT);
-                // What it copies from the avatar (all off: it doesn't move)
-                let [mv, mf, rt, rf, sh] = follow_keys(n);
-                for (check, label, from) in [(&mv, c"Copy movement", &mf), (&rt, c"Copy rotation", &rf)] {
-                    (api.obs_properties_add_bool)(group, check.as_ptr(), label.as_ptr());
-                    let list = (api.obs_properties_add_list)(group, from.as_ptr(), c"  from".as_ptr(), obs::OBS_COMBO_TYPE_LIST, obs::OBS_COMBO_FORMAT_STRING);
-                    (api.obs_property_list_add_string)(list, c"The armature (each bone from the avatar's of the same name)".as_ptr(), c"".as_ptr());
-                    for b in &bones {
-                        let name = cstring(b);
-                        (api.obs_property_list_add_string)(list, name.as_ptr(), name.as_ptr());
-                    }
-                }
-                (api.obs_properties_add_bool)(group, sh.as_ptr(), c"Copy shape keys".as_ptr());
-                // Its own animations (made in Blender, in this GLB), one looping
-                let clips: Vec<String> = puppet.extras.lock().unwrap().iter().find(|(slot, _)| *slot == n).map(|(_, m)| m.clips.iter().map(|c| c.name.clone()).collect()).unwrap_or_default();
-                let list = (api.obs_properties_add_list)(group, extra_clip_key(n).as_ptr(), c"Animation (loops; this GLB's own)".as_ptr(), obs::OBS_COMBO_TYPE_LIST, obs::OBS_COMBO_FORMAT_STRING);
-                (api.obs_property_list_add_string)(list, c"(none)".as_ptr(), c"".as_ptr());
-                for clip in &clips {
-                    let c = cstring(clip);
-                    (api.obs_property_list_add_string)(list, c.as_ptr(), c.as_ptr());
-                }
-                (api.obs_property_set_visible)(list, !clips.is_empty());
-                (api.obs_properties_add_button2)(group, cstring(&format!("extra{n}.remove")).as_ptr(), c"Remove".as_ptr(), remove_extra, n as Ptr);
-                let b = (api.obs_properties_add_group)(props, extra_box(n).as_ptr(), cstring(&format!("Also draw {n}")).as_ptr(), obs::OBS_GROUP_NORMAL, group);
-                (api.obs_property_set_visible)(b, n <= count);
-            }
-            let add = (api.obs_properties_add_button2)(props, c"extra.add".as_ptr(), c"\u{2795} Add a GLB".as_ptr(), add_extra, std::ptr::null_mut());
-            (api.obs_property_set_visible)(add, count < MAX_EXTRAS);
             // A reflection: another source's picture on the avatar
             let own = get_string_of(puppet.source);
             let group = (api.obs_properties_create)();
@@ -695,8 +685,10 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
             (api.obs_property_list_add_string)(mapping, c"360 (equirectangular)".as_ptr(), c"360".as_ptr());
             (api.obs_property_list_add_string)(mapping, c"Flat (a mirror ball facing the camera)".as_ptr(), c"flat".as_ptr());
             (api.obs_properties_add_float_slider)(group, S_REFLECTION_TURN.as_ptr(), c"360: turn (degrees)".as_ptr(), -180.0, 180.0, 1.0);
-            (api.obs_properties_add_group)(props, c"reflection".as_ptr(), c"Sky (lights the avatar, or reflected on it)".as_ptr(), obs::OBS_GROUP_NORMAL, group);
+            (api.obs_properties_add_group)(props, c"reflection".as_ptr(), c"🌅 Sky (lights the avatar, or reflected on it)".as_ptr(), obs::OBS_GROUP_NORMAL, group);
         }
+        // 🎨 The look: colour slots, styles (3D), then filters (the picture)
+        (api.obs_properties_add_text)(props, c"look_heading".as_ptr(), c"🎨 Look: colours, styles, filters".as_ptr(), obs::OBS_TEXT_INFO);
         // Colour slots (Theater Rig's Color<N>): the avatar's and its extras'
         if !data.is_null() {
             let puppet = &*(data as *const Puppet);
@@ -788,43 +780,6 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
         let folder = cstring(&format!("Your own filters (.rhai) go in {} (Theater Scene's are listed too)", crate::config_dir().join("filters").display()));
         (api.obs_properties_add_text)(props, c"filters_info".as_ptr(), folder.as_ptr(), obs::OBS_TEXT_INFO);
 
-        (api.obs_properties_add_bool)(props, S_CANVAS.as_ptr(), c"Canvas size (as OBS's canvas; off: the width and height below)".as_ptr());
-        (api.obs_properties_add_int)(props, S_WIDTH.as_ptr(), c"Width".as_ptr(), 16, 8192, 1);
-        (api.obs_properties_add_int)(props, S_HEIGHT.as_ptr(), c"Height".as_ptr(), 16, 8192, 1);
-        // (Far out: a big prop or scene beside the avatar fits)
-        (api.obs_properties_add_float_slider)(props, S_ZOOM.as_ptr(), c"Zoom".as_ptr(), 0.05, 50.0, 0.01);
-        let projection = (api.obs_properties_add_list)(props, S_PROJECTION.as_ptr(), c"Camera".as_ptr(), obs::OBS_COMBO_TYPE_LIST, obs::OBS_COMBO_FORMAT_STRING);
-        (api.obs_property_list_add_string)(projection, c"Perspective".as_ptr(), c"perspective".as_ptr());
-        (api.obs_property_list_add_string)(projection, c"Orthographic (no perspective)".as_ptr(), c"orthographic".as_ptr());
-        // The light (optional)
-        let light = (api.obs_properties_create)();
-        (api.obs_properties_add_bool)(light, S_LIGHT_ON.as_ptr(), c"Its own light (off: from the front, upper left, white)".as_ptr());
-        (api.obs_properties_add_float_slider)(light, S_LIGHT_TURN.as_ptr(), c"From: around (degrees; 0 the camera's side, + the picture's right)".as_ptr(), -180.0, 180.0, 1.0);
-        (api.obs_properties_add_float_slider)(light, S_LIGHT_HEIGHT.as_ptr(), c"From: height (degrees; 90 straight above)".as_ptr(), -90.0, 90.0, 1.0);
-        (api.obs_properties_add_color)(light, S_LIGHT_COLOR.as_ptr(), c"Colour".as_ptr());
-        (api.obs_properties_add_float_slider)(light, S_LIGHT_STRENGTH.as_ptr(), c"Strength".as_ptr(), 0.0, 4.0, 0.05);
-        (api.obs_properties_add_group)(props, c"light".as_ptr(), c"Light".as_ptr(), obs::OBS_GROUP_NORMAL, light);
-        (api.obs_properties_add_float_slider)(props, S_CENTRE.as_ptr(), c"Centre (feet to head)".as_ptr(), -1.0, 1.0, 0.01);
-        (api.obs_properties_add_float_slider)(props, S_YAW.as_ptr(), c"Turn (the camera goes around the avatar)".as_ptr(), -180.0, 180.0, 1.0);
-        for (key, label, range) in [
-            (S_POSITION[0], c"Position: left / right (m)", 3.0),
-            (S_POSITION[1], c"Position: down / up (m)", 2.0),
-            (S_POSITION[2], c"Position: back / forward (m)", 3.0),
-        ] {
-            (api.obs_properties_add_float_slider)(props, key.as_ptr(), label.as_ptr(), -range, range, 0.01);
-        }
-        // The avatar's own animations (made in Blender, in its GLB)
-        let clips: Vec<String> = if data.is_null() { Vec::new() } else { (&*(data as *const Puppet)).remote.lock().unwrap().animation.clips.clone() };
-        let list = (api.obs_properties_add_list)(props, S_ANIMATION.as_ptr(), c"Animation (loops; made in Blender, in the GLB)".as_ptr(), obs::OBS_COMBO_TYPE_LIST, obs::OBS_COMBO_FORMAT_STRING);
-        (api.obs_property_list_add_string)(list, c"(none: idle motion)".as_ptr(), c"".as_ptr());
-        for clip in &clips {
-            let c = cstring(clip);
-            (api.obs_property_list_add_string)(list, c.as_ptr(), c.as_ptr());
-        }
-        (api.obs_properties_add_float_slider)(props, S_ARMS.as_ptr(), c"Arms down (degrees from the T-pose)".as_ptr(), 0.0, 85.0, 1.0);
-        (api.obs_properties_add_float_slider)(props, S_IDLE.as_ptr(), c"Idle motion".as_ptr(), 0.0, 1.0, 0.01);
-        (api.obs_properties_add_bool)(props, S_SPRINGS.as_ptr(), c"Spring bones (hair, skirt…)".as_ptr());
-
         // The springs' tuning: the avatar's own kinds (all, before it's loaded)
         let kinds: Vec<usize> = if data.is_null() {
             Vec::new()
@@ -833,6 +788,7 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
         };
         let kinds = if kinds.is_empty() { (0..KINDS.len()).collect() } else { kinds };
         let group = (api.obs_properties_create)();
+        (api.obs_properties_add_bool)(group, S_SPRINGS.as_ptr(), c"Spring bones (hair, skirt…)".as_ptr());
         (api.obs_properties_add_text)(
             group,
             c"tune_info".as_ptr(),
@@ -847,7 +803,64 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
             }
         }
         (api.obs_properties_add_float_slider)(group, S_COLLIDERS.as_ptr(), c"Colliders: thickness".as_ptr(), 0.0, 3.0, 0.05);
-        (api.obs_properties_add_group)(props, c"spring_tuning".as_ptr(), c"Spring bones: adjust".as_ptr(), obs::OBS_GROUP_NORMAL, group);
+        (api.obs_properties_add_group)(props, c"spring_tuning".as_ptr(), c"🪢 Spring bones".as_ptr(), obs::OBS_GROUP_NORMAL, group);
+        // 📦 The GLBs drawn with it, last (the longest)
+        (api.obs_properties_add_text)(props, c"extras_heading".as_ptr(), c"📦 Also draw: GLBs drawn with the avatar (props, outfits, a head…)".as_ptr(), obs::OBS_TEXT_INFO);
+        // The Also draw GLBs: each one's file, Show, group, and a button to remove it
+        if !data.is_null() {
+            let puppet = &*(data as *const Puppet);
+            // The buttons find the source through the properties
+            (api.obs_properties_set_param)(props, puppet.source, std::ptr::null_mut());
+            let settings = (api.obs_source_get_settings)(puppet.source);
+            let count = if settings.is_null() { 0 } else { extra_count(settings) };
+            if !settings.is_null() {
+                (api.obs_data_release)(settings);
+            }
+            // The avatar's bones, for "from" (its skeleton's joints)
+            let bones: Vec<String> = puppet.rig.lock().unwrap().as_ref().map(|r| {
+                let mut names: Vec<String> = Vec::new();
+                for j in r.model.skins.iter().flat_map(|s| s.joints.iter()) {
+                    let name = r.model.nodes[*j].name.clone();
+                    if !names.contains(&name) {
+                        names.push(name);
+                    }
+                }
+                names
+            }).unwrap_or_default();
+            // Every box, hidden past the last GLB (Add shows the next)
+            for n in 1..=MAX_EXTRAS {
+                let group = (api.obs_properties_create)();
+                (api.obs_properties_add_path)(group, extra_key(n).as_ptr(), c"GLB".as_ptr(), obs::OBS_PATH_FILE, c"glTF (*.glb *.gltf)".as_ptr(), std::ptr::null());
+                (api.obs_properties_add_bool)(group, shown_key(n).as_ptr(), c"Show".as_ptr());
+                (api.obs_properties_add_text)(group, group_key(n).as_ptr(), c"Group (only one GLB of a group shows; empty: none)".as_ptr(), obs::OBS_TEXT_DEFAULT);
+                // What it copies from the avatar (all off: it doesn't move)
+                let [mv, mf, rt, rf, sh] = follow_keys(n);
+                for (check, label, from) in [(&mv, c"Copy movement", &mf), (&rt, c"Copy rotation", &rf)] {
+                    (api.obs_properties_add_bool)(group, check.as_ptr(), label.as_ptr());
+                    let list = (api.obs_properties_add_list)(group, from.as_ptr(), c"  from".as_ptr(), obs::OBS_COMBO_TYPE_LIST, obs::OBS_COMBO_FORMAT_STRING);
+                    (api.obs_property_list_add_string)(list, c"The armature (each bone from the avatar's of the same name)".as_ptr(), c"".as_ptr());
+                    for b in &bones {
+                        let name = cstring(b);
+                        (api.obs_property_list_add_string)(list, name.as_ptr(), name.as_ptr());
+                    }
+                }
+                (api.obs_properties_add_bool)(group, sh.as_ptr(), c"Copy shape keys".as_ptr());
+                // Its own animations (made in Blender, in this GLB), one looping
+                let clips: Vec<String> = puppet.extras.lock().unwrap().iter().find(|(slot, _)| *slot == n).map(|(_, m)| m.clips.iter().map(|c| c.name.clone()).collect()).unwrap_or_default();
+                let list = (api.obs_properties_add_list)(group, extra_clip_key(n).as_ptr(), c"Animation (loops; this GLB's own)".as_ptr(), obs::OBS_COMBO_TYPE_LIST, obs::OBS_COMBO_FORMAT_STRING);
+                (api.obs_property_list_add_string)(list, c"(none)".as_ptr(), c"".as_ptr());
+                for clip in &clips {
+                    let c = cstring(clip);
+                    (api.obs_property_list_add_string)(list, c.as_ptr(), c.as_ptr());
+                }
+                (api.obs_property_set_visible)(list, !clips.is_empty());
+                (api.obs_properties_add_button2)(group, cstring(&format!("extra{n}.remove")).as_ptr(), c"Remove".as_ptr(), remove_extra, n as Ptr);
+                let b = (api.obs_properties_add_group)(props, extra_box(n).as_ptr(), cstring(&format!("Also draw {n}")).as_ptr(), obs::OBS_GROUP_NORMAL, group);
+                (api.obs_property_set_visible)(b, n <= count);
+            }
+            let add = (api.obs_properties_add_button2)(props, c"extra.add".as_ptr(), c"\u{2795} Add a GLB".as_ptr(), add_extra, std::ptr::null_mut());
+            (api.obs_property_set_visible)(add, count < MAX_EXTRAS);
+        }
         props
     }
 }
