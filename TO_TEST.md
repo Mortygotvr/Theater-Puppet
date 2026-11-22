@@ -147,6 +147,16 @@ what went wrong) and it comes off the list.
 - [ ] Aimed at something that isn't a Puppet (a webcam): it plays on every Puppet.
 - [ ] A GLB prefab redeem with it On Contact: plays at the GLB's contact frame.
 
+## Scene: a redeem exported is one file
+- [ ] Export (.red) a prefab redeem whose reaction plays an Animation folder
+      clip, with sounds and a custom script. On another PC (or after renaming
+      your Animation folder's file away): Import it. It works as is: the GLB,
+      sounds, script and the animation (now in the Puppet's Animation folder;
+      a Puppet with none gets Theater's "animations" folder). The status line
+      says where the animation went.
+- [ ] A redeem playing the avatar's own clip (not from the Animation
+      folder): Export says that animation is missing.
+
 ## Animations (any avatar, not through the avatar's GLB)
 - [ ] Puppet source → 🎬 Pose and animation → Animation folder: a folder with
       Mixamo DAE ("With Skin") and Rig's animation GLBs. Their clips show in
