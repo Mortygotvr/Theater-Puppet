@@ -20,8 +20,6 @@ fn init() {
     this.edits = #{};
     this.lists = #{ cameras: [], controllers: [] };
     this.frames = 0;
-    // What tracks what: "all" (every Puppet's) or "one" (the picked Puppet's own)
-    this.assign_scope = "all";
 }
 
 fn tabs() {
@@ -238,46 +236,23 @@ fn ui(ui) {
             }
             ui.strong("What tracks what");
             ui.small("For each part of the avatar, the input that drives it. Auto: whichever of its inputs sent last.");
-            // Every Puppet's, or the picked one's own (each part: its own, or the same as every Puppet's)
+            // The Puppet picked above: its own (a part never set there shows what
+            // it went by until now, every Puppet's, and takes the pick)
             let own = type_of(avatar) == "map";
-            if own {
-                this.assign_scope = pick(ui, "Editing", this.assign_scope, [["all", "Every Puppet"], ["one", `${this.puppet} only`]]);
-            } else {
-                this.assign_scope = "all";
-            }
             for p in s.parts {
                 let pairs = [["auto", "Auto"]];
                 for i in p.inputs { pairs.push(i); }
                 pairs.push(["off", "Off"]);
-                if this.assign_scope == "one" {
-                    // The same as every Puppet's, named
-                    let all_name = p.pick;
-                    for x in pairs { if x[0] == p.pick { all_name = x[1]; } }
-                    let mine = [["", `Same as every Puppet (${all_name})`]];
-                    for x in pairs { mine.push(x); }
-                    av_pick(ui, this.puppet, avatar, `assign.${p.key}`, p.name, mine);
+                if own {
+                    let k = `assign.${p.key}`;
+                    let now = if k in avatar && avatar[k] != "" { avatar[k] } else { p.pick };
+                    let v = pick(ui, p.name, now, pairs);
+                    if v != now { avatar_set(this.puppet, k, v); }
                 } else {
                     let v = pick(ui, p.name, p.pick, pairs);
                     if v != p.pick {
                         tracking(#{ action: "assign", part: p.key, pick: v });
                     }
-                }
-            }
-            if this.assign_scope == "one" {
-                ui.small(`Only ${this.puppet} goes by these; a part on "Same as every Puppet" follows Every Puppet's.`);
-            } else if own {
-                let mine = [];
-                for p in s.parts {
-                    let k = `assign.${p.key}`;
-                    if k in avatar && avatar[k] != "" { mine.push(p.name); }
-                }
-                if mine.len() > 0 {
-                    let names = "";
-                    for n in mine {
-                        if names != "" { names += ", "; }
-                        names += n;
-                    }
-                    ui.small(`${this.puppet} has its own for: ${names}. (Editing → ${this.puppet} only)`);
                 }
             }
             ui.separator();

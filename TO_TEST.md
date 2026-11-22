@@ -148,15 +148,13 @@ what went wrong) and it comes off the list.
 - [ ] A GLB prefab redeem with it On Contact: plays at the GLB's contact frame.
 
 ## Tracking per Puppet
-- [ ] Two Puppet sources. ⚙ Puppet Configuration → General: pick the second
-      in "Puppet", "Editing" → "<it> only": give it Arms → Controller (or Off
-      for Expressions). Only that Puppet changes; the first keeps Every
-      Puppet's. "Same as every Puppet" puts a part back.
-- [ ] Editing → Every Puppet: the first changes; the second's own parts
-      don't (it lists them: "has its own for …").
+- [ ] Two Puppet sources. ⚙ Puppet Configuration → General: pick one in
+      "Puppet" at the top; What tracks what shows its own: give it Arms →
+      Controller (or Expressions → Off). Only that Puppet changes. Pick the
+      other: its parts are as they were.
 - [ ] Save the scene collection, restart OBS: each keeps its own.
-- [ ] MediaPipe on, Every Puppet's face on iFacialMocap, one Puppet's face
-      on MediaPipe: MediaPipe tracks the face for that one.
+- [ ] MediaPipe on, one Puppet's face on iFacialMocap, the other's on
+      MediaPipe: MediaPipe tracks the face for that one.
 
 ## Scene: every colour slot at once
 - [ ] A 🎭 Puppet redeem, 🎨 colour, "Every slot at once": each of the
