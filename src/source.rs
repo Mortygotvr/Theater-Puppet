@@ -667,10 +667,12 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
         (api.obs_properties_add_bool)(props, shown_key(0).as_ptr(), c"Show the avatar".as_ptr());
         // 🎬 The avatar's pose: its own animation, its arms, the idle motion
         let pose = (api.obs_properties_create)();
-        // The avatar's own animations (made in Blender, in its GLB)
+        // Its animations: the avatar's default (in its GLB) and the Animation folder's
         let clips: Vec<String> = if data.is_null() { Vec::new() } else { (&*(data as *const Puppet)).remote.lock().unwrap().animation.clips.clone() };
-        let list = (api.obs_properties_add_list)(pose, S_ANIMATION.as_ptr(), c"Animation (loops; made in Blender, in the GLB)".as_ptr(), obs::OBS_COMBO_TYPE_LIST, obs::OBS_COMBO_FORMAT_STRING);
-        (api.obs_property_list_add_string)(list, c"(none: idle motion)".as_ptr(), c"".as_ptr());
+        let list = (api.obs_properties_add_list)(pose, S_ANIMATION.as_ptr(), c"Animation (loops)".as_ptr(), obs::OBS_COMBO_TYPE_LIST, obs::OBS_COMBO_FORMAT_STRING);
+        (api.obs_property_list_add_string)(list, c"(the avatar's default, else the idle motion)".as_ptr(), c"".as_ptr());
+        let idle = cstring(crate::animation::IDLE_ONLY);
+        (api.obs_property_list_add_string)(list, c"(the idle motion only)".as_ptr(), idle.as_ptr());
         for clip in &clips {
             let c = cstring(clip);
             (api.obs_property_list_add_string)(list, c.as_ptr(), c.as_ptr());

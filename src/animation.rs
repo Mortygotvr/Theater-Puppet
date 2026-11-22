@@ -62,6 +62,17 @@ fn contacts_of(anim: &gltf::Animation) -> Vec<f32> {
     out
 }
 
+/// The animation the file says is its default (extras `theater_default`: Theater Rig's)
+pub fn default_of(doc: &gltf::Document) -> Option<String> {
+    doc.animations()
+        .find(|a| a.extras().as_ref().and_then(|raw| serde_json::from_str::<Value>(raw.get()).ok()).and_then(|v| v.get("theater_default").and_then(|d| d.as_bool())) == Some(true))
+        .map(|a| a.name().map(str::to_string).unwrap_or_else(|| format!("Animation {}", a.index())))
+}
+
+/// The Animation setting's value for "the idle motion only" (its default, "",
+/// is the avatar's default animation, else the idle motion)
+pub const IDLE_ONLY: &str = "idle:";
+
 /// The file's clips: bones, and shape keys (by name, as `morph_names` has them)
 pub fn load(doc: &gltf::Document, buffers: &[gltf::buffer::Data], morph_names: &[String]) -> Vec<Clip> {
     use gltf::animation::{Interpolation, util::ReadOutputs};
@@ -246,7 +257,12 @@ impl Player {
             control.clips = model.clips.iter().map(|c| c.name.clone()).collect();
             control.files = model.clips.iter().filter_map(|c| Some((c.name.clone(), c.file.clone()?))).collect();
         }
-        let wanted = find(&control.loop_clip);
+        // The setting left on its default: the avatar's default animation
+        let wanted = match control.loop_clip.as_str() {
+            "" => model.default_clip.as_deref().and_then(find),
+            IDLE_ONLY => None,
+            name => find(name),
+        };
         if self.base.map(|b| b.clip) != wanted {
             if let Some(mut old) = self.base.take() {
                 old.leaving = true;
@@ -350,6 +366,7 @@ mod tests {
             order: vec![0],
             skins: Vec::new(),
             morph_names: Vec::new(),
+            default_clip: None,
             clips,
         }
     }
@@ -392,6 +409,22 @@ mod tests {
             duration,
             channels: vec![Channel { node: 0, times: vec![0.0, duration], values: Values::Translation(vec![Vec3::Y, Vec3::Y]), step: false }],
         }
+    }
+
+    #[test]
+    fn the_avatars_default_animation_loops_unless_another_or_the_idle_is_chosen() {
+        let mut model = model_with(vec![lift("Breathe", 1.0), lift("Dance", 1.0)]);
+        model.default_clip = Some("Breathe".into());
+        let looping = |model: &Model, setting: &str| {
+            let (mut player, mut control) = (Player::default(), Control { loop_clip: setting.into(), ..Default::default() });
+            player.sync(model, &mut control);
+            player.base.map(|b| model.clips[b.clip].name.clone())
+        };
+        assert_eq!(looping(&model, "").as_deref(), Some("Breathe"), "the setting on its default: the avatar's default");
+        assert_eq!(looping(&model, "Dance").as_deref(), Some("Dance"));
+        assert_eq!(looping(&model, IDLE_ONLY), None, "the idle motion only");
+        model.default_clip = None;
+        assert_eq!(looping(&model, ""), None, "no default: the idle motion");
     }
 
     #[test]

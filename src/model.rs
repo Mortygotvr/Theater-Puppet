@@ -256,6 +256,10 @@ pub struct Model {
     pub morph_names: Vec<String>,
     /// Its animations, made in Blender (animation.rs)
     pub clips: Vec<crate::animation::Clip>,
+    /// Its default animation (Theater Rig's "Default animation", tagged
+    /// `theater_default`): looped while the source's Animation setting is
+    /// left on its default
+    pub default_clip: Option<String>,
     /// Its tile textures (VRM expressions moving textures)
     pub tiles: Vec<Tile>,
 }
@@ -277,6 +281,7 @@ impl Model {
             morph_names: Vec::new(),
             clips: Vec::new(),
             tiles: Vec::new(),
+            default_clip: None,
         }
     }
 
@@ -604,10 +609,11 @@ fn load_with(path: &Path, meshes_needed: bool) -> Result<Model, String> {
         }
     }
     let clips = crate::animation::load(&doc, &buffers, &morph_names);
+    let default_clip = crate::animation::default_of(&doc).filter(|d| clips.iter().any(|c| c.name == *d));
     let name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     // Theater Rig keeps them on the armature's node
     let tiles = nodes.iter().map(|n| read_tiles(&n.extras, &materials)).find(|t| !t.is_empty()).unwrap_or_default();
-    Ok(Model { name, tiles, primitives, materials, images: images.into_iter().map(rgba).collect(), min, max, nodes, order, skins, morph_names, clips })
+    Ok(Model { name, tiles, primitives, materials, images: images.into_iter().map(rgba).collect(), min, max, nodes, order, skins, morph_names, clips, default_clip })
 }
 
 fn material(m: gltf::Material) -> Material {
@@ -905,5 +911,17 @@ mod tests {
         // A person: about 1-2 m tall, standing up (Y), arms out (T-pose)
         assert!(size.y > 0.5 && size.y < 3.0, "height {}", size.y);
         assert!(m.images.iter().all(|i| i.rgba.len() == (i.width * i.height * 4) as usize));
+    }
+}
+
+#[cfg(test)]
+mod default_animation_tests {
+    /// THEATER_PUPPET_DEFAULT_GLB=<an avatar exported by Theater Rig with "Breathe" as its Default animation>
+    #[test]
+    fn rigs_default_animation_is_read() {
+        let Ok(p) = std::env::var("THEATER_PUPPET_DEFAULT_GLB") else { return };
+        let m = super::load(std::path::Path::new(&p)).unwrap();
+        println!("clips {:?}, default {:?}", m.clips.iter().map(|c| &c.name).collect::<Vec<_>>(), m.default_clip);
+        assert_eq!(m.default_clip.as_deref(), Some("Breathe"));
     }
 }

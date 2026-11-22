@@ -539,7 +539,7 @@ fn ask(args: &Value, source: Ptr, remote: &Shared, shown: &mut Option<Vec<bool>>
             match text("mode").as_str() {
                 "stop" => r.animation.stop = true,
                 "loop" => {
-                    if !clip.is_empty() && !r.animation.clips.contains(&clip) {
+                    if !clip.is_empty() && clip != crate::animation::IDLE_ONLY && !r.animation.clips.contains(&clip) {
                         return Err(format!("no animation \"{clip}\""));
                     }
                     *undo = Some(("animation".into(), Undo::Args(json!({ "action": "animation", "mode": "loop", "clip": r.animation.loop_clip }))));
