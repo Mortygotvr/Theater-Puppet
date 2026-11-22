@@ -147,6 +147,14 @@ what went wrong) and it comes off the list.
 - [ ] Aimed at something that isn't a Puppet (a webcam): it plays on every Puppet.
 - [ ] A GLB prefab redeem with it On Contact: plays at the GLB's contact frame.
 
+## A GLB prefab following the avatar
+- [ ] A prefab GLB with an armature named like the avatar's (a hat or wings
+      skinned to Head / Spine2…, exported with Blender's glTF export): spawn
+      it while you move: it stays on you, moving with you, and plays its own
+      animation over that. Untick "🦴 Follow the avatar's armature": it's
+      placed by the sliders, still.
+- [ ] A prefab with no armature (a pie): placed by the sliders, as before.
+
 ## The avatar's Default animation
 - [ ] Rig (reinstall the zip): "Default animation" above Export GLB: pick an
       action (breathing, a tail…). Export GLB: open the GLB in Windows 3D

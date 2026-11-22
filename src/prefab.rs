@@ -7,6 +7,12 @@
 //! `theater_contacts`) are handed back when it spawns, as seconds from then:
 //! Theater Scene runs the redeem's contact effects at those times.
 //!
+//! One with an armature whose bones the avatar has too (Hips, Spine… Theater
+//! Rig's names) follows the avatar, as an Also draw GLB does: each bone moves
+//! as the avatar's of the same name moved from its rest, its shape keys take
+//! the avatar's, and its own animation plays over that; lined up with the
+//! avatar (the redeem's place doesn't apply). The redeem can say not to.
+//!
 //! Spawned through the `theater_puppet_command` procedure (remote.rs,
 //! action "prefab"); drawn after the avatar (render.rs's prefab meshes).
 
@@ -41,6 +47,16 @@ pub struct Spawn {
     pub turn: f32,
     /// Seconds it stays when it has no animation
     pub hold: f32,
+    /// Follows the avatar's armature when its bones are the avatar's
+    pub follow: bool,
+}
+
+/// The avatar a following prefab copies, this frame
+pub struct Main<'a> {
+    pub model: &'a Model,
+    pub rest: &'a Pose,
+    pub pose: &'a Pose,
+    pub morph: &'a [f32],
 }
 
 impl Spawn {
@@ -56,7 +72,8 @@ impl Spawn {
             Some(a) => Vec3::from_array(std::array::from_fn(|i| a.get(i).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32)),
             None => Vec3::new(num("x", 0.0), num("y", 0.0), num("z", 0.0)),
         };
-        Ok(Spawn { glb: PathBuf::from(glb), clip: text("clip"), position, scale: num("scale", 1.0).clamp(0.01, 100.0), turn: num("turn", 0.0), hold: num("hold", HOLD).clamp(0.1, 600.0) })
+        let follow = args.get("follow").and_then(|v| v.as_bool()).unwrap_or(true);
+        Ok(Spawn { glb: PathBuf::from(glb), clip: text("clip"), position, scale: num("scale", 1.0).clamp(0.01, 100.0), turn: num("turn", 0.0), hold: num("hold", HOLD).clamp(0.1, 600.0), follow })
     }
 }
 
@@ -99,6 +116,12 @@ pub struct Prefab {
     place: Mat4,
     turn: Quat,
     pose: Pose,
+    rest: Pose,
+    /// Asked to follow the avatar
+    follow: bool,
+    /// Each of its nodes' bone in the avatar it follows (same name), and
+    /// its shape keys' (by name); worked out for that avatar (its address)
+    from: Option<(usize, Vec<Option<usize>>, Vec<Option<usize>>)>,
     morph: Vec<f32>,
     pub points: Vec<Vec<[f32; 4]>>,
     pub normals: Vec<Vec<[f32; 4]>>,
@@ -134,6 +157,9 @@ impl Prefab {
         let place = Mat4::from_scale_rotation_translation(Vec3::splat(spawn.scale), turn, spawn.position);
         let pose = Pose::rest(&model);
         let mut p = Prefab {
+            rest: pose.clone(),
+            follow: spawn.follow,
+            from: None,
             id: NEXT.fetch_add(1, Ordering::Relaxed),
             key: spawn.glb.to_string_lossy().into_owned(),
             clip,
@@ -149,7 +175,7 @@ impl Prefab {
             dirty: false,
             model,
         };
-        p.pose_now();
+        p.pose_now(None);
         let plan = json!({
             "id": p.id,
             "clip": clip.map(|c| p.model.clips[c].name.clone()),
@@ -160,31 +186,75 @@ impl Prefab {
         Ok((p, plan))
     }
 
-    /// `dt` seconds on; false once it's gone
+    /// `dt` seconds on (posed after, with `pose_now`); false once it's gone
     pub fn step(&mut self, dt: f32) -> bool {
         self.time += dt;
         if self.time >= self.end {
             self.fade = (self.fade - dt / FADE).max(0.0);
         }
-        // (Held on its last frame while it fades)
-        self.pose_now();
         self.fade > 0.0
     }
 
-    /// Its pose and shape keys now, skinned, where the redeem puts it
-    fn pose_now(&mut self) {
+    /// Whether it follows `main` (asked to, and some of its bones are the
+    /// avatar's: joints of the avatar's skin, by name); works out which
+    fn follows(&mut self, main: &Model) -> bool {
+        if !self.follow {
+            return false;
+        }
+        let key = main as *const Model as usize;
+        if self.from.as_ref().map(|f| f.0) != Some(key) {
+            let joints: std::collections::HashSet<usize> = main.skins.iter().flat_map(|s| s.joints.iter().copied()).collect();
+            let nodes = self.model.nodes.iter().map(|n| main.node(n.name.strip_prefix("mixamorig:").unwrap_or(&n.name)).filter(|j| joints.contains(j))).collect();
+            let morphs = self.model.morph_names.iter().map(|n| main.morph(n)).collect();
+            self.from = Some((key, nodes, morphs));
+        }
+        self.from.as_ref().is_some_and(|(_, nodes, _)| nodes.iter().any(|n| n.is_some()))
+    }
+
+    /// Its pose and shape keys now, skinned: following the avatar (`main`,
+    /// when it does), else where the redeem puts it. (Held on its last frame
+    /// while it fades)
+    pub fn pose_now(&mut self, main: Option<&Main>) {
         let model = self.model.clone();
         self.pose.reset(&model);
         self.morph.iter_mut().for_each(|w| *w = 0.0);
+        let following = main.filter(|m| self.follows(m.model));
+        if let (Some(m), Some((_, nodes, morphs))) = (following, self.from.as_ref()) {
+            // As an Also draw GLB: how the avatar's bone moved from its rest, on this one's rest
+            for (i, from) in nodes.iter().enumerate() {
+                let Some(j) = *from else { continue };
+                if j >= m.pose.rotation.len() {
+                    continue;
+                }
+                self.pose.rotation[i] = (m.pose.rotation[j] * m.rest.rotation[j].inverse() * self.rest.rotation[i]).normalize();
+                self.pose.translation[i] = self.rest.translation[i] + (m.pose.translation[j] - m.rest.translation[j]);
+                self.pose.scale[i] = self.rest.scale[i] * m.pose.scale[j] / m.rest.scale[j].max(Vec3::splat(1e-6));
+            }
+            for (k, from) in morphs.iter().enumerate() {
+                if let Some(w) = from.and_then(|f| m.morph.get(f)) {
+                    self.morph[k] = *w;
+                }
+            }
+        }
         if let Some(c) = self.clip {
+            // Its own animation, over what it copies
             let t = self.time.min(model.clips[c].duration);
             model.clips[c].apply(&mut self.pose, t, 1.0);
             self.pose.update_world(&model);
-            model.clips[c].apply_shapes(&mut self.morph, t, 1.0);
+            let mut own = vec![0.0; self.morph.len()];
+            model.clips[c].apply_shapes(&mut own, t, 1.0);
+            for (w, o) in self.morph.iter_mut().zip(own) {
+                *w = w.max(o);
+            }
         } else {
             self.pose.update_world(&model);
         }
         pose::skin(&model, &self.pose, &self.morph, &mut self.points, &mut self.normals);
+        self.dirty = true;
+        if following.is_some() {
+            // Lined up with the avatar: no placing
+            return;
+        }
         for (pts, nrm) in self.points.iter_mut().zip(self.normals.iter_mut()) {
             for p in pts.iter_mut() {
                 let v = self.place.transform_point3(Vec3::new(p[0], p[1], p[2]));
@@ -213,12 +283,49 @@ mod tests {
         assert!(Spawn::from_args(&json!({ "clip": "x" })).is_err(), "no GLB");
     }
 
+    /// THEATER_PUPPET_GLB=<an avatar from Theater Rig> THEATER_PUPPET_ANIMATION_GLB=<an
+    /// animation GLB ("Knock Test")>: the avatar's own GLB as a prefab has its
+    /// bones: it follows the avatar playing, landing on it; told not to, it's placed
+    #[test]
+    fn a_prefab_with_the_avatars_bones_follows_it() {
+        let (Ok(avatar), Ok(anim)) = (std::env::var("THEATER_PUPPET_GLB"), std::env::var("THEATER_PUPPET_ANIMATION_GLB")) else { return };
+        let mut m = crate::model::load(Path::new(&avatar)).unwrap();
+        let clips = crate::retarget::clips_onto(&crate::model::load_animation(Path::new(&anim)).unwrap(), &m);
+        let clip = clips[0].name.clone();
+        m.clips.extend(clips);
+        let mut rig = crate::motion::Rig::new(Arc::new(m));
+        let config = crate::tracking::config::Config::default();
+        let still = crate::motion::Motion { idle: 0.0, springs: false, ..Default::default() };
+        let mut control = crate::animation::Control { play: Some(clip), ..Default::default() };
+        let model = rig.model.clone();
+        rig.player.sync(&model, &mut control);
+        for _ in 0..90 {
+            rig.step_with(1.0 / 60.0, still, &crate::tracking::Snapshot::default(), &config);
+        }
+        let spawn = Spawn { glb: PathBuf::from(&avatar), clip: String::new(), position: Vec3::new(1.0, 0.0, 0.0), scale: 1.0, turn: 0.0, hold: HOLD, follow: true };
+        let (mut p, _) = Prefab::new(&spawn).unwrap();
+        p.pose_now(Some(&rig.main()));
+        let far = |a: &Vec<Vec<[f32; 4]>>, b: &Vec<Vec<[f32; 4]>>| a.iter().flatten().zip(b.iter().flatten()).map(|(x, y)| Vec3::new(x[0] - y[0], x[1] - y[1], x[2] - y[2]).length()).fold(0.0f32, f32::max);
+        let off = far(&p.points, &rig.points);
+        println!("following: furthest from the avatar {off:.5} m");
+        assert!(off < 1e-3, "it doesn't land on the avatar");
+        // Not following: at rest, where the redeem put it (1 m to the side)
+        let (mut q, _) = Prefab::new(&Spawn { follow: false, ..spawn }).unwrap();
+        q.pose_now(Some(&rig.main()));
+        let (mut r, _) = Prefab::new(&Spawn { follow: false, position: Vec3::ZERO, ..Spawn { glb: PathBuf::from(&avatar), clip: String::new(), position: Vec3::ZERO, scale: 1.0, turn: 0.0, hold: HOLD, follow: false } }).unwrap();
+        r.pose_now(None);
+        let moved: Vec<f32> = q.points.iter().flatten().zip(r.points.iter().flatten()).map(|(a, b)| a[0] - b[0]).collect();
+        println!("not following: moved {:.3} m to the side, the avatar's pose not copied: {:.3} m off it", moved[0], far(&q.points, &rig.points));
+        assert!(moved.iter().all(|d| (d - 1.0).abs() < 1e-3));
+        assert!(far(&q.points, &rig.points) > 0.5);
+    }
+
     /// THEATER_PUPPET_CONTACTS_GLB: theater-rig's tests/run_contacts.py's GLB
     /// ("Pie Throw", frames 1–30 at 24 fps, contacts at frames 10 and 25)
     #[test]
     fn a_prefab_hands_back_its_contact_times() {
         let Ok(path) = std::env::var("THEATER_PUPPET_CONTACTS_GLB") else { return };
-        let spawn = Spawn { glb: PathBuf::from(&path), clip: "Pie Throw".into(), position: Vec3::ZERO, scale: 1.0, turn: 0.0, hold: HOLD };
+        let spawn = Spawn { glb: PathBuf::from(&path), clip: "Pie Throw".into(), position: Vec3::ZERO, scale: 1.0, turn: 0.0, hold: HOLD, follow: true };
         let (_, plan) = Prefab::new(&spawn).unwrap();
         println!("plan: {plan}");
         let contacts: Vec<f64> = plan["contacts"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
@@ -231,7 +338,7 @@ mod tests {
     #[test]
     fn a_prefab_plays_once_then_fades_out() {
         let Ok(path) = std::env::var("THEATER_PUPPET_FLIPBOOK_GLB") else { return };
-        let spawn = Spawn { glb: PathBuf::from(&path), clip: "Mouths".into(), position: Vec3::new(1.0, 0.0, 0.0), scale: 2.0, turn: 0.0, hold: HOLD };
+        let spawn = Spawn { glb: PathBuf::from(&path), clip: "Mouths".into(), position: Vec3::new(1.0, 0.0, 0.0), scale: 2.0, turn: 0.0, hold: HOLD, follow: true };
         let (mut p, plan) = Prefab::new(&spawn).unwrap();
         assert_eq!(plan["clip"], "Mouths");
         let duration = plan["duration"].as_f64().unwrap() as f32;
@@ -243,6 +350,7 @@ mod tests {
         // Plays, then fades over FADE, then it's gone
         let mut t = 0.0;
         while p.step(1.0 / 60.0) {
+            p.pose_now(None);
             t += 1.0 / 60.0;
             assert!(t < duration + FADE + 0.1, "still there after {t} s");
         }

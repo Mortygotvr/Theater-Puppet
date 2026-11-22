@@ -340,6 +340,11 @@ impl Rig {
     }
 
     /// One frame: `dt` seconds later, with what's tracked now
+    /// What a GLB prefab following the avatar copies (prefab.rs)
+    pub fn main(&self) -> crate::prefab::Main<'_> {
+        crate::prefab::Main { model: &self.model, rest: &self.rest, pose: &self.pose, morph: &self.morph }
+    }
+
     pub fn step(&mut self, dt: f32, motion: Motion) {
         let config = tracking::config::get();
         let tracked = if motion.tracked { tracking::snapshot(&config.assign) } else { Snapshot::default() };

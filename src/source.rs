@@ -1621,6 +1621,14 @@ unsafe extern "C" fn video_tick(data: Ptr, dt: f32) {
         rig.step(dt, motion);
         crate::timing::tick(started.elapsed());
     }
+    // The GLB prefabs posed: those with the avatar's bones following its pose of this frame
+    {
+        let rig = puppet.rig.lock().unwrap();
+        let main = rig.as_ref().map(|r| r.main());
+        for p in puppet.prefabs.lock().unwrap().iter_mut() {
+            p.pose_now(main.as_ref());
+        }
+    }
     if let Some(shown) = shown {
         set_shown(puppet.source, shown);
     }
