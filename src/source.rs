@@ -119,8 +119,6 @@ const S_LIGHT_STRENGTH: &CStr = c"light_strength";
 pub(crate) const S_ANIMATION: &CStr = c"animation";
 /// A folder of animation GLBs (Theater Rig's conversions): every avatar plays them (retarget.rs)
 const S_ANIM_FOLDER: &CStr = c"animation_folder";
-/// Seconds between looks at the animation folder for new or changed files
-const ANIM_FOLDER_CHECK: f32 = 2.0;
 const S_ARMS: &CStr = c"arms_down";
 const S_IDLE: &CStr = c"idle";
 const S_SPRINGS: &CStr = c"springs";
@@ -300,11 +298,9 @@ struct Puppet {
     height: AtomicU32,
     view: Mutex<View>,
     file: Mutex<String>,
-    /// The animation folder, its GLBs as last loaded (with their times), and
-    /// seconds since it was last looked at
+    /// The animation folder, and its files as last loaded (with their times)
     anim_folder: Mutex<String>,
     anim_stamp: Mutex<Vec<(String, u64)>>,
-    anim_checked: Mutex<f32>,
     /// Each slot's style id ("" = empty)
     slots: Mutex<[String; SLOTS]>,
     /// Each slot's settings, by (slot, style id) (read in update, and again
@@ -328,7 +324,10 @@ struct Puppet {
     loaded: Arc<Mutex<Option<(u64, Result<Model, String>)>>>,
     /// The GLBs drawn with it: their files, the latest load (bumped like
     /// `generation`), what's loaded, and whether the GPU and rig have them yet
-    extra_files: Mutex<Vec<(usize, String)>>,
+    /// Each Also draw GLB: (slot, file, when it was written)
+    extra_files: Mutex<Vec<(usize, String, u64)>>,
+    /// When the avatar's file was written (as last loaded)
+    file_written: Mutex<u64>,
     extra_generation: Arc<AtomicU64>,
     extra_loaded: Arc<Mutex<Option<(u64, Vec<(usize, Arc<Model>)>)>>>,
     /// Each loaded extra with its slot (1, 2…)
@@ -590,6 +589,30 @@ unsafe fn shown_boxes(props: Ptr) -> usize {
 /// window's widgets after a button, it doesn't build the window again: the
 /// boxes are all there, hidden past the last GLB.) An empty one is gone the
 /// next time the window opens
+/// "🔄 Reload GLBs": the avatar, its Also draw GLBs and its Animation folder
+/// read again (a GLB exported again to the same file). Nothing is watched:
+/// this is how a change on disk comes in
+unsafe extern "C" fn reload_glbs(_props: Ptr, _button: Ptr, data: Ptr) -> bool {
+    if data.is_null() {
+        return false;
+    }
+    let puppet = unsafe { &*(data as *const Puppet) };
+    // Forgotten: the settings, run again, load them all
+    puppet.file.lock().unwrap().clear();
+    puppet.extra_files.lock().unwrap().clear();
+    puppet.anim_stamp.lock().unwrap().clear();
+    crate::log("[Puppet] 🔄 Reloading the GLBs");
+    let api = obs::api();
+    unsafe {
+        let settings = (api.obs_data_create)();
+        if !settings.is_null() {
+            (api.obs_source_update)(puppet.source, settings);
+            (api.obs_data_release)(settings);
+        }
+    }
+    false
+}
+
 unsafe extern "C" fn add_extra(props: Ptr, _button: Ptr, _data: Ptr) -> bool {
     let api = obs::api();
     unsafe {
@@ -665,6 +688,8 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
         let props = (api.obs_properties_create)();
         (api.obs_properties_add_path)(props, S_FILE.as_ptr(), c"Avatar (GLB from Theater Rig)".as_ptr(), obs::OBS_PATH_FILE, c"glTF avatar (*.glb *.gltf)".as_ptr(), std::ptr::null());
         (api.obs_properties_add_bool)(props, shown_key(0).as_ptr(), c"Show the avatar".as_ptr());
+        // A GLB exported again to the same file: read again (nothing is watched)
+        (api.obs_properties_add_button2)(props, c"reload".as_ptr(), c"\u{1F504} Reload GLBs (after exporting again)".as_ptr(), reload_glbs, data);
         // 🎬 The avatar's pose: its own animation, its arms, the idle motion
         let pose = (api.obs_properties_create)();
         // Its animations: the avatar's default (in its GLB) and the Animation folder's
@@ -989,13 +1014,13 @@ unsafe extern "C" fn create(settings: Ptr, source: Ptr) -> Ptr {
         file: Mutex::new(String::new()),
         anim_folder: Mutex::new(String::new()),
         anim_stamp: Mutex::new(Vec::new()),
-        anim_checked: Mutex::new(0.0),
         slots: Mutex::new(Default::default()),
         style_settings: Mutex::new(HashMap::new()),
         running: Mutex::new(Default::default()),
         generation: Arc::new(AtomicU64::new(0)),
         loaded: Arc::new(Mutex::new(None)),
         extra_files: Mutex::new(Vec::new()),
+        file_written: Mutex::new(0),
         extra_generation: Arc::new(AtomicU64::new(0)),
         extra_loaded: Arc::new(Mutex::new(None)),
         extras: Mutex::new(Vec::new()),
@@ -1172,7 +1197,7 @@ unsafe extern "C" fn update(data: Ptr, settings: Ptr) {
     load_prop(puppet);
 
     // The GLBs drawn with it: loaded again when their list changes
-    let extra_files: Vec<(usize, String)> = (1..=extra_count(settings)).map(|n| (n, get_string(settings, &extra_key(n)))).filter(|(_, f)| !f.is_empty()).collect();
+    let extra_files: Vec<(usize, String, u64)> = (1..=extra_count(settings)).map(|n| (n, get_string(settings, &extra_key(n)))).filter(|(_, f)| !f.is_empty()).map(|(n, f)| { let w = written(&f); (n, f, w) }).collect();
     *puppet.extra_follow.lock().unwrap() = (1..=extra_count(settings)).map(|n| (n, unsafe { follow_of(settings, n) })).collect();
     let mut current_extras = puppet.extra_files.lock().unwrap();
     if *current_extras != extra_files {
@@ -1184,7 +1209,7 @@ unsafe extern "C" fn update(data: Ptr, settings: Ptr) {
             .spawn(move || {
                 let models: Vec<(usize, Arc<Model>)> = extra_files
                     .iter()
-                    .filter_map(|(slot, file)| match model::load(&PathBuf::from(file)) {
+                    .filter_map(|(slot, file, _)| match model::load(&PathBuf::from(file)) {
                         Ok(m) => {
                             crate::log(&format!("[Puppet] 📦 Also drawn {slot}: {file}: {} meshes, {} materials", m.primitives.len(), m.materials.len()));
                             Some((*slot, Arc::new(m)))
@@ -1206,18 +1231,29 @@ unsafe extern "C" fn update(data: Ptr, settings: Ptr) {
     let file = get_string(settings, S_FILE);
     let folder = get_string(settings, S_ANIM_FOLDER).trim().to_string();
     let stamp = crate::retarget::folder_stamp(&folder);
+    let file_written = written(&file);
     {
         let mut current = puppet.file.lock().unwrap();
         let mut current_folder = puppet.anim_folder.lock().unwrap();
         let mut current_stamp = puppet.anim_stamp.lock().unwrap();
-        if *current == file && *current_folder == folder && *current_stamp == stamp {
+        let mut current_written = puppet.file_written.lock().unwrap();
+        if *current == file && *current_folder == folder && *current_stamp == stamp && *current_written == file_written {
             return;
         }
         *current = file;
+        *current_written = file_written;
         *current_folder = folder;
         *current_stamp = stamp;
     }
     load_avatar(puppet);
+}
+
+/// When `path` was written (milliseconds; 0: no file)
+fn written(path: &str) -> u64 {
+    if path.trim().is_empty() {
+        return 0;
+    }
+    std::fs::metadata(path).and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_millis() as u64)
 }
 
 /// Loads the avatar (puppet.file) in the background, with the animation
@@ -1584,28 +1620,6 @@ unsafe extern "C" fn video_tick(data: Ptr, dt: f32) {
     }
     // Arms moved between the controller and the desk: the other GLB
     load_prop(puppet);
-    // A file added to (or changed in, or gone from) the animation folder: the avatar again, with it
-    {
-        let mut checked = puppet.anim_checked.lock().unwrap();
-        *checked += dt;
-        if *checked >= ANIM_FOLDER_CHECK {
-            *checked = 0.0;
-            drop(checked);
-            let folder = puppet.anim_folder.lock().unwrap().clone();
-            if !folder.is_empty() {
-                let stamp = crate::retarget::folder_stamp(&folder);
-                let changed = {
-                    let mut current = puppet.anim_stamp.lock().unwrap();
-                    let changed = *current != stamp;
-                    *current = stamp;
-                    changed
-                };
-                if changed {
-                    load_avatar(puppet);
-                }
-            }
-        }
-    }
     // The avatar's pose and springs, skinned (the render uploads them)
     let mut shown = None;
     if let Some(rig) = puppet.rig.lock().unwrap().as_mut() {
