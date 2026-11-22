@@ -3,6 +3,7 @@
 //! shape keys, Color<N> slots). This first version draws it at rest.
 
 pub mod animation;
+pub mod camera;
 pub mod colorfx;
 pub mod controller;
 pub mod dae;
@@ -146,6 +147,7 @@ pub extern "C" fn obs_module_load() -> bool {
     parts::register_procs();
     tracking::dock::register();
     place::register();
+    camera::register();
     remote::register();
     lipsync::register();
     // Tracking: its inputs (its settings are in the Puppet Configuration

@@ -1640,6 +1640,8 @@ fn placed(puppet: &Puppet) -> View {
     let o = crate::place::offset(puppet.source);
     view.yaw += o.turn;
     view.position += o.position;
+    // The Puppet Camera filters' zoom, centre and turn around
+    crate::camera::apply(&mut view, crate::camera::camera(puppet.source));
     view
 }
 
