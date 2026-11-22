@@ -168,14 +168,17 @@ what went wrong) and it comes off the list.
       "random" in {1} too.
 
 ## Theater Rig: Overlay
-- [ ] Restart Blender. Panel → Overlay: Edit Mode, select a few faces of
-      the body (or her painted material), Pick from Selected, Add Overlay…,
-      a PNG on the same UV layout (transparent where there's nothing): it
-      shows over the texture in Blender; posed / with a face shape key it
-      stays on the skin.
-- [ ] Make Colour Slot on the overlay's texture: the overlay recolours, the
-      skin under it doesn't. Export GLB → Puppet: the overlay shows over the
-      body, no flicker at its edges; the colour redeems work on it.
+- [ ] Restart Blender. Overlay box: Edit Mode, select a few faces of the
+      garment, Pick from Selected; "Colour slot" ticked, a number (4); Add
+      Overlay… → red_overlay.png: it shows over the texture; the overlay is
+      …_Color4, the material under it keeps its own name and texture.
+- [ ] Export → Puppet: a colour redeem on slot 4 changes only the red (the
+      yellow, the stripes, the grey stay). Same with grey_overlay.png on the
+      top (another number): only the grey changes.
+- [ ] Make Colour Slot on a texture that has an overlay over it: it asks
+      first ("recolours everything UNDER the overlay").
+- [ ] Remove (next to Make Colour Slot) on a _Color texture: the material
+      back on its own texture, its colours as they were.
 - [ ] ✕ on the overlay in the list: gone, the body as it was.
 
 ## Tiles and the normal map
