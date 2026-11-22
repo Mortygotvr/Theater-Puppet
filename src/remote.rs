@@ -436,8 +436,30 @@ unsafe extern "C" fn command_proc(_data: Ptr, cd: *mut Calldata) {
 }
 
 /// "#rrggbb" (or "rrggbb") as sRGB 0–1
+/// Colour names a viewer can type (sRGB)
+const NAMED: &[(&str, [u8; 3])] = &[
+    ("red", [230, 30, 40]), ("orange", [255, 140, 20]), ("yellow", [255, 220, 40]), ("gold", [255, 190, 40]),
+    ("green", [40, 190, 70]), ("lime", [150, 240, 50]), ("teal", [20, 160, 150]), ("cyan", [40, 220, 240]),
+    ("blue", [40, 100, 240]), ("navy", [20, 40, 120]), ("purple", [140, 60, 220]), ("violet", [170, 100, 240]),
+    ("magenta", [230, 40, 200]), ("pink", [255, 120, 180]), ("brown", [130, 80, 40]), ("white", [245, 245, 245]),
+    ("black", [20, 20, 25]), ("grey", [128, 128, 128]), ("gray", [128, 128, 128]), ("silver", [190, 195, 200]),
+];
+
+/// A colour: #rrggbb, a name (red, pink…), or "random" (a bright one)
 pub fn parse_color(s: &str) -> Option<[f32; 3]> {
-    let h = s.trim().trim_start_matches('#');
+    let t = s.trim().to_ascii_lowercase();
+    if t == "random" {
+        // A hue picked from the clock, full and bright
+        let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
+        let h = (n % 3600) as f32 / 600.0;
+        let x = 1.0 - ((h % 2.0) - 1.0).abs();
+        let (r, g, b) = match h as u32 { 0 => (1.0, x, 0.0), 1 => (x, 1.0, 0.0), 2 => (0.0, 1.0, x), 3 => (0.0, x, 1.0), 4 => (x, 0.0, 1.0), _ => (1.0, 0.0, x) };
+        return Some([r, g, b].map(|c: f32| 0.15 + c * 0.85));
+    }
+    if let Some((_, c)) = NAMED.iter().find(|(n, _)| *n == t) {
+        return Some(c.map(|b| b as f32 / 255.0));
+    }
+    let h = t.trim_start_matches('#');
     if h.len() != 6 {
         return None;
     }
@@ -680,7 +702,7 @@ fn ask(args: &Value, source: Ptr, remote: &Shared, shown: &mut Option<Vec<bool>>
                 if color.is_empty() {
                     continue; // left as it is
                 }
-                let rgb = if color.eq_ignore_ascii_case("reset") { None } else { Some(parse_color(&color).ok_or_else(|| format!("slot {slot}: colour \"{color}\": #rrggbb or reset"))?) };
+                let rgb = if color.eq_ignore_ascii_case("reset") { None } else { Some(parse_color(&color).ok_or_else(|| format!("slot {slot}: colour \"{color}\": #rrggbb, a name (red, pink…), random or reset"))?) };
                 set.push((slot, rgb));
             }
             if set.is_empty() {
@@ -698,7 +720,7 @@ fn ask(args: &Value, source: Ptr, remote: &Shared, shown: &mut Option<Vec<bool>>
             let slot = args.get("slot").and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))).ok_or("no slot")? as u32;
             let color = text("color");
             drop(r);
-            let rgb = if color.eq_ignore_ascii_case("reset") { None } else { Some(parse_color(&color).ok_or_else(|| format!("colour \"{color}\": #rrggbb or reset"))?) };
+            let rgb = if color.eq_ignore_ascii_case("reset") { None } else { Some(parse_color(&color).ok_or_else(|| format!("colour \"{color}\": #rrggbb, a name (red, pink…), random or reset"))?) };
             let before = crate::source::get_color_setting(source, slot).map_or_else(|| "reset".to_string(), |c| format!("#{:02x}{:02x}{:02x}", (c[0] * 255.0).round() as u8, (c[1] * 255.0).round() as u8, (c[2] * 255.0).round() as u8));
             *undo = Some((format!("color {slot}"), Undo::Args(json!({ "action": "color", "slot": slot, "color": before }))));
             crate::source::set_color_setting(source, slot, rgb);
@@ -853,6 +875,15 @@ fn previews(args: &Value, remote: &Shared) -> Result<Vec<Value>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn colours_by_hex_name_or_random() {
+        assert_eq!(parse_color("#ff0000"), Some([1.0, 0.0, 0.0]));
+        assert_eq!(parse_color(" Pink "), Some([1.0, 120.0 / 255.0, 180.0 / 255.0]));
+        let r = parse_color("random").unwrap();
+        assert!(r.iter().all(|c| (0.15..=1.0).contains(c)) && r.iter().cloned().fold(0.0, f32::max) > 0.99, "{r:?}");
+        assert_eq!(parse_color("not a colour"), None);
+    }
 
     #[test]
     fn every_tile_has_a_picture() {
@@ -1054,6 +1085,8 @@ mod tests {
     fn colours_are_read() {
         assert_eq!(parse_color("#ff8000"), Some([1.0, 128.0 / 255.0, 0.0]));
         assert_eq!(parse_color("00FF00"), Some([0.0, 1.0, 0.0]));
-        assert_eq!(parse_color("red"), None);
+        // A name is a colour now (viewers type them); a word that isn't one isn't
+        assert!(parse_color("red").is_some());
+        assert_eq!(parse_color("reddish"), None);
     }
 }

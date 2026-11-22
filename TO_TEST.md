@@ -161,6 +161,10 @@ what went wrong) and it comes off the list.
       avatar's slots listed, its own colour (one left empty stays as it is).
       Test: they all change together. With a timer: all come back together.
 - [ ] A wildcard in one ({1}) takes the redeem's text.
+- [ ] The "🎨 Colour" redeem (made for you: slot 3, the iris, "random", back
+      after 2 min): Test it in the Studio: Amouri's eyes take a bright random
+      colour, then come back. Give it a trigger. With {1} in the slot instead,
+      a viewer's "pink", "gold" or "#33ccff" works too.
 
 ## Tiles and the normal map
 - [ ] Amouri (face atlas 2x2 "Emotion", a normal map on the face): in OBS,
