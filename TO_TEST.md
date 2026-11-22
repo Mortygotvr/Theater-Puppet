@@ -167,13 +167,16 @@ what went wrong) and it comes off the list.
 - [ ] "One slot" works as before; a viewer's "pink", "gold", "#33ccff",
       "random" in {1} too.
 
-## 🎥 Puppet Camera filter
-- [ ] On a Puppet source: Filters → + → "🎥 Puppet Camera". Zoom 2: twice as
-      close; Centre +0.5: framed nearer the head; Turn around 90: the camera
-      goes round. Adding it (all at 1 / 0 / 0) changes nothing.
+## 🎥 Puppet Camera filter (every Puppet has one)
+- [ ] Each Puppet source has "🎥 Puppet Camera" in its filters by itself (a
+      new one too); remove it: it's back within a second.
+- [ ] Its sliders: Zoom (x), Camera (as the source / perspective /
+      orthographic), Centre, Turn around, Position (3), Spin. All at their
+      start (1, as the source, 0…): nothing changes.
+- [ ] Spin 45: the model turns on itself like on a display stand, the light
+      staying; Spin back to 0: it turns back to face the front.
 - [ ] In Scene's Studio, the source's filter part shows its sliders; two poses
-      with different Zoom / Turn ease from one to the other.
-- [ ] Disabled: no effect.
+      with different Zoom / Turn / Position ease from one to the other.
 
 ## ⚙ Configuration → 🎬 Animations
 - [ ] ➕ Add animation… → a Mixamo .dae downloaded With Skin: "Added …: its

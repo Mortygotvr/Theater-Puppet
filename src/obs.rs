@@ -32,6 +32,8 @@ unsafe impl Sync for SourceInfo {}
 
 pub const OBS_SOURCE_TYPE_INPUT: u32 = 0;
 pub const OBS_SOURCE_TYPE_FILTER: u32 = 1;
+/// obs_queue_task: on OBS's UI thread
+pub const OBS_TASK_UI: u32 = 0;
 pub const OBS_SOURCE_VIDEO: u32 = 1 << 0;
 pub const OBS_SOURCE_AUDIO: u32 = 1 << 1;
 pub const OBS_SOURCE_CUSTOM_DRAW: u32 = 1 << 3;
@@ -163,6 +165,13 @@ api! {
     obs_source_update: fn(Ptr, Ptr);
     obs_source_enabled: fn(Ptr) -> bool;
     obs_filter_get_parent: fn(Ptr) -> Ptr;
+    // A filter added by Puppet itself (camera.rs: every Puppet has its Camera filter)
+    obs_source_create: fn(*const c_char, *const c_char, Ptr, Ptr) -> Ptr;
+    obs_source_filter_add: fn(Ptr, Ptr);
+    obs_source_enum_filters: fn(Ptr, unsafe extern "C" fn(Ptr, Ptr, *mut std::ffi::c_void), *mut std::ffi::c_void);
+    obs_source_get_unversioned_id: fn(Ptr) -> *const c_char;
+    obs_source_get_ref: fn(Ptr) -> Ptr;
+    obs_queue_task: fn(u32, unsafe extern "C" fn(*mut std::ffi::c_void), *mut std::ffi::c_void, bool);
     obs_source_skip_video_filter: fn(Ptr);
     obs_data_set_default_bool: fn(Ptr, *const c_char, bool);
     obs_data_set_default_string: fn(Ptr, *const c_char, *const c_char);

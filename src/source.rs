@@ -330,6 +330,8 @@ struct Puppet {
     extra_files: Mutex<Vec<(usize, String, u64)>>,
     /// When the avatar's file was written (as last loaded)
     file_written: Mutex<u64>,
+    /// Seconds since its Camera filter was looked for (camera::ensure)
+    camera_checked: Mutex<f32>,
     extra_generation: Arc<AtomicU64>,
     extra_loaded: Arc<Mutex<Option<(u64, Vec<(usize, Arc<Model>)>)>>>,
     /// Each loaded extra with its slot (1, 2…)
@@ -1024,6 +1026,7 @@ unsafe extern "C" fn create(settings: Ptr, source: Ptr) -> Ptr {
         loaded: Arc::new(Mutex::new(None)),
         extra_files: Mutex::new(Vec::new()),
         file_written: Mutex::new(0),
+        camera_checked: Mutex::new(1.0),
         extra_generation: Arc::new(AtomicU64::new(0)),
         extra_loaded: Arc::new(Mutex::new(None)),
         extras: Mutex::new(Vec::new()),
@@ -1640,7 +1643,7 @@ fn placed(puppet: &Puppet) -> View {
     let o = crate::place::offset(puppet.source);
     view.yaw += o.turn;
     view.position += o.position;
-    // The Puppet Camera filters' zoom, centre and turn around
+    // The Puppet Camera filters: the camera, and the model's spin
     crate::camera::apply(&mut view, crate::camera::camera(puppet.source));
     view
 }
@@ -1649,6 +1652,15 @@ fn placed(puppet: &Puppet) -> View {
 unsafe extern "C" fn video_tick(data: Ptr, dt: f32) {
     let puppet = unsafe { &*(data as *const Puppet) };
     crate::snapshot::poll();
+    // Its Camera filter: there at all times (added when missing; looked at once a second)
+    {
+        let mut since = puppet.camera_checked.lock().unwrap();
+        *since += dt;
+        if *since >= 1.0 {
+            *since = 0.0;
+            crate::camera::ensure(puppet.source);
+        }
+    }
     // The GLB prefabs: new ones from the procedure, each a frame on, the ended ones gone
     {
         let (new, clear) = {

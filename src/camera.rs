@@ -1,66 +1,117 @@
-//! The "🎥 Puppet Camera" filter: put on a Puppet source, its Zoom, Centre
-//! and Turn around sliders move the camera. A filter so that Theater Scene's
-//! Studio shows its sliders in a source's filter part, its poses save them and
-//! ease them from one pose to the next, like every filter's (Puppet Place's
-//! twin, for the camera). The picture itself goes through untouched.
+//! The "🎥 Puppet Camera" filter: every Puppet source has one (added by
+//! itself when the source loads, again if it's removed). Its sliders are the
+//! whole camera: Zoom, the projection, Centre, Turn around, Position, and a
+//! Spin that turns the model on itself like a display stand. A filter so that
+//! Theater Scene's Studio shows its sliders in a source's filter part, and its
+//! poses save them and ease them from one pose to the next, like every
+//! filter's. The picture itself goes through untouched.
 //!
-//! Its values go on the source's own camera settings (adding the filter never
-//! makes the view jump): Zoom multiplies, Centre and Turn add. Several add up;
-//! disabled or removed: no effect.
+//! Its values go on the source's own camera settings (the filter never makes
+//! the view jump): Zoom multiplies, Centre, Turn and Position add, the
+//! projection replaces the source's when it says one. Spin back at 0, the
+//! model turns back to face the front (the nearest whole turn). Several add
+//! up; disabled: no effect.
 
-use std::ffi::{CStr, c_char};
+use std::ffi::{CStr, c_char, c_void};
 use std::sync::Mutex;
+
+use glam::Vec3;
 
 use crate::obs::{self, Ptr};
 
-const ID: &CStr = c"theater_puppet_camera_filter";
+pub const ID: &CStr = c"theater_puppet_camera_filter";
 const NAME: &CStr = c"\u{1F3A5} Puppet Camera";
 
 const S_ZOOM: &CStr = c"zoom";
+const S_PROJECTION: &CStr = c"projection";
 const S_CENTRE: &CStr = c"centre";
 const S_ORBIT: &CStr = c"orbit";
+const S_POSITION: [&CStr; 3] = [c"x", c"y", c"z"];
+const S_SPIN: &CStr = c"spin";
 
 /// What a filter does to its Puppet's camera
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Camera {
     /// Times the source's zoom (1: as it is)
     pub zoom: f32,
+    /// Orthographic (Some(true)), perspective (Some(false)), or as the source says
+    pub orthographic: Option<bool>,
     /// Added to its centre (feet -1 .. head 1)
     pub centre: f32,
     /// Degrees added to its turn around the avatar
     pub orbit: f32,
+    /// Metres added to where it stands: right (as seen), up, toward the camera
+    pub position: Vec3,
+    /// Degrees a second the model turns on itself (0: back to the front)
+    pub spin: f32,
 }
 
 impl Default for Camera {
     fn default() -> Self {
-        Camera { zoom: 1.0, centre: 0.0, orbit: 0.0 }
+        Camera { zoom: 1.0, orthographic: None, centre: 0.0, orbit: 0.0, position: Vec3::ZERO, spin: 0.0 }
     }
 }
 
-/// Each Puppet Camera filter (OBS's pointer): its settings, and the Puppet
-/// it's on (found at its tick; 0 before, or while disabled)
-static FILTERS: Mutex<Vec<(usize, Camera, usize)>> = Mutex::new(Vec::new());
+/// One filter: its settings, the Puppet it's on (found at its tick; 0
+/// before, or while disabled), and how far its spin has turned the model
+#[derive(Clone, Copy, Debug)]
+struct Entry {
+    filter: usize,
+    camera: Camera,
+    parent: usize,
+    turned: f32,
+}
 
-/// What the enabled Camera filters on `source` do (several add up)
-pub fn camera(source: Ptr) -> Camera {
+static FILTERS: Mutex<Vec<Entry>> = Mutex::new(Vec::new());
+
+/// What the enabled Camera filters on `source` do (several add up), and the
+/// degrees their spins have turned the model
+pub fn camera(source: Ptr) -> (Camera, f32) {
     combined(&FILTERS.lock().unwrap(), source as usize)
 }
 
-fn combined(filters: &[(usize, Camera, usize)], source: usize) -> Camera {
+fn combined(filters: &[Entry], source: usize) -> (Camera, f32) {
     let mut out = Camera::default();
-    for (_, c, _) in filters.iter().filter(|(_, _, p)| *p == source) {
+    let mut turned = 0.0;
+    for e in filters.iter().filter(|e| e.parent == source) {
+        let c = e.camera;
         out.zoom *= c.zoom;
         out.centre += c.centre;
         out.orbit += c.orbit;
+        out.position += c.position;
+        out.orthographic = c.orthographic.or(out.orthographic);
+        turned += e.turned;
     }
-    out
+    (out, turned)
 }
 
 /// The source's own view with the filters' camera on it
-pub fn apply(view: &mut crate::render::View, c: Camera) {
+pub fn apply(view: &mut crate::render::View, (c, turned): (Camera, f32)) {
     view.zoom = (view.zoom * c.zoom).clamp(0.01, 500.0);
     view.height += c.centre;
     view.orbit += c.orbit;
+    view.position += c.position;
+    if let Some(o) = c.orthographic {
+        view.orthographic = o;
+    }
+    // The model on its stand: its body turned (its hair swings with it)
+    view.yaw += turned;
+}
+
+/// A spin `dt` seconds on: turning at `spin` degrees a second, or (at 0) back
+/// to the nearest whole turn (facing the front) over about a second
+fn spun(turned: f32, spin: f32, dt: f32) -> f32 {
+    if spin != 0.0 {
+        return (turned + spin * dt) % 3600.0;
+    }
+    let home = (turned / 360.0).round() * 360.0;
+    let d = home - turned;
+    // Eased, but never slower than 20 degrees a second: it does get there
+    let mut step = d * (dt * 3.0).min(1.0);
+    if step.abs() < 20.0 * dt {
+        step = d.signum() * (20.0 * dt).min(d.abs());
+    }
+    turned + step
 }
 
 pub fn register() {
@@ -86,6 +137,62 @@ pub fn register() {
     unsafe { (obs::api().obs_register_source_s)(&INFO, std::mem::size_of::<obs::SourceInfo>()) };
 }
 
+// ---------------------------------------------------------------------------
+// Every Puppet has one: added when it's missing (on OBS's UI thread)
+
+/// The Puppets a Camera filter is being added to (asked once)
+static ADDING: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+
+unsafe extern "C" fn found_one(_parent: Ptr, child: Ptr, found: *mut c_void) {
+    let id = unsafe { (obs::api().obs_source_get_unversioned_id)(child) };
+    if !id.is_null() && unsafe { CStr::from_ptr(id) } == ID {
+        unsafe { *(found as *mut bool) = true };
+    }
+}
+
+fn has_one(source: Ptr) -> bool {
+    let mut found = false;
+    unsafe { (obs::api().obs_source_enum_filters)(source, found_one, &mut found as *mut bool as *mut c_void) };
+    found
+}
+
+/// `source` (a Puppet) gets its Camera filter if it has none
+pub fn ensure(source: Ptr) {
+    if source.is_null() || has_one(source) {
+        return;
+    }
+    let mut adding = ADDING.lock().unwrap();
+    if adding.contains(&(source as usize)) {
+        return;
+    }
+    let api = obs::api();
+    // Kept alive until the task has run
+    let held = unsafe { (api.obs_source_get_ref)(source) };
+    if held.is_null() {
+        return;
+    }
+    adding.push(source as usize);
+    unsafe { (api.obs_queue_task)(obs::OBS_TASK_UI, add_task, held, false) };
+}
+
+unsafe extern "C" fn add_task(source: *mut c_void) {
+    let api = obs::api();
+    unsafe {
+        if !has_one(source) {
+            let filter = (api.obs_source_create)(ID.as_ptr(), NAME.as_ptr(), std::ptr::null_mut(), std::ptr::null_mut());
+            if !filter.is_null() {
+                (api.obs_source_filter_add)(source, filter);
+                (api.obs_source_release)(filter);
+                crate::log("[Puppet] 🎥 Puppet Camera filter added to a Puppet source");
+            }
+        }
+        ADDING.lock().unwrap().retain(|s| *s != source as usize);
+        (api.obs_source_release)(source);
+    }
+}
+
+// ---------------------------------------------------------------------------
+
 unsafe extern "C" fn get_name(_: Ptr) -> *const c_char {
     NAME.as_ptr()
 }
@@ -94,8 +201,13 @@ unsafe extern "C" fn get_defaults(settings: Ptr) {
     let api = obs::api();
     unsafe {
         (api.obs_data_set_default_double)(settings, S_ZOOM.as_ptr(), 1.0);
-        (api.obs_data_set_default_double)(settings, S_CENTRE.as_ptr(), 0.0);
-        (api.obs_data_set_default_double)(settings, S_ORBIT.as_ptr(), 0.0);
+        (api.obs_data_set_default_string)(settings, S_PROJECTION.as_ptr(), c"".as_ptr());
+        for k in [S_CENTRE, S_ORBIT, S_SPIN] {
+            (api.obs_data_set_default_double)(settings, k.as_ptr(), 0.0);
+        }
+        for k in S_POSITION {
+            (api.obs_data_set_default_double)(settings, k.as_ptr(), 0.0);
+        }
     }
 }
 
@@ -104,12 +216,24 @@ unsafe extern "C" fn get_properties(_: Ptr) -> Ptr {
     unsafe {
         let props = (api.obs_properties_create)();
         (api.obs_properties_add_float_slider)(props, S_ZOOM.as_ptr(), c"Zoom (x: 1 as it is, 2 twice as close)".as_ptr(), 0.1, 10.0, 0.01);
+        let projection = (api.obs_properties_add_list)(props, S_PROJECTION.as_ptr(), c"Camera".as_ptr(), obs::OBS_COMBO_TYPE_LIST, obs::OBS_COMBO_FORMAT_STRING);
+        (api.obs_property_list_add_string)(projection, c"As the source".as_ptr(), c"".as_ptr());
+        (api.obs_property_list_add_string)(projection, c"Perspective".as_ptr(), c"perspective".as_ptr());
+        (api.obs_property_list_add_string)(projection, c"Orthographic (no perspective)".as_ptr(), c"orthographic".as_ptr());
         (api.obs_properties_add_float_slider)(props, S_CENTRE.as_ptr(), c"Centre (toward the feet - / the head +)".as_ptr(), -2.0, 2.0, 0.01);
         (api.obs_properties_add_float_slider)(props, S_ORBIT.as_ptr(), c"Turn around the avatar (degrees)".as_ptr(), -180.0, 180.0, 1.0);
+        for (key, label, range) in [
+            (S_POSITION[0], c"Position: left / right (m)", 3.0),
+            (S_POSITION[1], c"Position: down / up (m)", 2.0),
+            (S_POSITION[2], c"Position: back / forward (m)", 3.0),
+        ] {
+            (api.obs_properties_add_float_slider)(props, key.as_ptr(), label.as_ptr(), -range, range, 0.01);
+        }
+        (api.obs_properties_add_float_slider)(props, S_SPIN.as_ptr(), c"Spin: the model turns on itself, degrees a second (0: back to the front)".as_ptr(), -180.0, 180.0, 1.0);
         (api.obs_properties_add_text)(
             props,
             c"camera_info".as_ptr(),
-            c"On the Puppet's own camera settings (Zoom times it, Centre and Turn added). Theater Scene's poses save and ease these like any filter's.".as_ptr(),
+            c"On the Puppet's own camera settings (Zoom times it, the others added). Theater Scene's poses save and ease these like any filter's. Every Puppet has this filter (it comes back if removed).".as_ptr(),
             obs::OBS_TEXT_INFO,
         );
         props
@@ -118,30 +242,43 @@ unsafe extern "C" fn get_properties(_: Ptr) -> Ptr {
 
 /// The filter's OBS source (its `data`: it needs nothing else)
 unsafe extern "C" fn create(settings: Ptr, filter: Ptr) -> Ptr {
-    FILTERS.lock().unwrap().push((filter as usize, Camera::default(), 0));
+    FILTERS.lock().unwrap().push(Entry { filter: filter as usize, camera: Camera::default(), parent: 0, turned: 0.0 });
     unsafe { update(filter, settings) };
     filter
 }
 
 unsafe extern "C" fn destroy(filter: Ptr) {
-    FILTERS.lock().unwrap().retain(|(f, _, _)| *f != filter as usize);
+    FILTERS.lock().unwrap().retain(|e| e.filter != filter as usize);
 }
 
 unsafe extern "C" fn update(filter: Ptr, settings: Ptr) {
     let api = obs::api();
     let get = |k: &CStr| unsafe { (api.obs_data_get_double)(settings, k.as_ptr()) as f32 };
-    let c = Camera { zoom: get(S_ZOOM).max(0.01), centre: get(S_CENTRE), orbit: get(S_ORBIT) };
-    if let Some(entry) = FILTERS.lock().unwrap().iter_mut().find(|(f, _, _)| *f == filter as usize) {
-        entry.1 = c;
+    let projection = unsafe { CStr::from_ptr((api.obs_data_get_string)(settings, S_PROJECTION.as_ptr())) }.to_bytes();
+    let c = Camera {
+        zoom: get(S_ZOOM).max(0.01),
+        orthographic: match projection {
+            b"orthographic" => Some(true),
+            b"perspective" => Some(false),
+            _ => None,
+        },
+        centre: get(S_CENTRE),
+        orbit: get(S_ORBIT),
+        position: Vec3::new(get(S_POSITION[0]), get(S_POSITION[1]), get(S_POSITION[2])),
+        spin: get(S_SPIN),
+    };
+    if let Some(e) = FILTERS.lock().unwrap().iter_mut().find(|e| e.filter == filter as usize) {
+        e.camera = c;
     }
 }
 
-/// Finds the Puppet it's on (0 while disabled: it does nothing)
-unsafe extern "C" fn video_tick(filter: Ptr, _dt: f32) {
+/// Finds the Puppet it's on (0 while disabled: it does nothing); its spin a frame on
+unsafe extern "C" fn video_tick(filter: Ptr, dt: f32) {
     let api = obs::api();
     let parent = unsafe { if (api.obs_source_enabled)(filter) { (api.obs_filter_get_parent)(filter) as usize } else { 0 } };
-    if let Some(entry) = FILTERS.lock().unwrap().iter_mut().find(|(f, _, _)| *f == filter as usize) {
-        entry.2 = parent;
+    if let Some(e) = FILTERS.lock().unwrap().iter_mut().find(|e| e.filter == filter as usize) {
+        e.parent = parent;
+        e.turned = spun(e.turned, e.camera.spin, dt.clamp(0.0, 0.1));
     }
 }
 
@@ -154,17 +291,43 @@ unsafe extern "C" fn video_render(filter: Ptr, _effect: Ptr) {
 mod tests {
     use super::*;
 
+    fn entry(filter: usize, camera: Camera, parent: usize, turned: f32) -> Entry {
+        Entry { filter, camera, parent, turned }
+    }
+
     #[test]
     fn cameras_on_a_puppet_add_up_and_others_dont_count() {
-        let a = Camera { zoom: 2.0, centre: 0.25, orbit: 30.0 };
-        let b = Camera { zoom: 1.5, centre: -0.1, orbit: -10.0 };
-        let filters = vec![(1, a, 100), (2, b, 100), (3, Camera { zoom: 9.0, ..Camera::default() }, 200), (4, Camera { zoom: 9.0, ..Camera::default() }, 0)];
-        let c = combined(&filters, 100);
+        let a = Camera { zoom: 2.0, centre: 0.25, orbit: 30.0, position: Vec3::new(0.5, 0.0, 0.0), orthographic: Some(true), spin: 0.0 };
+        let b = Camera { zoom: 1.5, centre: -0.1, orbit: -10.0, ..Camera::default() };
+        let filters = vec![entry(1, a, 100, 90.0), entry(2, b, 100, 0.0), entry(3, Camera { zoom: 9.0, ..Camera::default() }, 200, 0.0), entry(4, Camera { zoom: 9.0, ..Camera::default() }, 0, 0.0)];
+        let (c, turned) = combined(&filters, 100);
         assert!((c.zoom - 3.0).abs() < 1e-6 && (c.centre - 0.15).abs() < 1e-6 && (c.orbit - 20.0).abs() < 1e-6, "{c:?}");
+        assert_eq!((c.orthographic, c.position, turned), (Some(true), Vec3::new(0.5, 0.0, 0.0), 90.0));
         // None (or disabled: on no Puppet): as it is
-        assert_eq!(combined(&filters, 999), Camera::default());
-        let mut view = crate::render::View { zoom: 1.5, height: 0.2, yaw: 0.0, orbit: 10.0, orthographic: false, position: glam::Vec3::ZERO, light: crate::render::View::LIGHT, light_color: [1.0; 3] };
-        apply(&mut view, c);
+        assert_eq!(combined(&filters, 999), (Camera::default(), 0.0));
+        let mut view = crate::render::View { zoom: 1.5, height: 0.2, yaw: 5.0, orbit: 10.0, orthographic: false, position: Vec3::ZERO, light: crate::render::View::LIGHT, light_color: [1.0; 3] };
+        apply(&mut view, (c, turned));
         assert!((view.zoom - 4.5).abs() < 1e-5 && (view.height - 0.35).abs() < 1e-5 && (view.orbit - 30.0).abs() < 1e-5);
+        assert!(view.orthographic && (view.yaw - 95.0).abs() < 1e-5 && view.position.x == 0.5);
+    }
+
+    #[test]
+    fn the_spin_turns_then_goes_back_to_the_front() {
+        let mut t = 0.0;
+        for _ in 0..60 {
+            t = spun(t, 90.0, 1.0 / 60.0);
+        }
+        assert!((t - 90.0).abs() < 1e-3, "a second at 90 a second: {t}");
+        // Spin 0: back to the nearest whole turn (the front: 0 here)
+        for _ in 0..120 {
+            t = spun(t, 0.0, 1.0 / 60.0);
+        }
+        assert_eq!(t, 0.0);
+        // Past half a turn: on to the next whole one (360)
+        let mut u = 200.0;
+        for _ in 0..120 {
+            u = spun(u, 0.0, 1.0 / 60.0);
+        }
+        assert_eq!(u, 360.0);
     }
 }
