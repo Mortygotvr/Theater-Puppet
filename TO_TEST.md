@@ -167,6 +167,13 @@ what went wrong) and it comes off the list.
 - [ ] "One slot" works as before; a viewer's "pink", "gold", "#33ccff",
       "random" in {1} too.
 
+## Hair against the body, across GLBs
+- [ ] Amouri (head in avatar.glb, body in basiccloth.glb, hair in
+      Spikyhair.glb): move the arms through the hair / turn: the hair stays
+      outside the arms, the chest, the shoulders (it went through them).
+- [ ] The front bangs don't lean out more than before (the head's collider
+      is the face's).
+
 ## 🎥 Puppet Camera filter (every Puppet has one)
 - [ ] Each Puppet source has "🎥 Puppet Camera" in its filters by itself (a
       new one too); remove it: it's back within a second.

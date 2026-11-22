@@ -88,7 +88,7 @@ pub struct Collider {
 }
 
 impl Collider {
-    fn ends(&self, pose: &Pose) -> (Vec3, Vec3) {
+    pub fn ends(&self, pose: &Pose) -> (Vec3, Vec3) {
         let (at, turn) = (pose.position(self.from), pose.world_rotation(self.from));
         (at + turn * self.base, at + turn * self.tip)
     }
@@ -187,6 +187,70 @@ impl Springs {
         };
         joints.sort_by_key(|j| rank[j.node]);
 
+        let colliders = colliders_of(model, pose);
+        Springs { joints, colliders, chains }
+    }
+
+    /// Its colliders: the body's, from every GLB of the source (shared_colliders)
+    pub fn set_colliders(&mut self, colliders: Vec<Collider>) {
+        self.colliders = colliders;
+    }
+}
+
+/// The colliders of `model` at `pose` (its rest): a capsule on each body bone,
+/// as thick as the mesh it moves, and one across the chest
+pub fn colliders_of(model: &Model, pose: &Pose) -> Vec<Collider> {
+    rated_colliders(model, pose).into_iter().map(|(c, _)| c).collect()
+}
+
+/// One body collider shared by every GLB of a source: on the bone called
+/// `bone`, its ends at rest (the avatar's space), how thick, how much it's the
+/// body (rated_colliders), and whether it's the one across the chest
+#[derive(Clone, Debug)]
+pub struct Shared {
+    pub bone: String,
+    pub ends: (Vec3, Vec3),
+    pub radius: f32,
+    rank: u8,
+    across: bool,
+}
+
+/// The body's colliders from all the GLBs of a source (the avatar and those
+/// drawn with it, each at its rest): on each bone the one made most from the
+/// body (skin over clothes over hair; the first given, the avatar, on a tie),
+/// so a body in one GLB and hair in another still bump into each other
+pub fn shared_colliders(models: &[(&Model, &Pose)]) -> Vec<Shared> {
+    let mut out: Vec<Shared> = Vec::new();
+    for (model, pose) in models {
+        for (c, rank) in rated_colliders(model, pose) {
+            let s = Shared { bone: model.nodes[c.from].name.clone(), ends: c.ends(pose), radius: c.radius, rank, across: c.base != Vec3::ZERO };
+            match out.iter_mut().find(|o| o.bone == s.bone && o.across == s.across) {
+                // Only more the body than the one before (the avatar's, listed first, keeps a tie)
+                Some(o) if s.rank > o.rank => *o = s,
+                Some(_) => {}
+                None => out.push(s),
+            }
+        }
+    }
+    out
+}
+
+/// The shared colliders on `model`'s bones of the same names (at `pose`, its rest)
+pub fn colliders_for(model: &Model, pose: &Pose, shared: &[Shared]) -> Vec<Collider> {
+    shared
+        .iter()
+        .filter_map(|s| {
+            let from = model.node(&s.bone)?;
+            let (at, turn) = (pose.position(from), pose.world_rotation(from).inverse());
+            Some(Collider { from, base: turn * (s.ends.0 - at), tip: turn * (s.ends.1 - at), radius: s.radius })
+        })
+        .collect()
+}
+
+/// `colliders_of`, each with how much it's the body: 2 made from skin, 1
+/// from what isn't hair (clothes), 0 from anything (hair: a GLB of hair alone)
+pub fn rated_colliders(model: &Model, pose: &Pose) -> Vec<(Collider, u8)> {
+    {
         // Colliders: as thick as the mesh their bone moves (most of it outside)
         let mut colliders = Vec::new();
         for (bone, ends) in COLLIDER_BONES {
@@ -206,11 +270,14 @@ impl Springs {
             };
             let mut moved = of(&|name| name.contains("skin"));
             let skin = moved.len() >= 8;
+            let mut rank = 2;
             if !skin {
                 moved = of(&|name| !name.contains("hair"));
+                rank = 1;
             }
             if moved.len() < 8 {
                 moved = of(&|_| true);
+                rank = 0;
             }
             if moved.len() < 8 {
                 continue;
@@ -227,23 +294,26 @@ impl Springs {
             // has insides (and clothes stand off the body): a little under.
             let radius = distances[distances.len() / 2] * if skin { 1.0 } else { 0.85 };
             let tip = pose.world_rotation(from).inverse() * (b - a);
-            colliders.push(Collider { from, base: Vec3::ZERO, tip, radius });
+            colliders.push((Collider { from, base: Vec3::ZERO, tip, radius }, rank));
         }
         // A body is wider than deep: the spine's capsules leave the chest's
         // sides open, so one more goes across it, from arm to arm
         if let (Some(chest), Some(left), Some(right)) = (model.node("Spine2").or_else(|| model.node("Spine1")), model.node("LeftArm"), model.node("RightArm")) {
-            let thick = colliders.iter().find(|c| c.from == chest).map(|c| c.radius);
-            if let Some(radius) = thick {
+            let thick = colliders.iter().find(|(c, _)| c.from == chest).map(|(c, r)| (c.radius, *r));
+            if let Some((radius, rank)) = thick {
                 let (at, turn) = (pose.position(chest), pose.world_rotation(chest).inverse());
                 // (a little in from the arms' joints, and under them: the chest, not the shoulders' tops)
                 let (l, r) = (pose.position(left), pose.position(right));
                 let down = Vec3::NEG_Y * radius * 0.5;
                 let (l, r) = (l.lerp(r, 0.12) + down, r.lerp(l, 0.12) + down);
-                colliders.push(Collider { from: chest, base: turn * (l - at), tip: turn * (r - at), radius: radius * 0.85 });
+                colliders.push((Collider { from: chest, base: turn * (l - at), tip: turn * (r - at), radius: radius * 0.85 }, rank));
             }
         }
-        Springs { joints, colliders, chains }
+        colliders
     }
+}
+
+impl Springs {
 
     /// The kinds this avatar has (indices into KINDS)
     pub fn kinds(&self) -> Vec<usize> {

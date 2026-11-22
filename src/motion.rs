@@ -498,6 +498,17 @@ impl Rig {
     /// The GLBs drawn with the avatar (each copies its pose), in place of the ones before
     pub fn set_extras(&mut self, models: &[Arc<Model>]) {
         self.followers = models.iter().map(|m| Follower::new(m.clone(), &self.model)).collect();
+        // One body for all their springs: its colliders from every GLB (a body
+        // in one, hair in another: the hair bumps into it all the same)
+        let mut all: Vec<(&Model, &Pose)> = vec![(&*self.model, &self.rest)];
+        all.extend(self.followers.iter().map(|f| (&*f.model, &f.rest)));
+        let shared = crate::springs::shared_colliders(&all);
+        let main = crate::springs::colliders_for(&self.model, &self.rest, &shared);
+        let each: Vec<_> = self.followers.iter().map(|f| crate::springs::colliders_for(&f.model, &f.rest, &shared)).collect();
+        self.springs.set_colliders(main);
+        for (f, c) in self.followers.iter_mut().zip(each) {
+            f.springs.set_colliders(c);
+        }
     }
 
     /// Follows what's tracked: smoothed, each part fading in and out
@@ -768,7 +779,7 @@ impl Follower {
 
     pub fn new(model: Arc<Model>, main: &Model) -> Follower {
         let pose = Pose::rest(&model);
-        let from = model.nodes.iter().map(|n| main.node(n.name.strip_prefix("mixamorig:").unwrap_or(&n.name))).collect();
+        let from: Vec<Option<usize>> = model.nodes.iter().map(|n| main.node(n.name.strip_prefix("mixamorig:").unwrap_or(&n.name))).collect();
         let morph_from = model.morph_names.iter().map(|n| main.morph(n)).collect();
         let arkit = arkit_keys(&model);
         let springs = Springs::new(&model, &pose);
@@ -997,6 +1008,37 @@ mod tests {
             assert!(most > 0.5, "the smile hardly showed ({most})");
             assert_eq!(rig.morph[smile], 0.0);
         }
+    }
+
+    /// THEATER_PUPPET_GLB=<an avatar> THEATER_PUPPET_HAIR_GLB=<its hair as an Also draw GLB alone>
+    /// THEATER_PUPPET_BODY_GLB=<its body as another> (Amouri's: avatar.glb the head, Spikyhair.glb,
+    /// basiccloth.glb): the hair's springs bump into the body of the other GLB
+    #[test]
+    fn a_hair_glb_drawn_alone_collides_with_the_body_of_another() {
+        let (Ok(avatar), Ok(hair), Ok(body)) = (std::env::var("THEATER_PUPPET_GLB"), std::env::var("THEATER_PUPPET_HAIR_GLB"), std::env::var("THEATER_PUPPET_BODY_GLB")) else { return };
+        let load = |p: &str| Arc::new(crate::model::load(std::path::Path::new(p)).unwrap());
+        let (hm, bm) = (load(&hair), load(&body));
+        let mut rig = Rig::new(load(&avatar));
+        rig.set_extras(&[hm.clone(), bm.clone()]);
+        let hair_f = &rig.followers[0];
+        let names: Vec<&str> = hair_f.springs.colliders.iter().map(|c| hm.nodes[c.from].name.as_str()).collect();
+        println!("hair's colliders: {} on {:?}", names.len(), names);
+        for arm in ["LeftArm", "RightArm", "LeftForeArm", "RightForeArm", "Spine2"] {
+            assert!(names.contains(&arm), "no {arm} collider for the hair");
+        }
+        // The arm's capsule where the body GLB's own is, as thick
+        let body_rest = Pose::rest(&bm);
+        let own = crate::springs::colliders_of(&bm, &body_rest);
+        let b = own.iter().find(|c| bm.nodes[c.from].name == "LeftArm").unwrap();
+        let h = hair_f.springs.colliders.iter().find(|c| hm.nodes[c.from].name == "LeftArm").unwrap();
+        let ((a0, b0), (a1, b1)) = (b.ends(&body_rest), h.ends(&hair_f.rest));
+        println!("left arm: the body's {a0:?}-{b0:?} r {:.3}, the hair's {a1:?}-{b1:?} r {:.3}", b.radius, h.radius);
+        assert!((a0 - a1).length() < 1e-3 && (b0 - b1).length() < 1e-3 && (b.radius - h.radius).abs() < 1e-6);
+        // The head's: the skin's (the face in avatar.glb), not the hair's own
+        let head = hair_f.springs.colliders.iter().find(|c| hm.nodes[c.from].name == "Head").unwrap();
+        let face = crate::springs::colliders_of(&rig.model, &rig.rest).into_iter().find(|c| rig.model.nodes[c.from].name == "Head").unwrap();
+        println!("head: {:.3} (the face's {:.3})", head.radius, face.radius);
+        assert!((head.radius - face.radius).abs() < 1e-6);
     }
 
     #[test]
