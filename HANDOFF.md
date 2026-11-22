@@ -143,9 +143,12 @@ MediaPipe notes:
 - Colour slots: the source's "Colours" properties (Recolour slot N + its
   colour), on every GLB; a slot's shade is its colour as much darker as the
   material's own (`shade_ratio`).
-- The "🎬 Puppet Animations" dock (`theater-scripts/puppet_animation_dock.rhai`)
-  picks the loop and plays clips. A test with a real clip runs when `THEATER_PUPPET_ANIMATED_GLB` points
-  to an export with a "Wave" clip on RightArm.
+- Animations: the loop is the source's "Animation (loops)" setting (the
+  avatar's Default animation unless another is picked); clips played once
+  come from redeems (Scene's 🎭 Puppet redeem, its 🎬 Puppet animation
+  reaction). There's no animation dock any more. A test with a real clip runs
+  when `THEATER_PUPPET_ANIMATED_GLB` points to an export with a "Wave" clip
+  on RightArm.
 
 ## The controller it holds
 

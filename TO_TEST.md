@@ -184,7 +184,7 @@ what went wrong) and it comes off the list.
 ## Animations (any avatar, not through the avatar's GLB)
 - [ ] Puppet source → 🎬 Pose and animation → Animation folder: a folder with
       Mixamo DAE ("With Skin") and Rig's animation GLBs. Their clips show in
-      the Animation list and 🎬 Puppet Animations; they play (try two avatars).
+      the Animation list and Scene's animation pickers; they play (try two avatars).
 - [ ] A DAE downloaded Without Skin: the OBS log says to download it With Skin.
 - [ ] Drop a new file in the folder while OBS runs, then "🔄 Reload GLBs"
       (top of the source's properties): it's in the list.
@@ -209,8 +209,8 @@ what went wrong) and it comes off the list.
       thumbnails; clicking one sets it.
 
 ## ⚙ Puppet Configuration window
-- [ ] 🎭 Theater menu: Puppet's part (its icon) has "🎬 Puppet Animations"
-      and "⚙ Puppet Configuration…"; no "Tracking…" any more.
+- [ ] 🎭 Theater menu: Puppet's part (its icon) has "⚙ Puppet Configuration…";
+      no "Tracking…" and no "🎬 Puppet Animations" any more.
 - [ ] "⚙ Puppet Configuration…" opens a window (title bar, taskbar button);
       its ✕ hides it, the menu opens it again.
 - [ ] Tabs: General, iFacialMocap, MediaPipe, SteamVR, VR telemetry,
@@ -397,7 +397,6 @@ what went wrong) and it comes off the list.
 
 ## Animations (from Blender)
 - [ ] A GLB with clips: the "Animation" setting loops one in place of the idle motion.
-- [ ] "🎬 Puppet Animations" dock: ▶ plays one once, ■ stops it.
 - [ ] A shape-key clip (a face animation) plays; the body's idle motion stays on.
 
 ## Place filter
