@@ -109,6 +109,11 @@ struct Params {
     use_texture: Ptr,
     alpha_cutoff: Ptr,
     blended: Ptr,
+    grad_b: Ptr,
+    grad_shade_b: Ptr,
+    grad_axis: Ptr,
+    grad_range: Ptr,
+    grad_flow: Ptr,
     light_dir: Ptr,
     light_color: Ptr,
     eye: Ptr,
@@ -217,6 +222,11 @@ impl Shader {
             use_texture: p("use_texture"),
             alpha_cutoff: p("alpha_cutoff"),
             blended: p("blended"),
+            grad_b: p("grad_b"),
+            grad_shade_b: p("grad_shade_b"),
+            grad_axis: p("grad_axis"),
+            grad_range: p("grad_range"),
+            grad_flow: p("grad_flow"),
             light_dir: p("light_dir"),
             light_color: p("light_color"),
             eye: p("eye"),
@@ -339,6 +349,9 @@ struct Mesh {
     /// Its material in its own model, and its UVs as made (a tile moves them: set_uvs)
     local_material: usize,
     uvs: Vec<[f32; 2]>,
+    /// Its vertices at rest: lowest and highest along x, y, z (a gradient
+    /// runs over its colour slot's)
+    rest: [[f32; 2]; 3],
 }
 
 /// A mesh's tile crossfading: the placement before, how far in, and over how long
@@ -409,14 +422,16 @@ fn make_meshes(model: &Model, layer: usize, materials: usize) -> Vec<Mesh> {
             // TEXCOORD0: the UVs; TEXCOORD1–3: the body part, one channel
             // each (the Parts pass). Not one number: across a triangle
             // from torso (0) to leg (6) it would pass through 1–5
-            (*data).num_tex = 4;
-            let tv = obs_copy(&[obs::TVertArray { width: 2, array: std::ptr::null_mut() }, obs::TVertArray { width: 4, array: std::ptr::null_mut() }, obs::TVertArray { width: 4, array: std::ptr::null_mut() }, obs::TVertArray { width: 4, array: std::ptr::null_mut() }]);
+            // TEXCOORD4: where it is at rest (a gradient runs along it, fixed on the body)
+            (*data).num_tex = 5;
+            let tv = obs_copy(&[obs::TVertArray { width: 2, array: std::ptr::null_mut() }, obs::TVertArray { width: 4, array: std::ptr::null_mut() }, obs::TVertArray { width: 4, array: std::ptr::null_mut() }, obs::TVertArray { width: 4, array: std::ptr::null_mut() }, obs::TVertArray { width: 4, array: std::ptr::null_mut() }]);
             // Where its material's texture placement puts them
             (*tv).array = obs_copy(&placed_uvs(&p.uvs, model.materials[p.material].uv)) as *mut _;
             for group in 0..3 {
                 let channels: Vec<[f32; 4]> = p.parts.iter().map(|&k| std::array::from_fn(|c| if k as usize == group * 4 + c { 1.0 } else { 0.0 })).collect();
                 (*tv.add(1 + group)).array = obs_copy(&channels) as *mut _;
             }
+            (*tv.add(4)).array = obs_copy(&points) as *mut _;
             (*data).tvarray = tv;
             // Dynamic: re-posed every frame (update_vertices)
             (api.gs_vertexbuffer_create)(data, obs::GS_DYNAMIC)
@@ -425,7 +440,13 @@ fn make_meshes(model: &Model, layer: usize, materials: usize) -> Vec<Mesh> {
         if vb.is_null() || ib.is_null() {
             continue;
         }
-        meshes.push(Mesh { vb, ib, count: p.indices.len() as u32, material: p.material + materials, prim, vertices: n, layer, local_material: p.material, uvs: p.uvs.clone() });
+        let mut rest = [[f32::MAX, f32::MIN]; 3];
+        for v in &p.positions {
+            for k in 0..3 {
+                rest[k] = [rest[k][0].min(v[k]), rest[k][1].max(v[k])];
+            }
+        }
+        meshes.push(Mesh { vb, ib, count: p.indices.len() as u32, material: p.material + materials, prim, vertices: n, layer, local_material: p.material, uvs: p.uvs.clone(), rest });
     }
     meshes
 }
@@ -485,7 +506,7 @@ pub struct Gpu {
     main_textures: usize,
     /// Colour slots given a colour (sRGB, 0–1), by slot: their materials
     /// show it in place of their own (every layer's)
-    pub colors: std::sync::Mutex<std::collections::HashMap<u32, [f32; 3]>>,
+    pub colors: std::sync::Mutex<std::collections::HashMap<u32, crate::colorfx::Look>>,
     /// How much of each layer shows (0 not drawn, below 1 dissolving; missing: 1)
     pub fade: std::sync::Mutex<Vec<f32>>,
     /// Where a reflection source is drawn (render_source)
@@ -1170,6 +1191,28 @@ impl Gpu {
         }
     }
 
+    /// A colour slot's gradient (or flowing rainbow) for the next draw: its
+    /// end colour, along which way, over its parts at rest (`rest`); none: off
+    unsafe fn set_gradient(&self, shader: &Shader, m: &crate::model::Material, look: Option<crate::colorfx::Look>, rest: [[f32; 2]; 3]) {
+        let api = obs::api();
+        let p = &shader.params;
+        let Some(l) = look.filter(|l| l.a != l.b || l.flow[2] > 0.0) else {
+            unsafe { (api.gs_effect_set_vec4)(p.grad_b, &[0.0, 0.0, 0.0, 0.0]) };
+            return;
+        };
+        let b = crate::model::recoloured(m, l.b);
+        let mut axis = [0.0f32; 4];
+        axis[l.axis.min(2)] = 1.0;
+        let r = rest[l.axis.min(2)];
+        unsafe {
+            (api.gs_effect_set_vec4)(p.grad_b, &[b.color[0], b.color[1], b.color[2], 1.0]);
+            (api.gs_effect_set_vec4)(p.grad_shade_b, &[b.shade[0], b.shade[1], b.shade[2], 1.0]);
+            (api.gs_effect_set_vec4)(p.grad_axis, &axis);
+            (api.gs_effect_set_vec4)(p.grad_range, &[r[0], r[1], 0.0, 0.0]);
+            (api.gs_effect_set_vec4)(p.grad_flow, &[l.flow[0], l.flow[1], l.flow[2], m.shade_ratio]);
+        }
+    }
+
     /// Draws the meshes whose material `wanted`, with `technique`
     unsafe fn pass(&self, shader: &Shader, values: &FrameValues, technique: &std::ffi::CStr, wanted: impl Fn(&Material) -> bool) {
         let api = obs::api();
@@ -1178,6 +1221,16 @@ impl Gpu {
         let fade = self.fade.lock().unwrap().clone();
         let uv_now = self.uv_now.lock().unwrap().clone();
         let uv_fade = self.uv_fade.lock().unwrap().clone();
+        // Each colour slot's parts at rest, lowest and highest along x, y, z (its gradient runs over them)
+        let mut slot_rest: std::collections::HashMap<u32, [[f32; 2]; 3]> = std::collections::HashMap::new();
+        for mesh in &self.meshes {
+            if let Some(slot) = self.materials[mesh.material].color_slot {
+                let e = slot_rest.entry(slot).or_insert([[f32::MAX, f32::MIN]; 3]);
+                for k in 0..3 {
+                    e[k] = [e[k][0].min(mesh.rest[k][0]), e[k][1].max(mesh.rest[k][1])];
+                }
+            }
+        }
         // The controller isn't a body part to hit
         let skip_layer = if technique == c"Parts" { *self.prop_layer.lock().unwrap() } else { None };
         for (i, mesh) in self.meshes.iter().enumerate() {
@@ -1187,10 +1240,12 @@ impl Gpu {
                 continue;
             }
             // Its colour slot's colour, when the slot has one
-            let recoloured = m.color_slot.and_then(|s| colors.get(&s)).map(|rgb| crate::model::recoloured(m, *rgb));
+            let look = m.color_slot.and_then(|s| colors.get(&s)).copied();
+            let recoloured = look.map(|l| crate::model::recoloured(m, l.a));
             unsafe {
                 shader.set_frame(values);
                 self.set_material(shader, recoloured.as_ref().unwrap_or(m), &self.textures);
+                self.set_gradient(shader, m, look, m.color_slot.and_then(|s| slot_rest.get(&s)).copied().unwrap_or(mesh.rest));
                 // Its GLB fading, its tile crossfading (set after set_frame zeroed them)
                 let p = &shader.params;
                 (api.gs_effect_set_float)(p.glb_fade, shows.min(1.0));
@@ -1225,10 +1280,12 @@ impl Gpu {
                 if !wanted(m) {
                     continue;
                 }
-                let recoloured = m.color_slot.and_then(|s| colors.get(&s)).map(|rgb| crate::model::recoloured(m, *rgb));
+                let look = m.color_slot.and_then(|s| colors.get(&s)).copied();
+                let recoloured = look.map(|l| crate::model::recoloured(m, l.a));
                 unsafe {
                     shader.set_frame(values);
                     self.set_material(shader, recoloured.as_ref().unwrap_or(m), textures);
+                    self.set_gradient(shader, m, look, mesh.rest);
                     let p = &shader.params;
                     (api.gs_effect_set_float)(p.glb_fade, shows.min(1.0));
                     (api.gs_effect_set_vec4)(p.tile_map, &[1.0, 1.0, 0.0, 0.0]);

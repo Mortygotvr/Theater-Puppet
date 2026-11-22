@@ -704,8 +704,35 @@ fn ask(args: &Value, source: Ptr, remote: &Shared, shown: &mut Option<Vec<bool>>
                 Value::Bool(false) | Value::Null => r.color_fx.set_rainbow(None, Some(fade)),
                 v => {
                     let speed = v.get("speed").and_then(|s| s.as_f64()).unwrap_or(0.0).clamp(-5.0, 5.0) as f32;
-                    r.color_fx.set_rainbow(Some(crate::colorfx::Rainbow { speed, fade }), None);
+                    // Flowing along the part ("down", "side", "front"), else one hue a slot
+                    let flow = v.get("flow").and_then(|f| f.as_str()).filter(|f| !f.is_empty() && *f != "none").map(crate::colorfx::axis_from);
+                    r.color_fx.set_rainbow(Some(crate::colorfx::Rainbow { speed, fade, flow }), None);
                     *undo = Some(("rainbow".into(), Undo::Args(json!({ "action": "color", "rainbow": false, "fade": fade }))));
+                }
+            }
+        }
+        // A gradient: { top, bottom, direction, slots? } on the slots (all when
+        // none given); false: off
+        "color" if args.get("gradient").is_some() => {
+            let fade = args.get("fade").and_then(|v| v.as_f64()).unwrap_or(0.0).clamp(0.0, 30.0) as f32;
+            match &args["gradient"] {
+                Value::Bool(false) | Value::Null => r.color_fx.set_gradient(None, Some(fade)),
+                g => {
+                    let colour = |k: &str| -> Result<[f32; 3], String> {
+                        let t = g.get(k).and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+                        parse_color(&t).ok_or_else(|| format!("gradient {k}: colour \"{t}\": #rrggbb, a name (red, pink…) or random"))
+                    };
+                    let (top, mut bottom) = (colour("top")?, colour("bottom")?);
+                    // Both random: not the same one (a hue apart on the wheel)
+                    let is_random = |k: &str| g.get(k).and_then(|v| v.as_str()).is_some_and(|t| t.trim().eq_ignore_ascii_case("random"));
+                    if is_random("top") && is_random("bottom") {
+                        let base = top[0] * 0.37 + top[1] * 0.11 + top[2] * 0.53;
+                        bottom = crate::colorfx::hue(base + 0.4);
+                    }
+                    let axis = crate::colorfx::axis_from(g.get("direction").and_then(|v| v.as_str()).unwrap_or("down"));
+                    let slots = g.get("slots").and_then(|s| s.as_array()).map(|a| a.iter().filter_map(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))).map(|n| n as u32).collect::<Vec<_>>()).filter(|v| !v.is_empty());
+                    r.color_fx.set_gradient(Some(crate::colorfx::Gradient { top, bottom, axis, slots, fade }), None);
+                    *undo = Some(("gradient".into(), Undo::Args(json!({ "action": "color", "gradient": false, "fade": fade }))));
                 }
             }
         }

@@ -167,6 +167,17 @@ what went wrong) and it comes off the list.
 - [ ] "One slot" works as before; a viewer's "pink", "gold", "#33ccff",
       "random" in {1} too.
 
+## Colour gradients and the flowing rainbow
+- [ ] The "🌗 Gradient" redeem (made for you: pink at the top, blue at the
+      bottom, every slot, 1 s in and out, 1 min): each part (her red, the
+      vest's grey, the iris) goes from pink to blue down the avatar; moving,
+      the colours stay on the body. It fades out at the end.
+- [ ] Gradient direction "Left → right (as seen)" and "Front → back"; Slots
+      "2" only: the other slots untouched.
+- [ ] 🌈 Rainbow, Flow "Down the part", turning: the hues run down each part.
+- [ ] (The shader change only compiles in OBS: the avatar draws, no effect
+      error in the log.)
+
 ## Theater Rig: colour slots on some colours, and Overlay
 - [ ] Restart Blender. Colour slot box: Pick from Selected on her garment:
       its colours show as swatches with their share (her reds as one).

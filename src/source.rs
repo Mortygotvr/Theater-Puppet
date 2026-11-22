@@ -319,7 +319,7 @@ struct Puppet {
     /// Colour slots given a colour (sRGB, 0–1)
     colors: Mutex<HashMap<u32, [f32; 3]>>,
     /// The colours as they show this frame (glides, the rainbow: colorfx.rs)
-    colors_shown: Mutex<HashMap<u32, [f32; 3]>>,
+    colors_shown: Mutex<HashMap<u32, crate::colorfx::Look>>,
     running: Mutex<[Option<Running>; SLOTS]>,
     /// Bumped by each new file, so a slow load that finishes late is dropped
     generation: Arc<AtomicU64>,

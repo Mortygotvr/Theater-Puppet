@@ -5,6 +5,16 @@ uniform float4x4 mvp;
 uniform texture2d image;
 uniform float4 base_color;
 uniform float4 shade_color;
+// A colour slot's gradient (colorfx.rs): base_color / shade_color at the
+// start of the way (top, the avatar's left, the front), grad_b / grad_shade_b
+// at its end; along grad_axis, over grad_range (its parts at rest: lowest,
+// highest); grad_b.w 0: off. grad_flow: a rainbow along it (its hue at the
+// start, how much of the wheel, how much shows, the shade's ratio)
+uniform float4 grad_b;
+uniform float4 grad_shade_b;
+uniform float4 grad_axis;
+uniform float4 grad_range;
+uniform float4 grad_flow;
 uniform float use_texture;
 uniform float alpha_cutoff;
 uniform float blended;
@@ -96,6 +106,8 @@ struct VertIn {
 	float4 pos  : POSITION;
 	float3 norm : NORMAL;
 	float2 uv   : TEXCOORD0;
+	// Where it is at rest (a gradient runs along it)
+	float4 rest : TEXCOORD4;
 };
 
 struct VertOut {
@@ -103,6 +115,7 @@ struct VertOut {
 	float2 uv   : TEXCOORD0;
 	float3 norm : TEXCOORD1;
 	float3 wpos : TEXCOORD2;
+	float3 rest : TEXCOORD3;
 };
 
 struct Surface {
@@ -173,6 +186,7 @@ VertOut VSPuppet(VertIn v)
 	o.uv = v.uv;
 	o.norm = v.norm;
 	o.wpos = v.pos.xyz;
+	o.rest = v.rest.xyz;
 	return o;
 }
 
@@ -211,6 +225,13 @@ float3 env_at(float3 r)
 	return env.Sample(env_sampler, at).rgb;
 }
 
+// A hue (turns) at full colour, a little lifted (as colorfx.rs's)
+float3 rainbow_hue(float h)
+{
+	float3 k = saturate(abs(frac(h + float3(1.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0);
+	return 0.15 + k * 0.85;
+}
+
 // The mesh's own UVs: the base colour's placement undone
 float2 own_uv(float2 uv)
 {
@@ -226,12 +247,29 @@ float4 PSPuppet(VertOut v) : TARGET
 	float3 emitted = emissive_tex.Sample(emissive_sampler, ouv).rgb;
 	float3 nmap = normal_tex.Sample(normal_sampler, ouv).xyz * 2.0 - 1.0;
 	float3 mrmap = mr_tex.Sample(mr_sampler, ouv).rgb;
-	float4 albedo = base_color * t;
+	// A colour slot's gradient: from its start colour to its end one along the part at rest
+	float4 bc = base_color;
+	float3 sc = shade_color.rgb;
+	if (grad_b.w > 0.5) {
+		float along = dot(v.rest, grad_axis.xyz);
+		// 0 at the start of the way (the top: the highest), 1 at its end
+		float g = saturate((grad_range.y - along) / max(grad_range.y - grad_range.x, 1e-5));
+		if (grad_axis.x > 0.5)
+			g = 1.0 - g;
+		bc.rgb = lerp(base_color.rgb, grad_b.rgb, g);
+		sc = lerp(shade_color.rgb, grad_shade_b.rgb, g);
+		if (grad_flow.z > 0.0) {
+			float3 h = rainbow_hue(grad_flow.x + g * grad_flow.y);
+			bc.rgb = lerp(bc.rgb, h, grad_flow.z);
+			sc = lerp(sc, h * grad_flow.w, grad_flow.z);
+		}
+	}
+	float4 albedo = bc * t;
 	if (albedo.a < alpha_cutoff || faded_out(v.pos.xy))
 		discard;
 	Surface s;
 	s.albedo = albedo;
-	s.shade = shade_color.rgb * t.rgb;
+	s.shade = sc * t.rgb;
 	s.normal = mapped_normal(normalize(v.norm), v.wpos, ouv, nmap);
 	float3 mr = lerp(float3(1.0, 1.0, 1.0), mrmap, saturate(use_mr));
 	s.metallic = saturate(metallic * mr.b);
