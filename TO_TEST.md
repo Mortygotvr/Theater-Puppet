@@ -3,16 +3,11 @@
 What's built but not yet tried live, newest first. Tick it (or tell Claude
 what went wrong) and it comes off the list.
 
-## MeowFace / inputs sidelined by General
-- [ ] With General → Expressions on iFacialMocap only, MeowFace's tab says
-      "receiving, but General gives Expressions, Head turn to iFacialMocap…".
-      Set them to Auto (or MeowFace): its shapes move the face.
-- [ ] With a real phone: MeowFace keeps sending (Puppet now asks with
-      "sendForSeconds" as VSeeFace does, and "time"). Without one:
-      python tools/fake_meowface.py (MeowFace's address 127.0.0.1).
-- [ ] theater_puppet.log, MeowFace's first face: how many ARKit shapes move,
-      and which of its names aren't ARKit's (skipped). Send it to Claude if
-      the face still doesn't move.
+## Inputs sidelined by General; MeowFace removed
+- [ ] With General → Expressions on MediaPipe only, iFacialMocap's tab says
+      "receiving, but General gives Expressions… to MediaPipe".
+- [ ] MeowFace is gone: no tab, not in General's lists; tracking settings
+      that gave a part to it load with that part on Auto (the rest kept).
 
 ## GLBs with all-zero shape key data
 - [ ] Desktop\Armature.glb (Theater Rig export) draws (it showed nothing:
@@ -139,7 +134,7 @@ what went wrong) and it comes off the list.
       and "⚙ Puppet Configuration…"; no "Tracking…" any more.
 - [ ] "⚙ Puppet Configuration…" opens a window (title bar, taskbar button);
       its ✕ hides it, the menu opens it again.
-- [ ] Tabs: General, iFacialMocap, MeowFace, MediaPipe, SteamVR, VR telemetry,
+- [ ] Tabs: General, iFacialMocap, MediaPipe, SteamVR, VR telemetry,
       Leap Motion, Controller, Keyboard & mouse. Each one's switches, address
       (Enter or Apply), sliders and buttons work, and its "Now:" status updates.
 - [ ] General / Controller / Keyboard & mouse: the Puppet list (with two
@@ -333,6 +328,5 @@ what went wrong) and it comes off the list.
 ## Tracking
 - [ ] VR telemetry fingers (UDP 7501): finger curls on the avatar.
 - [ ] SteamVR (needs a headset SteamVR can stream to; the Frame + Arc B580 can't).
-- [ ] MeowFace (needs an Android phone).
 - [ ] Head turns, hand positions and finger curls go the right way (not yet
       checked by watching a person).

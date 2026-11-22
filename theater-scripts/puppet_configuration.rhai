@@ -24,7 +24,7 @@ fn init() {
 
 fn tabs() {
     [
-        ["General", "🎯 General"], ["IFacialMocap", "📱 iFacialMocap"], ["MeowFace", "🐱 MeowFace"], ["MediaPipe", "📷 MediaPipe"], ["SteamVr", "🥽 SteamVR"],
+        ["General", "🎯 General"], ["IFacialMocap", "📱 iFacialMocap"], ["MediaPipe", "📷 MediaPipe"], ["SteamVr", "🥽 SteamVR"],
         ["Telemetry", "📡 VR telemetry"], ["Leap", "🖐 Leap Motion"], ["Controller", "🎮 Controller"], ["Desk", "⌨ Keyboard & mouse"], ["Network", "🌐 Network"],
     ]
 }
@@ -263,12 +263,6 @@ fn ui(ui) {
                 tracking(#{ action: "ifacialmocap_recentre" });
             }
             ui.small("Sit as you normally do, then click. Head position: set it to iFacialMocap in General.");
-        },
-        "MeowFace" => {
-            input_on(ui, c, "meowface", "MeowFace (Android)");
-            status_line(ui, s, "MeowFace");
-            firewall_line(ui, s);
-            this.phone_address(ui, c, "meowface");
         },
         "MediaPipe" => {
             input_on(ui, c, "mediapipe", "MediaPipe (webcam: body and face)");

@@ -111,7 +111,7 @@ pub fn answer(args: &str) -> String {
                 merge(&mut now, values);
                 match serde_json::from_value::<config::Config>(now) {
                     Ok(mut c) => {
-                        for phone in [&mut c.ifacialmocap, &mut c.meowface, &mut c.telemetry] {
+                        for phone in [&mut c.ifacialmocap, &mut c.telemetry] {
                             phone.ip = phone.ip.trim().to_string();
                         }
                         // Input from another computer: a pairing code once it's on

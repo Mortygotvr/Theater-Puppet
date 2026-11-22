@@ -1,8 +1,8 @@
-//! Windows Firewall and the inputs that receive from the network (MeowFace,
-//! iFacialMocap, input from another computer): whether OBS is let in, and a
+//! Windows Firewall and the inputs that receive from the network
+//! (iFacialMocap, VR telemetry, input from another computer): whether OBS is let in, and a
 //! way to let it in that asks Windows' permission (an administrator prompt).
 //!
-//! Windows allows each program by itself: VSeeFace being allowed doesn't let
+//! Windows allows each program by itself: another app being allowed doesn't let
 //! OBS in, and a closed firewall prompt leaves a Block rule for OBS without a
 //! word. The check (PowerShell, a couple of seconds, in the background) reads
 //! OBS's inbound rules and the networks' kinds; letting OBS in turns its Block
@@ -138,7 +138,7 @@ fn allow_script(program: &str) -> String {
     format!(
         "$p = {}; $mine = 'OBS Studio (Theater Puppet)'; \
          Get-NetFirewallApplicationFilter | Where-Object {{ [Environment]::ExpandEnvironmentVariables($_.Program) -eq $p }} | Get-NetFirewallRule | Where-Object {{ $_.Direction -eq 'Inbound' -and $_.Action -eq 'Block' -and $_.Enabled -eq 'True' }} | Disable-NetFirewallRule; \
-         if (-not (Get-NetFirewallRule -DisplayName $mine -ErrorAction SilentlyContinue)) {{ New-NetFirewallRule -DisplayName $mine -Description 'Theater Puppet: phone and network input (MeowFace, iFacialMocap, Network)' -Direction Inbound -Action Allow -Program $p -Profile Private, Domain | Out-Null }}",
+         if (-not (Get-NetFirewallRule -DisplayName $mine -ErrorAction SilentlyContinue)) {{ New-NetFirewallRule -DisplayName $mine -Description 'Theater Puppet: phone and network input (iFacialMocap, Network)' -Direction Inbound -Action Allow -Program $p -Profile Private, Domain | Out-Null }}",
         quoted(program)
     )
 }

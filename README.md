@@ -8,7 +8,7 @@ The avatar is a GLB prepared by [Theater Rig](../theater-rig), the Blender add-o
 
 First version: it draws the avatar at rest (the T-pose from Theater Rig), with its textures, cut-out and blended transparency, and soft light. Colour-slot materials show their `color_default`.
 
-Coming: posing and spring bones, colour slots, face tracking (MeowFace, iFacialMocap), body and hands (MediaPipe, Leap Motion).
+Coming: posing and spring bones, colour slots, face tracking (iFacialMocap), body and hands (MediaPipe, Leap Motion).
 
 ## Using it
 

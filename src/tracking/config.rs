@@ -64,7 +64,6 @@ impl Assign {
 #[serde(default)]
 pub struct Config {
     pub ifacialmocap: Phone,
-    pub meowface: Phone,
     pub steamvr: bool,
     /// The headset's own telemetry server: its address, poses on this port, fingers on the next
     pub telemetry: Phone,
@@ -112,7 +111,6 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             ifacialmocap: Phone { enabled: false, ip: String::new(), port: 49983 },
-            meowface: Phone { enabled: false, ip: String::new(), port: 21412 },
             steamvr: false,
             telemetry: Phone { enabled: false, ip: String::new(), port: super::telemetry::POSE_PORT },
             telemetry_scale: 1.0,
@@ -223,6 +221,12 @@ mod tests {
         assert_eq!(serde_json::from_str::<Config>(&json).unwrap(), c);
         // An older file with fewer settings still reads: the rest are the defaults
         let old: Config = serde_json::from_str(r#"{"steamvr":true}"#).unwrap();
-        assert!(old.steamvr && old.meowface.port == 21412 && old.assign.arms == Pick::Auto);
+        assert!(old.steamvr && old.assign.arms == Pick::Auto);
+        // A file from when Puppet had MeowFace: everything else kept, its picks Auto
+        let before: Config = serde_json::from_str(r#"{"meowface":{"enabled":true,"ip":"192.168.1.9","port":21412},
+            "ifacialmocap":{"enabled":true,"ip":"192.168.1.20","port":49983},
+            "assign":{"expressions":{"Only":"MeowFace"},"head_turn":{"Only":"IFacialMocap"},"arms":"Off"}}"#).unwrap();
+        assert!(before.ifacialmocap.enabled && before.ifacialmocap.ip == "192.168.1.20");
+        assert_eq!((before.assign.expressions, before.assign.head_turn, before.assign.arms), (Pick::Auto, Pick::Only(Source::IFacialMocap), Pick::Off));
     }
 }

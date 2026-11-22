@@ -32,7 +32,6 @@ pub mod network;
 pub mod menu;
 pub mod steamvr;
 pub mod telemetry;
-pub mod vts;
 
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -64,7 +63,6 @@ pub fn arkit_index(name: &str) -> Option<usize> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Source {
     IFacialMocap,
-    MeowFace,
     SteamVr,
     Leap,
     MediaPipe,
@@ -77,12 +75,11 @@ pub enum Source {
 }
 
 impl Source {
-    pub const ALL: [Source; 8] = [Source::IFacialMocap, Source::MeowFace, Source::SteamVr, Source::Telemetry, Source::Leap, Source::MediaPipe, Source::Controller, Source::Desk];
+    pub const ALL: [Source; 7] = [Source::IFacialMocap, Source::SteamVr, Source::Telemetry, Source::Leap, Source::MediaPipe, Source::Controller, Source::Desk];
 
     pub fn name(self) -> &'static str {
         match self {
             Source::IFacialMocap => "iFacialMocap",
-            Source::MeowFace => "MeowFace",
             Source::SteamVr => "SteamVR",
             Source::Leap => "Leap Motion",
             Source::MediaPipe => "MediaPipe",
@@ -239,8 +236,8 @@ impl Part {
     /// The inputs that can drive it
     pub fn inputs(self) -> &'static [Source] {
         match self {
-            Part::Expressions => &[Source::IFacialMocap, Source::MeowFace, Source::MediaPipe],
-            Part::HeadTurn => &[Source::IFacialMocap, Source::MeowFace, Source::MediaPipe, Source::SteamVr, Source::Telemetry],
+            Part::Expressions => &[Source::IFacialMocap, Source::MediaPipe],
+            Part::HeadTurn => &[Source::IFacialMocap, Source::MediaPipe, Source::SteamVr, Source::Telemetry],
             Part::HeadPosition => &[Source::SteamVr, Source::Telemetry, Source::IFacialMocap, Source::MediaPipe],
             Part::Arms => &[Source::SteamVr, Source::Telemetry, Source::Leap, Source::MediaPipe, Source::Controller, Source::Desk],
             Part::Fingers => &[Source::Leap, Source::MediaPipe, Source::SteamVr, Source::Telemetry],
@@ -278,7 +275,7 @@ pub fn sidelined(source: Source, assign: &config::Assign) -> Option<String> {
 }
 
 /// Which input drives a part
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
 pub enum Pick {
     /// Whichever of its inputs sent last
     #[default]
@@ -286,6 +283,19 @@ pub enum Pick {
     /// Nothing: the idle pose keeps it
     Off,
     Only(Source),
+}
+
+/// As saved ("Auto", "Off", {"Only": "<input>"}); an input Puppet doesn't
+/// have (any more: MeowFace) is Auto, so the rest of the file still reads
+impl<'de> serde::Deserialize<'de> for Pick {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Pick, D::Error> {
+        let v = serde_json::Value::deserialize(d)?;
+        Ok(match &v {
+            serde_json::Value::String(s) if s == "Off" => Pick::Off,
+            serde_json::Value::Object(m) => m.get("Only").and_then(|o| serde_json::from_value::<Source>(o.clone()).ok()).map(Pick::Only).unwrap_or(Pick::Auto),
+            _ => Pick::Auto,
+        })
+    }
 }
 
 /// What the avatar goes by this frame: each part from the input picked for
@@ -427,7 +437,6 @@ pub fn from_unity_euler(x: f32, y: f32, z: f32) -> Quat {
 pub fn start() {
     let cfg = config::get();
     ifacialmocap::restart(&cfg);
-    vts::restart(&cfg);
     steamvr::restart(&cfg);
     telemetry::restart(&cfg);
     leap::restart(&cfg);
@@ -443,18 +452,17 @@ mod tests {
     fn an_input_sidelined_by_general_is_told() {
         use super::*;
         let mut assign = config::Assign::default();
-        assert_eq!(sidelined(Source::MeowFace, &assign), None, "Auto: it drives its parts");
-        assign.expressions = Pick::Only(Source::IFacialMocap);
-        assign.head_turn = Pick::Only(Source::IFacialMocap);
-        let note = sidelined(Source::MeowFace, &assign).unwrap();
-        assert!(note.contains("Expressions, Head turn to iFacialMocap") && note.contains("Auto or MeowFace"), "{note}");
-        assert_eq!(sidelined(Source::IFacialMocap, &assign), None, "iFacialMocap has them");
+        assert_eq!(sidelined(Source::IFacialMocap, &assign), None, "Auto: it drives its parts");
+        assign.expressions = Pick::Only(Source::MediaPipe);
+        assign.head_turn = Pick::Only(Source::MediaPipe);
+        let note = sidelined(Source::IFacialMocap, &assign).unwrap();
+        assert!(note.contains("Expressions, Head turn to MediaPipe") && note.contains("Auto or iFacialMocap"), "{note}");
         assign.expressions = Pick::Off;
-        assert!(sidelined(Source::MeowFace, &assign).unwrap().contains("Expressions off"));
-        // Parts it can't drive don't count (MeowFace has no arms)
+        assert!(sidelined(Source::IFacialMocap, &assign).unwrap().contains("Expressions off"));
+        // Parts it can't drive don't count (iFacialMocap has no arms)
         let mut arms = config::Assign::default();
         arms.arms = Pick::Only(Source::Desk);
-        assert_eq!(sidelined(Source::MeowFace, &arms), None);
+        assert_eq!(sidelined(Source::IFacialMocap, &arms), None);
     }
 
     use super::*;
