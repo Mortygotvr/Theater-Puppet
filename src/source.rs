@@ -1243,7 +1243,9 @@ unsafe extern "C" fn update(data: Ptr, settings: Ptr) {
 
     let file = get_string(settings, S_FILE);
     let folder = get_string(settings, S_ANIM_FOLDER).trim().to_string();
-    let stamp = crate::retarget::folder_stamp(&folder);
+    // Its own folder's files and the library's (Configuration → Animations)
+    let mut stamp = crate::retarget::folder_stamp(&folder);
+    stamp.extend(crate::retarget::folder_stamp(&crate::retarget::library().to_string_lossy()));
     let file_written = written(&file);
     {
         let mut current = puppet.file.lock().unwrap();
@@ -1269,6 +1271,18 @@ fn written(path: &str) -> u64 {
     std::fs::metadata(path).and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_millis() as u64)
 }
 
+/// Runs a Puppet source's settings again (an animation added to the library: read)
+pub(crate) fn rerun_settings(source: Ptr) {
+    let api = obs::api();
+    unsafe {
+        let data = (api.obs_data_create)();
+        if !data.is_null() {
+            (api.obs_source_update)(source, data);
+            (api.obs_data_release)(data);
+        }
+    }
+}
+
 /// Loads the avatar (puppet.file) in the background, with the animation
 /// folder's clips put on it
 fn load_avatar(puppet: &Puppet) {
@@ -1286,16 +1300,23 @@ fn load_avatar(puppet: &Puppet) {
         .spawn(move || {
             let started = std::time::Instant::now();
             let mut result = model::load(&PathBuf::from(&file));
-            // The animation folder's clips, put on this avatar
-            if let (Ok(m), false) = (&mut result, folder.is_empty()) {
-                let (clips, notes) = crate::retarget::folder_onto(std::path::Path::new(&folder), m);
-                for n in notes {
-                    crate::log(&format!("[Puppet] ⚠️ Animation folder: {n}"));
+            // The library's clips (Configuration → Animations) and its own folder's, put on this avatar
+            if let Ok(m) = &mut result {
+                let library = crate::retarget::library();
+                let mut folders = vec![library.clone()];
+                if !folder.is_empty() && std::path::Path::new(&folder) != library {
+                    folders.push(PathBuf::from(&folder));
                 }
-                if !clips.is_empty() {
-                    crate::log(&format!("[Puppet] 🎞 Animation folder {folder}: {} clip(s) put on the avatar", clips.len()));
+                for dir in folders.into_iter().filter(|d| d.is_dir()) {
+                    let (clips, notes) = crate::retarget::folder_onto(&dir, m);
+                    for n in notes {
+                        crate::log(&format!("[Puppet] ⚠️ Animations: {n}"));
+                    }
+                    if !clips.is_empty() {
+                        crate::log(&format!("[Puppet] 🎞 Animations from {}: {} clip(s) put on the avatar", dir.display(), clips.len()));
+                    }
+                    m.clips.extend(clips);
                 }
-                m.clips.extend(clips);
             }
             match &result {
                 Ok(m) => crate::log(&format!(

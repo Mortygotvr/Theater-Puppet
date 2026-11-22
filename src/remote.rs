@@ -816,6 +816,30 @@ pub fn answer(args: &str) -> String {
         .collect();
     let targets: Vec<&(Ptr, String, Shared)> = puppets.iter().filter(|(_, n, _)| which.is_empty() || *n == which).collect();
     let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("list");
+    // The animations library (Configuration → 🎬 Animations): every Puppet's
+    match action {
+        "anim_library" => return crate::retarget::library_listing().to_string(),
+        "anim_add" | "anim_remove" => {
+            let text = |k: &str| args.get(k).and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+            let done = if action == "anim_add" {
+                crate::retarget::library_add(std::path::Path::new(&text("path"))).map(|(file, clips)| json!({ "ok": true, "file": file, "clips": clips.iter().map(|(n, d)| json!({ "name": n, "seconds": d })).collect::<Vec<_>>() }))
+            } else {
+                crate::retarget::library_remove(&text("file")).map(|()| json!({ "ok": true }))
+            };
+            return match done {
+                Ok(v) => {
+                    // Every Puppet reads its animations again
+                    for (source, _, _) in &puppets {
+                        crate::source::rerun_settings(*source);
+                    }
+                    crate::log(&format!("[Puppet] 🎞 Animations library: {action} {}", if action == "anim_add" { text("path") } else { text("file") }));
+                    v.to_string()
+                }
+                Err(e) => json!({ "ok": false, "error": e }).to_string(),
+            };
+        }
+        _ => {}
+    }
     if action == "avatar" || action == "avatar_set" {
         let Some((source, _, _)) = targets.first() else {
             return json!({ "ok": false, "error": "no Puppet source" }).to_string();

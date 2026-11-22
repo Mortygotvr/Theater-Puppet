@@ -167,6 +167,13 @@ what went wrong) and it comes off the list.
 - [ ] "One slot" works as before; a viewer's "pink", "gold", "#33ccff",
       "random" in {1} too.
 
+## ⚙ Configuration → 🎬 Animations
+- [ ] ➕ Add animation… → a Mixamo .dae downloaded With Skin: "Added …: its
+      clip"; at once in every Puppet's Animation list and Scene's pickers.
+- [ ] A .dae Without Skin: "Not added: … download it With Skin".
+- [ ] A Theater Rig animation .glb: added the same way.
+- [ ] ✕ on one: gone from the list and from the Puppets' animations.
+
 ## Colour gradients and the flowing rainbow
 - [ ] The "🌗 Gradient" redeem (made for you: pink at the top, blue at the
       bottom, every slot, 1 s in and out, 1 min): each part (her red, the

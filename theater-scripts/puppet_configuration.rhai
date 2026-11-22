@@ -26,6 +26,7 @@ fn tabs() {
     [
         ["General", "🎯 General"], ["IFacialMocap", "📱 iFacialMocap"], ["MediaPipe", "📷 MediaPipe"], ["SteamVr", "🥽 SteamVR"],
         ["Telemetry", "📡 VR telemetry"], ["Leap", "🖐 Leap Motion"], ["Controller", "🎮 Controller"], ["Desk", "⌨ Keyboard & mouse"], ["Network", "🌐 Network"],
+        ["Animations", "🎬 Animations"],
     ]
 }
 
@@ -229,6 +230,56 @@ fn ui(ui) {
     }
 
     switch this.tab {
+        "Animations" => {
+            ui.strong("Animations every Puppet plays");
+            ui.small("Mixamo's .dae (downloaded \"With Skin\") or Theater Rig's animation .glb: added here, they're in each Puppet's Animation list and in Scene's redeems, on every avatar.");
+            if ui.button("➕ Add animation…") {
+                let p = pick_file("Add an animation", "Animations (*.dae, *.glb) | *.dae *.glb");
+                if p != "" {
+                    let r = call_proc("theater_puppet_command", #{ action: "anim_add", path: p });
+                    this.note = if type_of(r) != "map" {
+                        "Theater Puppet isn't loaded."
+                    } else if "ok" in r && r.ok {
+                        let names = "";
+                        for c in r.clips {
+                            if names != "" { names += ", "; }
+                            names += c.name;
+                        }
+                        `Added ${r.file}: ${names}`
+                    } else {
+                        `Not added: ${r.error}`
+                    };
+                }
+            }
+            if this.note != "" { ui.small(this.note); }
+            ui.separator();
+            let lib = call_proc("theater_puppet_command", #{ action: "anim_library" });
+            if type_of(lib) != "map" || !("files" in lib) {
+                ui.small("Theater Puppet isn't loaded.");
+            } else if lib.files.len() == 0 {
+                ui.small("None yet: ➕ Add animation…");
+            } else {
+                for f in lib.files {
+                    ui.row();
+                    if ui.button("✕") {
+                        call_proc("theater_puppet_command", #{ action: "anim_remove", file: f.file });
+                        this.note = `Removed ${f.file}`;
+                    }
+                    if f.error != "" {
+                        ui.colored(`${f.file}: ${f.error}`, 0xFFEF4444);
+                    } else {
+                        let names = "";
+                        for c in f.clips {
+                            if names != "" { names += ", "; }
+                            names += `${c.name} (${round(c.seconds * 10.0) / 10.0} s)`;
+                        }
+                        ui.label(`${f.file}: ${names}`);
+                    }
+                    ui.end();
+                }
+                ui.small(`Kept in ${lib.folder}`);
+            }
+        },
         "General" => {
             if type_of(avatar) == "map" {
                 av_check(ui, this.puppet, avatar, "tracked", "This Puppet follows tracking");

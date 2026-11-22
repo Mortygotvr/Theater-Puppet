@@ -176,9 +176,110 @@ pub fn folder_stamp(folder: &str) -> Vec<(String, u64)> {
     out
 }
 
+/// The animations library: the files added in the Configuration window
+/// (🎬 Animations), every Puppet's
+pub fn library() -> std::path::PathBuf {
+    crate::config_dir().join("animations")
+}
+
+/// An animation file as the folder reads it: (its clips: name, seconds), or
+/// why it won't do
+pub fn check_file(path: &Path) -> Result<Vec<(String, f32)>, String> {
+    if !is_animation(path) {
+        return Err("not a .dae or .glb".into());
+    }
+    // (Its problem said without its path: the window shows the file's name)
+    let short = |e: String| e.strip_prefix(&format!("{}: ", path.display())).map(str::to_string).unwrap_or(e);
+    let m = if path.extension().is_some_and(|x| x.eq_ignore_ascii_case("dae")) { crate::dae::load(path).map_err(short)? } else { crate::model::load_animation(path).map_err(short)? };
+    if m.node("Hips").is_none() {
+        return Err("no Hips bone: not a Mixamo skeleton, nor one Theater Rig named".into());
+    }
+    if m.clips.is_empty() {
+        return Err("no animation in it".into());
+    }
+    Ok(m.clips.iter().map(|c| (c.name.clone(), c.duration)).collect())
+}
+
+/// The library's files, each with its clips or its problem (read again
+/// only when a file changed)
+pub fn library_listing() -> serde_json::Value {
+    static CACHE: std::sync::Mutex<Option<(Vec<(String, u64)>, serde_json::Value)>> = std::sync::Mutex::new(None);
+    let dir = library();
+    let stamp = folder_stamp(&dir.to_string_lossy());
+    let mut cache = CACHE.lock().unwrap();
+    if let Some((s, v)) = cache.as_ref() {
+        if *s == stamp {
+            return v.clone();
+        }
+    }
+    let files: Vec<serde_json::Value> = stamp
+        .iter()
+        .map(|(f, _)| {
+            let p = Path::new(f);
+            let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            match check_file(p) {
+                Ok(clips) => serde_json::json!({ "file": name, "clips": clips.iter().map(|(n, d)| serde_json::json!({ "name": n, "seconds": d })).collect::<Vec<_>>(), "error": "" }),
+                Err(e) => serde_json::json!({ "file": name, "clips": [], "error": e }),
+            }
+        })
+        .collect();
+    let v = serde_json::json!({ "folder": dir.to_string_lossy(), "files": files });
+    *cache = Some((stamp, v.clone()));
+    v
+}
+
+/// `path` into the library (checked first; another file of that name: "name (2)").
+/// Returns the file's name in it and its clips
+pub fn library_add(path: &Path) -> Result<(String, Vec<(String, f32)>), String> {
+    let clips = check_file(path)?;
+    let dir = library();
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "animation".into());
+    let ext = path.extension().map(|s| s.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    let mut n = 1;
+    loop {
+        let name = if n == 1 { format!("{stem}.{ext}") } else { format!("{stem} ({n}).{ext}") };
+        let dest = dir.join(&name);
+        match std::fs::read(&dest) {
+            // The same file already there: nothing to do
+            Ok(have) if have == bytes => return Ok((name, clips)),
+            Ok(_) => n += 1,
+            Err(_) => {
+                std::fs::write(&dest, &bytes).map_err(|e| e.to_string())?;
+                return Ok((name, clips));
+            }
+        }
+    }
+}
+
+/// A file out of the library (its name only: nothing outside it)
+pub fn library_remove(name: &str) -> Result<(), String> {
+    if name.is_empty() || name.contains(['/', '\\']) || name.contains("..") {
+        return Err(format!("\"{name}\": a file's name in the library"));
+    }
+    std::fs::remove_file(library().join(name)).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// THEATER_PUPPET_ANIMATION_GLB=<an animation GLB> THEATER_PUPPET_DAE_NO_SKIN=<a DAE without skin>
+    #[test]
+    fn a_file_is_checked_before_it_goes_in_the_library() {
+        let Ok(glb) = std::env::var("THEATER_PUPPET_ANIMATION_GLB") else { return };
+        let clips = check_file(Path::new(&glb)).unwrap();
+        println!("{glb}: {clips:?}");
+        assert!(!clips.is_empty());
+        if let Ok(bad) = std::env::var("THEATER_PUPPET_DAE_NO_SKIN") {
+            let e = check_file(Path::new(&bad)).unwrap_err();
+            println!("without skin: {e}");
+            assert!(e.contains("With Skin") && !e.contains(&bad), "{e}");
+        }
+        assert!(check_file(Path::new("x.txt")).is_err());
+        assert!(library_remove("../x.glb").is_err() && library_remove("a/b.glb").is_err());
+    }
 
     /// THEATER_PUPPET_GLB=<an avatar from Theater Rig> THEATER_PUPPET_ANIMATION_FOLDER=<Rig's
     /// Export Animation of "Knock Test" (Mixamo's Knocked Out, a contact at 1.3 s) and "Wave"
