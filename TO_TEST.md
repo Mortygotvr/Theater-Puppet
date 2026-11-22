@@ -163,8 +163,8 @@ what went wrong) and it comes off the list.
       sounds, script and the animation (now in the Puppet's Animation folder;
       a Puppet with none gets Theater's "animations" folder). The status line
       says where the animation went.
-- [ ] A redeem playing the avatar's own clip (not from the Animation
-      folder): Export says that animation is missing.
+- [ ] A redeem playing a clip in no Animation folder and not the avatar's
+      (a file you removed): Export says that animation is missing.
 
 ## Animations (any avatar, not through the avatar's GLB)
 - [ ] Puppet source → 🎬 Pose and animation → Animation folder: a folder with
