@@ -675,7 +675,7 @@ unsafe extern "C" fn get_properties(data: Ptr) -> Ptr {
             let c = cstring(clip);
             (api.obs_property_list_add_string)(list, c.as_ptr(), c.as_ptr());
         }
-        (api.obs_properties_add_path)(pose, S_ANIM_FOLDER.as_ptr(), c"Animation folder (Theater Rig's animation GLBs: any avatar plays them)".as_ptr(), obs::OBS_PATH_DIRECTORY, std::ptr::null(), std::ptr::null());
+        (api.obs_properties_add_path)(pose, S_ANIM_FOLDER.as_ptr(), c"Animation folder (Theater Rig's animation GLBs, Mixamo DAE \"With Skin\": any avatar plays them)".as_ptr(), obs::OBS_PATH_DIRECTORY, std::ptr::null(), std::ptr::null());
         (api.obs_properties_add_float_slider)(pose, S_ARMS.as_ptr(), c"Arms down (degrees from the T-pose)".as_ptr(), 0.0, 85.0, 1.0);
         (api.obs_properties_add_float_slider)(pose, S_IDLE.as_ptr(), c"Idle motion".as_ptr(), 0.0, 1.0, 0.01);
         (api.obs_properties_add_group)(props, c"pose_box".as_ptr(), c"🎬 Pose and animation".as_ptr(), obs::OBS_GROUP_NORMAL, pose);

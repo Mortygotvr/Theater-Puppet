@@ -23,3 +23,5 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 rhai = { version = "1.26", features = ["sync"] }
 # Input from another computer (tracking/network.rs; its sender: sender/)
 tungstenite = "0.24"
+# Mixamo's Collada animations (dae.rs)
+roxmltree = "0.20"

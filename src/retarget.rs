@@ -1,6 +1,6 @@
-//! Animation GLBs: clips made on another skeleton (Theater Rig's "Convert
-//! Mixamo to Animation GLB": Mixamo's, in its T-pose) put on the avatar when
-//! it loads, so any avatar plays them. The avatar's own clips (animation.rs)
+//! The Animation folder: clips made on another skeleton (Theater Rig's
+//! animation GLBs, Mixamo's DAE: dae.rs), each in its T-pose, put on the
+//! avatar when it loads, so any avatar plays them. The avatar's own clips (animation.rs)
 //! are played as they are; these are retargeted once, into clips like them.
 //!
 //! The bones match by name (Theater Rig names the avatar's as Mixamo does:
@@ -119,16 +119,22 @@ pub fn clips_onto(src: &Model, dst: &Model) -> Vec<Clip> {
     out
 }
 
-/// Every animation GLB in `folder` on `dst`: (clips, a line per file for the log)
+/// An animation file: Theater Rig's GLB, or Mixamo's Collada (dae.rs)
+fn is_animation(p: &Path) -> bool {
+    p.extension().is_some_and(|x| x.eq_ignore_ascii_case("glb") || x.eq_ignore_ascii_case("dae"))
+}
+
+/// Every animation file (GLB, Mixamo DAE) in `folder` on `dst`: (clips, a line per file for the log)
 pub fn folder_onto(folder: &Path, dst: &Model) -> (Vec<Clip>, Vec<String>) {
     let mut files: Vec<_> = std::fs::read_dir(folder)
-        .map(|d| d.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("glb"))).collect())
+        .map(|d| d.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| is_animation(p)).collect())
         .unwrap_or_default();
     files.sort();
     let mut clips: Vec<Clip> = Vec::new();
     let mut log = Vec::new();
     for f in files {
-        match crate::model::load_animation(&f) {
+        let loaded = if f.extension().is_some_and(|x| x.eq_ignore_ascii_case("dae")) { crate::dae::load(&f) } else { crate::model::load_animation(&f) };
+        match loaded {
             Ok(src) => {
                 let made = clips_onto(&src, dst);
                 if made.is_empty() {
@@ -149,7 +155,7 @@ pub fn folder_onto(folder: &Path, dst: &Model) -> (Vec<Clip>, Vec<String>) {
     (clips, log)
 }
 
-/// Every animation GLB in `folder` with its time modified (changes: loaded again)
+/// Every animation file in `folder` with its time modified (changes: loaded again)
 pub fn folder_stamp(folder: &str) -> Vec<(String, u64)> {
     if folder.trim().is_empty() {
         return Vec::new();
@@ -157,7 +163,7 @@ pub fn folder_stamp(folder: &str) -> Vec<(String, u64)> {
     let mut out: Vec<(String, u64)> = std::fs::read_dir(folder)
         .map(|d| {
             d.filter_map(|e| e.ok())
-                .filter(|e| e.path().extension().is_some_and(|x| x.eq_ignore_ascii_case("glb")))
+                .filter(|e| is_animation(&e.path()))
                 .map(|e| {
                     let t = e.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs());
                     (e.path().to_string_lossy().into_owned(), t)
