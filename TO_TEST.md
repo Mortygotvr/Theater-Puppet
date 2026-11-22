@@ -139,22 +139,21 @@ what went wrong) and it comes off the list.
       weighted on nothing, it asks first, lists it, deletes it; Ctrl+Z
       brings it back.
 
-## Animation GLBs (any avatar)
-- [ ] Rig: "Convert Mixamo to Animation GLB" (top of the panel, no avatar
-      needed): pick Mixamo FBX files; a .glb of the same name appears next to each.
-- [ ] Puppet source → 🎬 Pose and animation → Animation folder: that folder.
-      Its clips show in the Animation list and 🎬 Puppet Animations; they play
-      on the avatar (try two different avatars).
-- [ ] Drop a new converted .glb in the folder while OBS runs: within a few
-      seconds it's in the list (the avatar reloads).
-
-## Theater Rig: Import Mixamo Animations
-- [ ] Reinstall the Rig zip. Rename to Mixamo, T-Pose, then Import Mixamo
-      Animations: pick one or several Mixamo FBX (FBX Binary, with or without
-      skin). Each shows in the NLA editor as its own track, named after the file.
-- [ ] Unmute a track (or set it as the action) and play: it moves like on
-      Mixamo; the hips go down when the character falls.
-- [ ] Export GLB, load in Puppet: 🎬 Puppet Animations lists it; it plays.
+## Animations (any avatar, not through the avatar's GLB)
+- [ ] Puppet source → 🎬 Pose and animation → Animation folder: a folder with
+      Mixamo DAE ("With Skin") and Rig's animation GLBs. Their clips show in
+      the Animation list and 🎬 Puppet Animations; they play (try two avatars).
+- [ ] A DAE downloaded Without Skin: the OBS log says to download it With Skin.
+- [ ] Drop a new file in the folder while OBS runs: within a few seconds it's
+      in the list (the avatar reloads).
+- [ ] Rig (reinstall the zip), box "Animations" at the top, no avatar needed:
+      Import Mixamo (FBX or DAE): its own skeleton next to the avatar, named
+      after the file, playing in the timeline. Change it (add a "contact"
+      marker), select it, Export Animation → its GLB in the folder you pick.
+- [ ] Export Animation with the avatar's skeleton selected (an action made on
+      it): works too. Export GLB of the avatar: no animation in it.
+- [ ] Convert Mixamo to Animation GLB: a .glb next to each file; the scene
+      unchanged (frame rate too).
 
 ## Theater Rig: Pick from Selected (colour slot, tiles)
 - [ ] Edit Mode on the body, L on the hair (or a few of its faces), Pick:
