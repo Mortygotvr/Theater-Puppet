@@ -20,17 +20,19 @@ what went wrong) and it comes off the list.
       Puppet refused it). Set that Puppet's Zoom back to about 1.
 
 ## GLB prefab redeem (Scene → Puppet → Scene)
-- [ ] In Blender: an animated GLB, timeline markers named "contact" on the
-      hit frames, exported with Theater Rig enabled.
+- [ ] Everywhere it says Impact now (no "Contact" left): Impact Audio,
+      On Impact, impact frames; in Blender, markers named "impact".
+- [ ] In Blender: an animated GLB, timeline markers named "impact" on the
+      hit frames (old ones named "contact" still work), exported with Theater Rig enabled.
 - [ ] Scene Studio: a 🎭 Puppet redeem → Action "📦 Spawn a GLB (prefab)":
       pick the GLB (📂); the Animation list shows its animations; the line
-      under it says its length and how many contact frames it has.
+      under it says its length and how many impact frames it has.
 - [ ] Place it (right/left, up, forward, size, turn); Test: it appears in
       the Puppet, plays once, fades out (0.3 s), is gone.
-- [ ] Contact section: Contact Audio (Audio & Screen Shake) plays at each
-      contact frame; Screen Shake and Impact Reaction set "On Contact" fire
+- [ ] Impact: Impact Audio (Audio & Screen Shake) plays at each
+      impact frame; Screen Shake and Impact Reaction set "On Impact" fire
       at each one; "On Start" fires as it spawns.
-- [ ] Save the redeem, reopen it: the Contact Audio is still there.
+- [ ] Save the redeem, reopen it: the Impact Audio is still there.
 - [ ] Several at once (fire it quickly): each plays on its own.
 
 ## Also draw GLBs: their own animation
@@ -142,10 +144,10 @@ what went wrong) and it comes off the list.
 ## Scene: 🎬 Puppet animation with an impact reaction
 - [ ] A throwable redeem aimed at the Puppet → 💥 IMPACT REACTIONS → tick
       "🎬 Puppet animation", pick "Knocked Out" (▾ lists the Puppets' clips),
-      On Contact. Test: the pie hits, the avatar bounces AND plays it once.
+      On Impact. Test: the pie hits, the avatar bounces AND plays it once.
 - [ ] Same with On Start: it plays as the redeem fires.
 - [ ] Aimed at something that isn't a Puppet (a webcam): it plays on every Puppet.
-- [ ] A GLB prefab redeem with it On Contact: plays at the GLB's contact frame.
+- [ ] A GLB prefab redeem with it On Impact: plays at the GLB's impact frame.
 
 ## Tracking per Puppet
 - [ ] Two Puppet sources. ⚙ Puppet Configuration → General: pick one in
@@ -275,7 +277,7 @@ what went wrong) and it comes off the list.
       without one of those, OBS keeps the one it had.
 - [ ] Rig (reinstall the zip), box "Animations" at the top, no avatar needed:
       Import Mixamo (FBX or DAE): its own skeleton next to the avatar, named
-      after the file, playing in the timeline. Change it (add a "contact"
+      after the file, playing in the timeline. Change it (add an "impact"
       marker), select it, Export Animation → its GLB in the folder you pick.
 - [ ] Export Animation with the avatar's skeleton selected (an action made on
       it): works too. Export GLB of the avatar: no animation in it.
