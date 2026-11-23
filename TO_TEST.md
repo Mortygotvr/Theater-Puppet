@@ -524,9 +524,11 @@ what went wrong) and it comes off the list.
 - [ ] Reopen OBS: the threshold is still 180 on that source.
 
 ## Water in a jar (Rig Make Water + Puppet)
-- [ ] Blender (restart it): the jar in Edit Mode, select its inner wall and
-      inner bottom faces → Theater Rig → Water → Make Water: a "Water"
-      object inside the glass, closed on top, blue see-through.
+- [ ] Blender (restart it): select the jar (Object Mode) → Theater Rig →
+      Water → Make Water: a "Water" object fills its inside (its rounded
+      square shape, its neck), inside the glass, blue see-through. The jar
+      itself unchanged (the old run's water_empty key and the wave settings
+      on its glass material are taken off).
 - [ ] Animate its shape key water_empty from 1 to 0 (the fill), Export Prop
       with the jar (or as its own prop): in Puppet the liquid rises, its
       sides fitting the jar (also its neck), its surface waving.
