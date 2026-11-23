@@ -213,6 +213,10 @@ what went wrong) and it comes off the list.
 - [ ] "⏹ Colours back to normal" (made for you): a rainbow or gradient on
       with Timer 0 goes (over 1 s), and every slot is its own colour again.
       The colour form warns when a rainbow/gradient has Timer 0.
+- [ ] Back to normal with a fade, on a slot used by several materials of
+      different default colours (avatar + an Also draw GLB): each glides to
+      its own colour and stays there; none switches at the end. Same when a
+      colour comes in: no material jumps at the start.
 - [ ] (The shader change only compiles in OBS: the avatar draws, no effect
       error in the log.)
 

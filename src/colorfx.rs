@@ -46,26 +46,42 @@ pub struct Gradient {
 }
 
 /// What a slot shows: `a` at the start of `axis`, `b` at its end (the same
-/// for one colour), and a rainbow flowing along it: [its hue at the start,
-/// how much of the wheel along the part, how much shows]
+/// for one colour), plus `own` of each material's own colour (its
+/// color_default: the materials of a slot can each have theirs, so going
+/// back to normal lands on each one's), and a rainbow flowing along it: [its
+/// hue at the start, how much of the wheel along the part, how much shows]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Look {
     pub a: [f32; 3],
     pub b: [f32; 3],
+    pub own: f32,
     pub axis: Axis,
     pub flow: [f32; 3],
 }
 
 impl Look {
     pub fn solid(c: [f32; 3]) -> Look {
-        Look { a: c, b: c, axis: 1, flow: [0.0; 3] }
+        Look { a: c, b: c, own: 0.0, axis: 1, flow: [0.0; 3] }
     }
+}
+
+/// A colour as a fixed part plus a share of each material's own
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Mix {
+    fixed: [f32; 3],
+    own: f32,
+}
+
+const OWN: Mix = Mix { fixed: [0.0; 3], own: 1.0 };
+
+fn mix(a: Mix, b: Mix, t: f32) -> Mix {
+    Mix { fixed: lerp(a.fixed, b.fixed, t), own: a.own + (b.own - a.own) * t }
 }
 
 #[derive(Clone, Copy, Debug)]
 struct Glide {
-    from: [f32; 3],
-    to: [f32; 3],
+    from: Mix,
+    to: Mix,
     time: f32,
     seconds: f32,
 }
@@ -73,7 +89,7 @@ struct Glide {
 #[derive(Default)]
 pub struct ColorFx {
     /// What each slot showed last frame (its solid colour)
-    shown: HashMap<u32, [f32; 3]>,
+    shown: HashMap<u32, Mix>,
     /// Each slot's colour as last seen (None: its own)
     target: HashMap<u32, Option<[f32; 3]>>,
     glides: HashMap<u32, Glide>,
@@ -191,13 +207,15 @@ impl ColorFx {
         let mut out = HashMap::new();
         let count = slots.len().max(1) as f32;
         for (i, &(slot, own)) in slots.iter().enumerate() {
+            let _ = own;
             let want = set.get(&slot).copied();
-            let to = want.unwrap_or(own);
+            // Its own: each material's own colour (not one for the slot)
+            let to = want.map_or(OWN, |c| Mix { fixed: c, own: 0.0 });
             // A new colour: from what shows now, over the command's fade
             let before = self.target.insert(slot, want);
             if before.is_some_and(|b| b != want) {
                 changed = true;
-                let from = self.shown.get(&slot).copied().unwrap_or(own);
+                let from = self.shown.get(&slot).copied().unwrap_or(OWN);
                 if self.next_fade > 0.0 {
                     self.glides.insert(slot, Glide { from, to, time: 0.0, seconds: self.next_fade });
                 } else {
@@ -209,20 +227,21 @@ impl ColorFx {
             if let Some(g) = self.glides.get_mut(&slot) {
                 g.time += dt;
                 g.to = to;
-                c = lerp(g.from, g.to, ease(g.time / g.seconds));
+                c = mix(g.from, g.to, ease(g.time / g.seconds));
                 gliding = g.time < g.seconds;
             }
             if !gliding {
                 self.glides.remove(&slot);
             }
             self.shown.insert(slot, c);
-            let mut look = Look::solid(c);
+            let mut look = Look { own: c.own, ..Look::solid(c.fixed) };
             let mut touched = want.is_some() || gliding;
             // The gradient: top and bottom from the slot's colour, eased
             if let Some(g) = gradient.as_ref().filter(|g| self.gradient_weight > 0.0 && g.slots.as_ref().is_none_or(|s| s.contains(&slot))) {
                 let w = ease(self.gradient_weight);
-                look.a = lerp(c, g.top, w);
-                look.b = lerp(c, g.bottom, w);
+                look.a = lerp(c.fixed, g.top, w);
+                look.b = lerp(c.fixed, g.bottom, w);
+                look.own = c.own * (1.0 - w);
                 look.axis = g.axis;
                 touched = true;
             }
@@ -239,6 +258,7 @@ impl ColorFx {
                     None => {
                         look.a = lerp(look.a, hue(h), w);
                         look.b = lerp(look.b, hue(h), w);
+                        look.own *= 1.0 - w;
                     }
                 }
                 touched = true;
@@ -272,6 +292,11 @@ mod tests {
         (0..3).all(|i| (a[i] - b[i]).abs() < 1e-3)
     }
 
+    /// What a look shows on a material whose own colour is `own` (as render.rs does)
+    fn on(l: &Look, own: [f32; 3]) -> [f32; 3] {
+        [0, 1, 2].map(|i| l.a[i] + l.own * own[i])
+    }
+
     #[test]
     fn a_slot_at_its_own_colour_is_left_alone() {
         let mut fx = ColorFx::default();
@@ -290,13 +315,37 @@ mod tests {
         fx.fade_next(2.0);
         let set = HashMap::from([(3, RED)]);
         let start = fx.step(0.0, &set, &slots);
-        assert!(close(start[&3].a, BLUE), "it starts from what showed");
+        assert!(close(on(&start[&3], BLUE), BLUE), "it starts from what showed");
         let half = fx.step(1.0, &set, &slots);
-        assert!(close(half[&3].a, [0.5, 0.0, 0.5]), "half way: red and blue each half ({:?})", half[&3]);
+        assert!(close(on(&half[&3], BLUE), [0.5, 0.0, 0.5]), "half way: red and blue each half ({:?})", half[&3]);
         let end = fx.step(1.5, &set, &slots);
         assert!(close(end[&3].a, RED));
         let back = fx.step(0.1, &HashMap::new(), &slots);
         assert!(back.is_empty());
+    }
+
+    /// Back to normal: each material of the slot glides to its own colour
+    /// (they can differ: the slot's first material's isn't the others'), and
+    /// at the end it's each one's exactly (no jump when the glide lets go)
+    #[test]
+    fn back_to_normal_glides_each_material_to_its_own() {
+        let mut fx = ColorFx::default();
+        let slots = [(1, BLUE)];
+        let set = HashMap::from([(1, RED)]);
+        fx.step(0.1, &set, &slots);
+        fx.fade_next(2.0);
+        let start = fx.step(0.0, &HashMap::new(), &slots);
+        for own in [BLUE, PINK] {
+            assert!(close(on(&start[&1], own), RED), "it starts from red on each ({own:?})");
+        }
+        let half = fx.step(1.0, &HashMap::new(), &slots);
+        assert!(close(on(&half[&1], PINK), [1.0, 0.2, 0.35]), "half way to pink on the pink one: {:?}", on(&half[&1], PINK));
+        assert!(close(on(&half[&1], BLUE), [0.5, 0.0, 0.5]));
+        let last = fx.step(0.999, &HashMap::new(), &slots);
+        for own in [BLUE, PINK] {
+            assert!(close(on(&last[&1], own), own), "at the end, each its own ({own:?}): {:?}", on(&last[&1], own));
+        }
+        assert!(fx.step(0.1, &HashMap::new(), &slots).is_empty(), "then left alone: the material as it is");
     }
 
     #[test]

@@ -1259,7 +1259,7 @@ impl Gpu {
             unsafe { (api.gs_effect_set_vec4)(p.grad_b, &[0.0, 0.0, 0.0, 0.0]) };
             return;
         };
-        let b = crate::model::recoloured(m, l.b);
+        let b = crate::model::looked(m, &l, l.b);
         let mut axis = [0.0f32; 4];
         axis[l.axis.min(2)] = 1.0;
         let r = rest[l.axis.min(2)];
@@ -1300,7 +1300,7 @@ impl Gpu {
             }
             // Its colour slot's colour, when the slot has one
             let look = m.color_slot.and_then(|s| colors.get(&s)).copied();
-            let recoloured = look.map(|l| crate::model::recoloured(m, l.a));
+            let recoloured = look.map(|l| crate::model::looked(m, &l, l.a));
             unsafe {
                 shader.set_frame(values);
                 self.set_material(shader, recoloured.as_ref().unwrap_or(m), &self.textures);
@@ -1340,7 +1340,7 @@ impl Gpu {
                     continue;
                 }
                 let look = m.color_slot.and_then(|s| colors.get(&s)).copied();
-                let recoloured = look.map(|l| crate::model::recoloured(m, l.a));
+                let recoloured = look.map(|l| crate::model::looked(m, &l, l.a));
                 unsafe {
                     shader.set_frame(values);
                     self.set_material(shader, recoloured.as_ref().unwrap_or(m), textures);

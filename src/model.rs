@@ -695,6 +695,20 @@ pub fn recoloured(m: &Material, rgb: [f32; 3]) -> Material {
     Material { color: [rgb[0], rgb[1], rgb[2], m.color[3]], shade: rgb.map(|c| c * m.shade_ratio), ..m.clone() }
 }
 
+/// A material as a slot's look shows it: `c` (its `a` or `b`) plus the
+/// look's share of the material's own colour and shade (own 1, nothing else:
+/// the material exactly as it is)
+pub fn looked(m: &Material, look: &crate::colorfx::Look, c: [f32; 3]) -> Material {
+    let mut out = recoloured(m, c);
+    if look.own > 0.0 {
+        for k in 0..3 {
+            out.color[k] += look.own * m.color[k];
+            out.shade[k] += look.own * m.shade[k];
+        }
+    }
+    out
+}
+
 fn srgb_to_linear(c: f32) -> f32 {
     let c = c.clamp(0.0, 1.0);
     if c <= 0.040_45 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
