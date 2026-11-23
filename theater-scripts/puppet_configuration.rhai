@@ -18,14 +18,14 @@ fn init() {
     this.picked = false;
     this.note = "";
     this.edits = #{};
-    this.lists = #{ cameras: [], controllers: [] };
+    this.lists = #{ cameras: [], controllers: [], audio: [] };
     this.frames = 0;
 }
 
 fn tabs() {
     [
         ["General", "🎯 General"], ["IFacialMocap", "📱 iFacialMocap"], ["MediaPipe", "📷 MediaPipe"], ["SteamVr", "🥽 SteamVR"],
-        ["Telemetry", "📡 VR telemetry"], ["Leap", "🖐 Leap Motion"], ["Controller", "🎮 Controller"], ["Desk", "⌨ Keyboard & mouse"], ["Network", "🌐 Network"],
+        ["Telemetry", "📡 VR telemetry"], ["Leap", "🖐 Leap Motion"], ["Controller", "🎮 Controller"], ["Desk", "⌨ Keyboard & mouse"], ["Microphone", "🎤 Microphone"], ["Network", "🌐 Network"],
         ["Animations", "🎬 Animations"],
     ]
 }
@@ -168,7 +168,7 @@ fn ui(ui) {
         return;
     }
     if lists {
-        this.lists = #{ cameras: s.cameras, controllers: s.controllers };
+        this.lists = #{ cameras: s.cameras, controllers: s.controllers, audio: s.audio_sources };
     }
     let c = s.config;
 
@@ -418,6 +418,56 @@ fn ui(ui) {
                 av_slider(ui, this.puppet, avatar, "desk_curl", "Fingers straighter (-) or more curled (+)", -0.6, 0.8);
                 this.model_path(ui, avatar, "desk_model", "Keyboard & mouse GLB (empty: the built-in one)");
             }
+        },
+        "Microphone" => {
+            input_on(ui, c, "microphone", "Microphone (the mouth opens as you speak)");
+            ui.small(`Now: ${s.microphone_status}`);
+            let m = c.microphone;
+            // Its source: one of OBS's sources with sound
+            let pairs = [["", "(choose the microphone's source)"]];
+            for a in this.lists.audio { pairs.push([a, a]); }
+            if m.source != "" && !this.lists.audio.contains(m.source) { pairs.push([m.source, `${m.source} (not in OBS now)`]); }
+            let v = pick(ui, "Source", m.source, pairs);
+            if v != m.source { set_cfg(#{ microphone: #{ source: v } }); }
+            ui.small("Its sound after its own filters (noise suppression first is best). The source needs nothing on it.");
+            ui.separator();
+            for t in [["intensity", "Intensity (how wide the mouth opens)", 0.0, 3.0], ["gate_db", "Noise gate (dB): quieter than this, the mouth stays shut", -80.0, -10.0], ["smoothing", "Smoothing (0 jumpy, 1 soft)", 0.0, 1.0]] {
+                let v = ui.slider(t[1], m[t[0]], t[2], t[3]);
+                if v != m[t[0]] {
+                    let inner = #{};
+                    inner[t[0]] = v;
+                    set_cfg(#{ microphone: inner });
+                }
+            }
+            let vw = ui.checkbox("Vowels (A, I, U, E, O shapes; off: it only opens)", m.vowels);
+            if vw != m.vowels { set_cfg(#{ microphone: #{ vowels: vw } }); }
+            let md = pick(ui, "With a tracked face (iFacialMocap…)", m.mode, [["add", "Add (the more open of the two)"], ["replace", "Replace the mouth (the face keeps eyes, brows…)"], ["fallback", "Only when no face is tracked"]]);
+            if md != m.mode { set_cfg(#{ microphone: #{ mode: md } }); }
+            let sh = pick(ui, "Vowel shapes", m.shapes, [["vrm", "VRM (Fcl_MTH_A, I, U, E, O, or the keys below)"], ["arkit", "ARKit (jawOpen, mouthFunnel, mouthPucker…)"]]);
+            if sh != m.shapes { set_cfg(#{ microphone: #{ shapes: sh } }); }
+            if m.shapes == "vrm" {
+                ui.small("Each vowel's shape key (empty: Fcl_MTH_A, I, U, E, O)");
+                let vowels = ["A", "I", "U", "E", "O"];
+                for i in 0..5 {
+                    ui.row();
+                    ui.label(vowels[i]);
+                    let k = `mic_key_${i}`;
+                    let shown = if k in this.edits { this.edits[k] } else { m.keys[i] };
+                    let typed = ui.text_box(shown, `Fcl_MTH_${vowels[i]}`);
+                    if ui.button("Apply") || ui.entered() {
+                        let keys = m.keys;
+                        let t = typed;
+                        t.trim();
+                        keys[i] = t;
+                        set_cfg(#{ microphone: #{ keys: keys } });
+                        this.edits.remove(k);
+                    } else if typed != m.keys[i] {
+                        this.edits[k] = typed;
+                    }
+                    ui.end();
+                }
+            }
+            ui.small("Every Theater Puppet hears it. (The older \"Puppet Lipsync\" audio filter still works; use one or the other.)");
         },
         "Network" => {
             input_on(ui, c, "network", "Input from another computer (its keyboard, mouse and controller)");

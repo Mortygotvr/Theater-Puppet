@@ -143,6 +143,8 @@ pub struct Config {
     pub desk: super::desk::Settings,
     /// Input from another computer: its keyboard, mouse and controller (network.rs)
     pub network: super::network::Settings,
+    /// The microphone: the mouth opens as you speak (lipsync.rs)
+    pub microphone: crate::lipsync::MicSettings,
     /// A Python of your own that has mediapipe and opencv (only in the file;
     /// empty: Puppet's own, which it installs by itself the first time)
     pub python: String,
@@ -181,6 +183,7 @@ impl Default for Config {
             controller: Default::default(),
             desk: Default::default(),
             network: Default::default(),
+            microphone: Default::default(),
             assign: Assign::default(),
             mirror: false,
             head_strength: 1.0,

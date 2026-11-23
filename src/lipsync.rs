@@ -1,13 +1,17 @@
-//! The "🎤 Puppet Lipsync" audio filter: put on the microphone's source (after
-//! its noise suppression, if any), it listens to what goes through it (and
-//! lets it through untouched) and opens the avatars' mouths to it: by how
-//! loud it is, and, with vowels on, in the shape of the vowel heard (A, I,
-//! U, E, O, from the voice's first two formants).
+//! The microphone: the avatars' mouths open to it, by how loud it is and,
+//! with vowels on, in the shape of the vowel heard (A, I, U, E, O, from the
+//! voice's first two formants).
 //!
-//! Its settings are the filter's: intensity, noise gate, smoothing, vowels,
-//! the shape key each vowel opens (empty: VRoid's Fcl_MTH_A… when the avatar
-//! has them, else ARKit's mouth shapes), and how it goes with a tracked face
-//! (motion.rs reads `mouth()`).
+//! Set in Puppet Configuration → 🎤 Microphone (tracking.json's
+//! `microphone`): an audio source of OBS's, listened to directly (OBS's
+//! audio capture callback: the source needs nothing on it). The older way,
+//! the "🎤 Puppet Lipsync" audio filter on the microphone's source, still
+//! works for setups that have it.
+//!
+//! The settings: intensity, noise gate, smoothing, vowels, the shape key
+//! each vowel opens (empty: VRoid's Fcl_MTH_A… when the avatar has them, else
+//! ARKit's mouth shapes), and how it goes with a tracked face (motion.rs
+//! reads `mouth()`).
 
 use std::ffi::{CStr, c_char};
 use std::sync::Mutex;
@@ -16,7 +20,7 @@ use std::time::{Duration, Instant};
 use crate::obs::{self, Ptr};
 
 const ID: &CStr = c"theater_puppet_lipsync_filter";
-const NAME: &CStr = c"\u{1F3A4} Puppet Lipsync";
+const NAME: &CStr = c"\u{1F3A4} Puppet Lipsync (older: Puppet Configuration \u{2192} Microphone)";
 
 const S_INTENSITY: &CStr = c"intensity";
 const S_GATE: &CStr = c"gate_db";
@@ -109,6 +113,8 @@ struct State {
     samples: Vec<f32>,
     open: f32,
     vowels: [f32; 5],
+    /// How loud, the last look (dB)
+    level: f32,
 }
 
 /// How many samples a look takes (about 20 ms at 48 kHz)
@@ -284,7 +290,7 @@ unsafe extern "C" fn get_properties(_: Ptr) -> Ptr {
             let label = std::ffi::CString::new(format!("VRM: shape key for {} (empty: Fcl_MTH_{})", VOWEL_NAMES[i], VOWEL_NAMES[i])).unwrap_or_default();
             (api.obs_properties_add_text)(props, key.as_ptr(), label.as_ptr(), obs::OBS_TEXT_DEFAULT);
         }
-        (api.obs_properties_add_text)(props, c"lipsync_info".as_ptr(), c"Every Theater Puppet hears it. The sound goes through untouched.".as_ptr(), obs::OBS_TEXT_INFO);
+        (api.obs_properties_add_text)(props, c"lipsync_info".as_ptr(), c"Every Theater Puppet hears it. The sound goes through untouched. Simpler: Puppet Configuration \u{2192} \u{1F3A4} Microphone (no filter needed).".as_ptr(), obs::OBS_TEXT_INFO);
         props
     }
 }
@@ -322,7 +328,7 @@ fn read(settings: Ptr) -> Settings {
 unsafe extern "C" fn create(settings: Ptr, _source: Ptr) -> Ptr {
     let filter = Box::new(Filter {
         settings: Mutex::new(read(settings)),
-        state: Mutex::new(State { samples: Vec::with_capacity(WINDOW * 2), open: 0.0, vowels: [1.0, 0.0, 0.0, 0.0, 0.0] }),
+        state: Mutex::new(new_state()),
     });
     Box::into_raw(filter) as Ptr
 }
@@ -350,14 +356,23 @@ unsafe extern "C" fn filter_audio(data: Ptr, audio: *mut AudioData) -> *mut Audi
     let samples = unsafe { std::slice::from_raw_parts(plane, a.frames as usize) };
     let settings = filter.settings.lock().unwrap().clone();
     let mut state = filter.state.lock().unwrap();
+    if let Some(mouth) = listen(&settings, &mut state, samples) {
+        *LATEST.lock().unwrap() = Some((mouth, Instant::now()));
+    }
+    audio
+}
+
+/// `samples` heard (the newest, one channel): the mouth now, once enough is heard
+fn listen(settings: &Settings, state: &mut State, samples: &[f32]) -> Option<Mouth> {
     state.samples.extend_from_slice(samples);
     let excess = state.samples.len().saturating_sub(WINDOW);
     state.samples.drain(..excess);
     if state.samples.len() < WINDOW / 2 {
-        return audio;
+        return None;
     }
-    let dt = a.frames as f32 / rate();
-    let target = openness(level_db(&state.samples), settings.gate_db);
+    let dt = samples.len() as f32 / rate();
+    state.level = level_db(&state.samples);
+    let target = openness(state.level, settings.gate_db);
     // Opens fast, closes a little slower; smoothing slows both
     let speed = if target > state.open { 30.0 } else { 15.0 } * (1.0 - settings.smoothing.clamp(0.0, 0.95));
     let k = (dt * speed).min(1.0);
@@ -370,9 +385,222 @@ unsafe extern "C" fn filter_audio(data: Ptr, audio: *mut AudioData) -> *mut Audi
     } else if !settings.vowels {
         state.vowels = [1.0, 0.0, 0.0, 0.0, 0.0];
     }
-    let mouth = Mouth { open: (state.open * settings.intensity).clamp(0.0, 1.0), vowels: state.vowels, mode: settings.mode, shapes: settings.shapes, keys: settings.keys };
-    *LATEST.lock().unwrap() = Some((mouth, Instant::now()));
-    audio
+    Some(Mouth { open: (state.open * settings.intensity).clamp(0.0, 1.0), vowels: state.vowels, mode: settings.mode, shapes: settings.shapes.clone(), keys: settings.keys.clone() })
+}
+
+// ---------------------------------------------------------------------------
+// The microphone of Puppet Configuration: a source listened to directly
+
+/// Its settings (tracking.json's `microphone`)
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct MicSettings {
+    pub enabled: bool,
+    /// The audio source's name in OBS ("Mic/Aux", a capture device…)
+    pub source: String,
+    pub intensity: f32,
+    pub gate_db: f32,
+    pub smoothing: f32,
+    pub vowels: bool,
+    /// With a tracked face: "add", "replace" (the mouth) or "fallback" (only without one)
+    pub mode: String,
+    /// "vrm" (each vowel its key) or "arkit" (ARKit's mouth shapes)
+    pub shapes: String,
+    /// Each vowel's shape key (A, I, U, E, O; empty: Fcl_MTH_<vowel>)
+    pub keys: [String; 5],
+}
+
+impl Default for MicSettings {
+    fn default() -> Self {
+        MicSettings {
+            enabled: false,
+            source: String::new(),
+            intensity: 1.0,
+            gate_db: -45.0,
+            smoothing: 0.5,
+            vowels: true,
+            mode: "add".into(),
+            shapes: "vrm".into(),
+            keys: Default::default(),
+        }
+    }
+}
+
+impl MicSettings {
+    fn settings(&self) -> Settings {
+        Settings {
+            intensity: self.intensity,
+            gate_db: self.gate_db,
+            smoothing: self.smoothing,
+            vowels: self.vowels,
+            mode: match self.mode.as_str() {
+                "replace" => Mode::Replace,
+                "fallback" => Mode::Fallback,
+                _ => Mode::Add,
+            },
+            shapes: if self.shapes == "arkit" { Shapes::Arkit } else { Shapes::Vrm },
+            keys: self.keys.clone().map(|k| k.trim().to_string()),
+        }
+    }
+}
+
+/// The microphone's settings, and what it heard (its own, not the filter's)
+struct Mic {
+    settings: MicSettings,
+    state: State,
+    heard: Option<Instant>,
+}
+
+static MIC: Mutex<Option<Mic>> = Mutex::new(None);
+/// The source listened to (its pointer, holding a reference), 0 none
+static ATTACHED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+/// One attach / detach at a time (never held by the audio callback: OBS holds
+/// its own lock around it)
+static ATTACHING: Mutex<()> = Mutex::new(());
+
+type CaptureCallback = unsafe extern "C" fn(Ptr, Ptr, *const AudioData, bool);
+type AddCapture = unsafe extern "C" fn(Ptr, CaptureCallback, Ptr);
+type GetFlags = unsafe extern "C" fn(Ptr) -> u32;
+const OBS_SOURCE_AUDIO_FLAG: u32 = 1 << 1;
+
+/// New settings (the inputs restarted): kept, and the source listened to (or not)
+pub fn restart(cfg: &MicSettings) {
+    {
+        let mut mic = MIC.lock().unwrap();
+        match mic.as_mut() {
+            Some(m) => m.settings = cfg.clone(),
+            None => *mic = Some(Mic { settings: cfg.clone(), state: new_state(), heard: None }),
+        }
+    }
+    ensure();
+}
+
+fn new_state() -> State {
+    State { samples: Vec::with_capacity(WINDOW * 2), open: 0.0, vowels: [1.0, 0.0, 0.0, 0.0, 0.0], level: -120.0 }
+}
+
+/// Listening to the source its settings name, if it's there (looked at again
+/// now and then: OBS loads its sources after the plugins; one renamed or added later)
+pub fn ensure() {
+    let Ok(_one) = ATTACHING.try_lock() else { return };
+    let (enabled, name) = MIC.lock().unwrap().as_ref().map_or((false, String::new()), |m| (m.settings.enabled, m.settings.source.trim().to_string()));
+    if !enabled || name.is_empty() {
+        detach_now();
+        return;
+    }
+    let api = obs::api();
+    let Ok(cname) = std::ffi::CString::new(name) else { return };
+    let found = unsafe { (api.obs_get_source_by_name)(cname.as_ptr()) };
+    let attached = ATTACHED.load(std::sync::atomic::Ordering::Acquire);
+    if !found.is_null() && found as usize == attached {
+        unsafe { (api.obs_source_release)(found) };
+        return;
+    }
+    detach_now();
+    if found.is_null() {
+        return;
+    }
+    let Some(add) = crate::tracking::obs_function::<AddCapture>(c"obs_source_add_audio_capture_callback") else {
+        unsafe { (api.obs_source_release)(found) };
+        return;
+    };
+    // Its reference kept while listened to
+    ATTACHED.store(found as usize, std::sync::atomic::Ordering::Release);
+    unsafe { add(found, captured, std::ptr::null_mut()) };
+}
+
+/// Not listening any more (OBS unloading the plugin)
+pub fn detach() {
+    let _one = ATTACHING.lock().unwrap();
+    detach_now();
+}
+
+fn detach_now() {
+    let attached = ATTACHED.swap(0, std::sync::atomic::Ordering::AcqRel);
+    if attached == 0 {
+        return;
+    }
+    let source = attached as Ptr;
+    if let Some(remove) = crate::tracking::obs_function::<AddCapture>(c"obs_source_remove_audio_capture_callback") {
+        unsafe { remove(source, captured, std::ptr::null_mut()) };
+    }
+    unsafe { (obs::api().obs_source_release)(source) };
+}
+
+/// The source's sound (OBS's audio thread): heard; muted, silence
+unsafe extern "C" fn captured(_param: Ptr, _source: Ptr, audio: *const AudioData, muted: bool) {
+    if audio.is_null() {
+        return;
+    }
+    let a = unsafe { &*audio };
+    let plane = a.data[0] as *const f32;
+    if plane.is_null() || a.frames == 0 {
+        return;
+    }
+    let silence;
+    let samples: &[f32] = if muted {
+        silence = vec![0.0f32; a.frames as usize];
+        &silence
+    } else {
+        unsafe { std::slice::from_raw_parts(plane, a.frames as usize) }
+    };
+    let mut mic = MIC.lock().unwrap();
+    let Some(m) = mic.as_mut() else { return };
+    if !m.settings.enabled {
+        return;
+    }
+    let settings = m.settings.settings();
+    if let Some(mouth) = listen(&settings, &mut m.state, samples) {
+        m.heard = Some(Instant::now());
+        *LATEST.lock().unwrap() = Some((mouth, Instant::now()));
+    }
+}
+
+/// The microphone's status, for the Configuration window
+pub fn status() -> String {
+    let mic = MIC.lock().unwrap();
+    let Some(m) = mic.as_ref() else { return "off".into() };
+    if !m.settings.enabled {
+        return "off".into();
+    }
+    if m.settings.source.trim().is_empty() {
+        return "pick the microphone's source below".into();
+    }
+    if ATTACHED.load(std::sync::atomic::Ordering::Acquire) == 0 {
+        return format!("no source called \"{}\" in OBS", m.settings.source.trim());
+    }
+    match m.heard {
+        Some(at) if at.elapsed() < Duration::from_millis(500) => {
+            let open = (m.state.open * m.settings.intensity).clamp(0.0, 1.0);
+            format!("hearing {}: {:.0} dB, mouth {:.0}% open", m.settings.source.trim(), m.state.level, open * 100.0)
+        }
+        _ => format!("listening to {}: no sound coming (is it on, not muted?)", m.settings.source.trim()),
+    }
+}
+
+/// OBS's sources that have sound (the microphone's list)
+pub fn audio_sources() -> Vec<String> {
+    let api = obs::api();
+    let Some(flags) = crate::tracking::obs_function::<GetFlags>(c"obs_source_get_output_flags") else { return Vec::new() };
+    struct Found {
+        names: Vec<String>,
+        flags: GetFlags,
+    }
+    unsafe extern "C" fn each(param: Ptr, source: Ptr) -> bool {
+        let found = unsafe { &mut *(param as *mut Found) };
+        if unsafe { (found.flags)(source) } & OBS_SOURCE_AUDIO_FLAG != 0 {
+            let p = unsafe { (obs::api().obs_source_get_name)(source) };
+            if !p.is_null() {
+                found.names.push(unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned());
+            }
+        }
+        true
+    }
+    let mut found = Found { names: Vec::new(), flags };
+    unsafe { (api.obs_enum_sources)(each, &mut found as *mut Found as Ptr) };
+    found.names.sort();
+    found.names.dedup();
+    found.names
 }
 
 #[cfg(test)]
@@ -399,6 +627,36 @@ mod tests {
         assert_eq!(best(vowels(&voice(330.0, 850.0), 48000.0)), 2, "U");
         assert_eq!(best(vowels(&voice(480.0, 1850.0), 48000.0)), 3, "E");
         assert_eq!(best(vowels(&voice(560.0, 950.0), 48000.0)), 4, "O");
+    }
+
+    /// The Configuration's microphone: its settings read from tracking.json
+    /// (missing ones: the defaults), turned into the filter's, and a voice heard
+    #[test]
+    fn the_microphone_settings_and_a_voice_heard() {
+        let m: MicSettings = serde_json::from_str(r#"{"enabled": true, "source": "Mic/Aux", "mode": "replace", "shapes": "arkit"}"#).unwrap();
+        assert_eq!((m.enabled, m.source.as_str(), m.gate_db, m.intensity), (true, "Mic/Aux", -45.0, 1.0));
+        let s = m.settings();
+        assert_eq!((s.mode, s.shapes), (Mode::Replace, Shapes::Arkit));
+        let mut state = new_state();
+        let loud = voice(750.0, 1250.0);
+        let mut mouth = None;
+        for _ in 0..20 {
+            mouth = listen(&s, &mut state, &loud[..480]).or(mouth);
+        }
+        let mouth = mouth.expect("nothing heard");
+        assert!(mouth.open > 0.3 && mouth.mode == Mode::Replace, "{mouth:?}");
+        assert!(state.level > -30.0, "level {}", state.level);
+    }
+
+    /// The Configuration window's script parses (a mistake there leaves the
+    /// whole window blank)
+    #[test]
+    fn the_configuration_script_parses() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("theater-scripts").join("puppet_configuration.rhai");
+        let text = std::fs::read_to_string(&path).unwrap();
+        if let Err(e) = rhai::Engine::new().compile(&text) {
+            panic!("{}: {e}", path.display());
+        }
     }
 
     #[test]

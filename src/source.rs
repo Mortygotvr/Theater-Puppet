@@ -1632,6 +1632,8 @@ unsafe extern "C" fn video_tick(data: Ptr, dt: f32) {
         if *since >= 1.0 {
             *since = 0.0;
             crate::camera::ensure(puppet.source);
+            // The microphone's source: listened to once it's there
+            crate::lipsync::ensure();
         }
     }
     // The GLB prefabs: new ones from the procedure, each a frame on, the ended ones gone

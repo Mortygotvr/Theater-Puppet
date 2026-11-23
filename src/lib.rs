@@ -161,6 +161,8 @@ pub extern "C" fn obs_module_load() -> bool {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn obs_module_unload() {
+    // The microphone's source let go (its reference kept while listened to)
+    lipsync::detach();
     log("[Puppet] 🛑 Theater Puppet unloaded");
 }
 

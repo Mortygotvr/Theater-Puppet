@@ -536,3 +536,15 @@ what went wrong) and it comes off the list.
       sides fitting the jar (also its neck), its surface waving.
 - [ ] Not animated: full, waving. The waves stay inside the glass (up and
       down only). Wave height / length / speed: the dialog's settings.
+
+## 🎤 Microphone in Puppet Configuration (no filter needed)
+- [ ] ⚙ Puppet Configuration → 🎤 Microphone: tick it, pick your mic's
+      source in the list (Mic/Aux, your capture device…). "Now:" says
+      "hearing <source>: -xx dB, mouth yy% open" while you speak.
+- [ ] Speak: the avatar's mouth opens with the vowels; quiet below the gate:
+      shut. Intensity, gate, smoothing, vowels, "with a tracked face",
+      VRM/ARKit shapes and the vowel keys all work as the filter's did.
+- [ ] Mute the mic in OBS: the mouth closes. Untick: it stops.
+- [ ] Restart OBS: it listens again by itself (the source picked kept).
+- [ ] The old "🎤 Puppet Lipsync" filter (if still on a source) keeps
+      working; its name now points to the Configuration tab.

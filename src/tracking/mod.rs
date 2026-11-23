@@ -444,6 +444,7 @@ pub fn start() {
     gamepad::restart(&cfg.controller);
     desk::restart(&cfg.desk);
     network::restart(&cfg.network);
+    crate::lipsync::restart(&cfg.microphone);
 }
 
 #[cfg(test)]

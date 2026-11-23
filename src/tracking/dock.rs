@@ -197,11 +197,13 @@ pub fn answer(args: &str) -> String {
         "firewall": super::firewall::status(),
         "network_status": if c.network.enabled { super::network::status() } else { "off".to_string() },
         "network_addresses": super::network::addresses(),
+        "microphone_status": crate::lipsync::status(),
         "done": done,
     });
     if args.get("lists").and_then(|v| v.as_bool()).unwrap_or(false) {
         out["cameras"] = json!(super::menu::cameras().into_iter().map(|(n, id)| json!([n, id])).collect::<Vec<_>>());
         out["controllers"] = json!(super::gamepad::devices().into_iter().map(|(n, id)| json!([n, id])).collect::<Vec<_>>());
+        out["audio_sources"] = json!(crate::lipsync::audio_sources());
     }
     out.to_string()
 }
