@@ -500,3 +500,14 @@ what went wrong) and it comes off the list.
 - [ ] SteamVR (needs a headset SteamVR can stream to; the Frame + Arc B580 can't).
 - [ ] Head turns, hand positions and finger curls go the right way (not yet
       checked by watching a person).
+
+## Scene Studio gizmo
+- [ ] Hover each handle: it lights up (thicker, lighter) and the cursor
+      changes (move, resize, turn). Grab the thin red / green bars and the
+      blue ring right on them: the right one moves, also with a fast drag.
+- [ ] The red and green bars stop short of the blue ring; near their ends
+      it's the ring you grab.
+- [ ] Ctrl+Z undoes the last drag (one step per drag), Ctrl+Shift+Z (or
+      Ctrl+Y) redoes it; the source moves in OBS too and gets selected.
+- [ ] Typing a value in X / Y / W / H / Roll / Pitch / Yaw, or Reset: undone
+      with Ctrl+Z. While typing in a field, Ctrl+Z is the field's own.
