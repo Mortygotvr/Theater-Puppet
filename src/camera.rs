@@ -53,7 +53,7 @@ impl Default for Camera {
 }
 
 /// One filter: its settings, the Puppet it's on (found at its tick; 0
-/// before, or while disabled), and how far its spin has turned the model
+/// before, or while disabled), and how far its spin has taken the camera round
 #[derive(Clone, Copy, Debug)]
 struct Entry {
     filter: usize,
@@ -65,7 +65,7 @@ struct Entry {
 static FILTERS: Mutex<Vec<Entry>> = Mutex::new(Vec::new());
 
 /// What the enabled Camera filters on `source` do (several add up), and the
-/// degrees their spins have turned the model
+/// degrees their spins have taken the camera round
 pub fn camera(source: Ptr) -> (Camera, f32) {
     combined(&FILTERS.lock().unwrap(), source as usize)
 }
@@ -94,24 +94,14 @@ pub fn apply(view: &mut crate::render::View, (c, turned): (Camera, f32)) {
     if let Some(o) = c.orthographic {
         view.orthographic = o;
     }
-    // The model on its stand: its body turned (its hair swings with it)
-    view.yaw += turned;
+    // The camera going round the model (the spin)
+    view.orbit += turned;
 }
 
-/// A spin `dt` seconds on: turning at `spin` degrees a second, or (at 0) back
-/// to the nearest whole turn (facing the front) over about a second
+/// A spin `dt` seconds on: the camera going round at `spin` degrees a second;
+/// at 0 it stays where it got to (it doesn't go back)
 fn spun(turned: f32, spin: f32, dt: f32) -> f32 {
-    if spin != 0.0 {
-        return (turned + spin * dt) % 3600.0;
-    }
-    let home = (turned / 360.0).round() * 360.0;
-    let d = home - turned;
-    // Eased, but never slower than 20 degrees a second: it does get there
-    let mut step = d * (dt * 3.0).min(1.0);
-    if step.abs() < 20.0 * dt {
-        step = d.signum() * (20.0 * dt).min(d.abs());
-    }
-    turned + step
+    (turned + spin * dt).rem_euclid(360.0)
 }
 
 pub fn register() {
@@ -229,7 +219,7 @@ unsafe extern "C" fn get_properties(_: Ptr) -> Ptr {
         ] {
             (api.obs_properties_add_float_slider)(props, key.as_ptr(), label.as_ptr(), -range, range, 0.01);
         }
-        (api.obs_properties_add_float_slider)(props, S_SPIN.as_ptr(), c"Spin: the model turns on itself, degrees a second (0: back to the front)".as_ptr(), -180.0, 180.0, 1.0);
+        (api.obs_properties_add_float_slider)(props, S_SPIN.as_ptr(), c"Spin: the camera goes round the model, degrees a second (0: it stops where it is)".as_ptr(), -180.0, 180.0, 1.0);
         (api.obs_properties_add_text)(
             props,
             c"camera_info".as_ptr(),
@@ -307,27 +297,32 @@ mod tests {
         assert_eq!(combined(&filters, 999), (Camera::default(), 0.0));
         let mut view = crate::render::View { zoom: 1.5, height: 0.2, yaw: 5.0, orbit: 10.0, orthographic: false, position: Vec3::ZERO, light: crate::render::View::LIGHT, light_color: [1.0; 3] };
         apply(&mut view, (c, turned));
-        assert!((view.zoom - 4.5).abs() < 1e-5 && (view.height - 0.35).abs() < 1e-5 && (view.orbit - 30.0).abs() < 1e-5);
-        assert!(view.orthographic && (view.yaw - 95.0).abs() < 1e-5 && view.position.x == 0.5);
+        // The orbits (30) and the spins' turn (90) both take the camera round; the model stays
+        assert!((view.zoom - 4.5).abs() < 1e-5 && (view.height - 0.35).abs() < 1e-5 && (view.orbit - 120.0).abs() < 1e-5);
+        assert!(view.orthographic && (view.yaw - 5.0).abs() < 1e-5 && view.position.x == 0.5);
     }
 
     #[test]
-    fn the_spin_turns_then_goes_back_to_the_front() {
+    fn the_spin_goes_round_and_stops_where_it_is() {
         let mut t = 0.0;
         for _ in 0..60 {
             t = spun(t, 90.0, 1.0 / 60.0);
         }
         assert!((t - 90.0).abs() < 1e-3, "a second at 90 a second: {t}");
-        // Spin 0: back to the nearest whole turn (the front: 0 here)
-        for _ in 0..120 {
+        // Spin 0: it stays there
+        for _ in 0..600 {
             t = spun(t, 0.0, 1.0 / 60.0);
         }
-        assert_eq!(t, 0.0);
-        // Past half a turn: on to the next whole one (360)
-        let mut u = 200.0;
-        for _ in 0..120 {
-            u = spun(u, 0.0, 1.0 / 60.0);
-        }
-        assert_eq!(u, 360.0);
+        assert!((t - 90.0).abs() < 1e-3, "it went back: {t}");
+        // Round and round: no jump at a whole turn; backwards too
+        let mut u = 350.0;
+        u = spun(u, 60.0, 0.5);
+        assert!((u - 20.0).abs() < 1e-3, "{u}");
+        u = spun(u, -60.0, 1.0);
+        assert!((u - 320.0).abs() < 1e-3, "{u}");
+        // It moves the camera round (orbit), not the model (yaw)
+        let mut view = crate::render::View { zoom: 1.0, height: 0.0, yaw: 5.0, orbit: 10.0, orthographic: false, position: Vec3::ZERO, light: crate::render::View::LIGHT, light_color: [1.0; 3] };
+        apply(&mut view, (Camera::default(), 45.0));
+        assert!((view.orbit - 55.0).abs() < 1e-5 && (view.yaw - 5.0).abs() < 1e-5, "{} {}", view.orbit, view.yaw);
     }
 }

@@ -190,8 +190,10 @@ what went wrong) and it comes off the list.
 - [ ] Its sliders: Zoom (x), Camera (as the source / perspective /
       orthographic), Centre, Turn around, Position (3), Spin. All at their
       start (1, as the source, 0…): nothing changes.
-- [ ] Spin 45: the model turns on itself like on a display stand, the light
-      staying; Spin back to 0: it turns back to face the front.
+- [ ] Spin 45: the camera goes round the model (the model doesn't turn;
+      the lit side changes as the camera goes round). Spin back to 0: the
+      camera stops where it is, and stays there (no going back to 0°).
+      Negative: the other way round.
 - [ ] In Scene's Studio, the source's filter part shows its sliders; two poses
       with different Zoom / Turn / Position ease from one to the other.
 
