@@ -559,6 +559,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "roxmltree"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
+
+[[package]]
 name = "rustversion"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -683,7 +689,7 @@ dependencies = [
 
 [[package]]
 name = "theater-puppet-sender"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "serde",
  "serde_json",
@@ -693,12 +699,13 @@ dependencies = [
 
 [[package]]
 name = "theater_puppet"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "glam",
  "gltf",
  "image",
  "rhai",
+ "roxmltree",
  "serde",
  "serde_json",
  "tungstenite",
