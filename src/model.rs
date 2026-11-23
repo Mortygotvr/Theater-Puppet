@@ -55,6 +55,8 @@ pub struct Material {
     /// a clear varnish over everything, how much (0 none) and how rough
     pub coat: f32,
     pub coat_roughness: f32,
+    /// A liquid filling a container (water.rs): its waves
+    pub water: Option<crate::water::Water>,
 }
 
 impl Material {
@@ -78,6 +80,7 @@ impl Material {
             mr_image: None,
             coat: 0.0,
             coat_roughness: 0.03,
+            water: None,
         }
     }
 }
@@ -677,6 +680,7 @@ fn material(m: gltf::Material) -> Material {
         mr_image: pbr.metallic_roughness_texture().map(|t| t.texture().source().index()),
         coat,
         coat_roughness,
+        water: crate::water::Water::from_extras(&extras),
     }
 }
 

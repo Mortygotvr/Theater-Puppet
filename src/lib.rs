@@ -28,6 +28,7 @@ pub mod styles;
 pub mod thumbs;
 pub mod timing;
 pub mod tracking;
+pub mod water;
 
 use std::path::PathBuf;
 

@@ -522,3 +522,13 @@ what went wrong) and it comes off the list.
       ("🥛 Disable Decay") into the opening: it goes inside and the walls
       hold it; the glass body and highlights don't stop it.
 - [ ] Reopen OBS: the threshold is still 180 on that source.
+
+## Water in a jar (Rig Make Water + Puppet)
+- [ ] Blender (restart it): the jar in Edit Mode, select its inner wall and
+      inner bottom faces → Theater Rig → Water → Make Water: a "Water"
+      object inside the glass, closed on top, blue see-through.
+- [ ] Animate its shape key water_empty from 1 to 0 (the fill), Export Prop
+      with the jar (or as its own prop): in Puppet the liquid rises, its
+      sides fitting the jar (also its neck), its surface waving.
+- [ ] Not animated: full, waving. The waves stay inside the glass (up and
+      down only). Wave height / length / speed: the dialog's settings.

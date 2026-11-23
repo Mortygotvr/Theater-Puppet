@@ -84,12 +84,18 @@ pub fn skin(model: &Model, pose: &Pose, morph: &[f32], points: &mut [Vec<[f32; 4
         .iter()
         .map(|s| s.joints.iter().zip(&s.inverse_bind).map(|(&j, ib)| pose.world[j] * *ib).collect())
         .collect();
+    // A liquid's level key (water.rs): how empty, not a shape
+    let empty_key = model.morph(crate::water::EMPTY_KEY);
     for (k, prim) in model.primitives.iter().enumerate() {
         let (out_p, out_n) = (&mut points[k], &mut normals[k]);
+        let water = model.materials.get(prim.material).and_then(|m| m.water);
         // Its shape keys at work: what they add to its unposed positions
-        let shaped: Option<Vec<Vec3>> = prim.morphs.iter().any(|m| morph.get(m.name).is_some_and(|w| w.abs() > 1e-4)).then(|| {
+        let shaped: Option<Vec<Vec3>> = prim.morphs.iter().any(|m| Some(m.name) != empty_key && morph.get(m.name).is_some_and(|w| w.abs() > 1e-4)).then(|| {
             let mut add = vec![Vec3::ZERO; prim.positions.len()];
             for m in &prim.morphs {
+                if Some(m.name) == empty_key {
+                    continue;
+                }
                 let w = morph.get(m.name).copied().unwrap_or(0.0);
                 if w.abs() > 1e-4 {
                     for (i, d) in &m.deltas {
@@ -100,6 +106,18 @@ pub fn skin(model: &Model, pose: &Pose, morph: &[f32], points: &mut [Vec<[f32; 4
             add
         });
         let shape = |i: usize| shaped.as_ref().map(|a| a[i]).unwrap_or(Vec3::ZERO);
+        // A liquid: laid onto its level, its waves (its own space, before it's placed)
+        let liquid: Option<(Vec<Vec3>, Vec<Vec3>)> = water.map(|w| {
+            let (own_p, own_n) = match &prim.binding {
+                Binding::Skin { positions, normals, .. } | Binding::Node { positions, normals, .. } => (positions, normals),
+            };
+            let p: Vec<Vec3> = own_p.iter().enumerate().map(|(i, v)| Vec3::from(*v) + shape(i)).collect();
+            let n: Vec<Vec3> = own_n.iter().map(|v| Vec3::from(*v)).collect();
+            let empty = empty_key.and_then(|e| morph.get(e)).copied().unwrap_or(0.0);
+            crate::water::surface(&w, &p, &n, empty, crate::water::now())
+        });
+        let at = |i: usize, own: &[f32; 3]| liquid.as_ref().map_or(Vec3::from(*own) + shape(i), |(p, _)| p[i]);
+        let facing = |i: usize, own: &[f32; 3]| liquid.as_ref().map_or(Vec3::from(*own), |(_, n)| n[i]);
         match &prim.binding {
             Binding::Skin { skin, positions, normals, joints, weights } => {
                 let jm = &joint_matrices[*skin];
@@ -113,8 +131,8 @@ pub fn skin(model: &Model, pose: &Pose, morph: &[f32], points: &mut [Vec<[f32; 4
                             }
                         }
                     }
-                    let p = m.transform_point3(Vec3::from(positions[i]) + shape(i));
-                    let n = m.transform_vector3(Vec3::from(normals[i])).normalize_or(Vec3::Y);
+                    let p = m.transform_point3(at(i, &positions[i]));
+                    let n = m.transform_vector3(facing(i, &normals[i])).normalize_or(Vec3::Y);
                     out_p[i] = [p.x, p.y, p.z, 0.0];
                     out_n[i] = [n.x, n.y, n.z, 0.0];
                 }
@@ -122,8 +140,8 @@ pub fn skin(model: &Model, pose: &Pose, morph: &[f32], points: &mut [Vec<[f32; 4
             Binding::Node { node, positions, normals } => {
                 let m = pose.world[*node];
                 for i in 0..positions.len() {
-                    let p = m.transform_point3(Vec3::from(positions[i]) + shape(i));
-                    let n = m.transform_vector3(Vec3::from(normals[i])).normalize_or(Vec3::Y);
+                    let p = m.transform_point3(at(i, &positions[i]));
+                    let n = m.transform_vector3(facing(i, &normals[i])).normalize_or(Vec3::Y);
                     out_p[i] = [p.x, p.y, p.z, 0.0];
                     out_n[i] = [n.x, n.y, n.z, 0.0];
                 }
