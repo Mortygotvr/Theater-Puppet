@@ -511,3 +511,14 @@ what went wrong) and it comes off the list.
       Ctrl+Y) redoes it; the source moves in OBS too and gets selected.
 - [ ] Typing a value in X / Y / W / H / Roll / Pitch / Yaw, or Reset: undone
       with Ctrl+Z. While typing in a field, Ctrl+Z is the field's own.
+
+## Glass jar for the 2D liquid (Rig capture + Scene threshold)
+- [ ] Blender (restart it first): select the jar, Theater Rig → Capture
+      Image → Add Capture Plane; with the plane active, Save Capture Image →
+      "Glass picture": a PNG of the jar as it looks (glass, see-through,
+      forest reflections), its walls a bit more solid.
+- [ ] Scene Studio: add the PNG as an image source above the liquid layer,
+      🎯 Target, tick "Own mask threshold" (180). Pour the liquid redeem
+      ("🥛 Disable Decay") into the opening: it goes inside and the walls
+      hold it; the glass body and highlights don't stop it.
+- [ ] Reopen OBS: the threshold is still 180 on that source.
