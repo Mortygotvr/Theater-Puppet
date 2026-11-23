@@ -1525,24 +1525,6 @@ pub(crate) fn set_string_setting(source: Ptr, key: &CStr, value: &str) {
     }
 }
 
-/// Gives colour slot `slot` of a Puppet source a colour (sRGB 0–1), or
-/// gives it back its own (None)
-pub(crate) fn set_color_setting(source: Ptr, slot: u32, rgb: Option<[f32; 3]>) {
-    let api = obs::api();
-    unsafe {
-        let data = (api.obs_data_create)();
-        if data.is_null() {
-            return;
-        }
-        (api.obs_data_set_bool)(data, color_on_key(slot).as_ptr(), rgb.is_some());
-        if let Some(rgb) = rgb {
-            (api.obs_data_set_int)(data, color_key(slot).as_ptr(), rgb_to_obs(rgb));
-        }
-        (api.obs_source_update)(source, data);
-        (api.obs_data_release)(data);
-    }
-}
-
 /// A Puppet source's tracking settings, edited in the Puppet Configuration
 /// window (theater-scripts/puppet_configuration.rhai) rather than in its
 /// properties: (name, 'd' a number, 'b' on / off, 's' text)
@@ -1628,24 +1610,6 @@ pub(crate) fn set_avatar_settings(source: Ptr, values: &serde_json::Map<String, 
     Ok(())
 }
 
-/// Colour slot `slot`'s colour on a Puppet source (None: its own)
-pub(crate) fn get_color_setting(source: Ptr, slot: u32) -> Option<[f32; 3]> {
-    let api = obs::api();
-    if source.is_null() {
-        return None;
-    }
-    unsafe {
-        let settings = (api.obs_source_get_settings)(source);
-        if settings.is_null() {
-            return None;
-        }
-        let on = (api.obs_data_get_bool)(settings, color_on_key(slot).as_ptr());
-        let c = (api.obs_data_get_int)(settings, color_key(slot).as_ptr());
-        (api.obs_data_release)(settings);
-        on.then(|| obs_to_rgb(c))
-    }
-}
-
 /// The view with what Puppet Place filters on it add (place.rs)
 fn placed(puppet: &Puppet) -> View {
     let mut view = *puppet.view.lock().unwrap();
@@ -1706,8 +1670,10 @@ unsafe extern "C" fn video_tick(data: Ptr, dt: f32) {
     }
     // The colour slots as they show: glides and the rainbow, a frame on
     {
-        let set = puppet.colors.lock().unwrap().clone();
+        // The properties' colours, and the redeems' over them
+        let mut set = puppet.colors.lock().unwrap().clone();
         let mut r = puppet.remote.lock().unwrap();
+        set.extend(r.color_over.iter().map(|(s, c)| (*s, *c)));
         let slots = r.slot_colors.clone();
         let shown = r.color_fx.step(dt, &set, &slots);
         drop(r);

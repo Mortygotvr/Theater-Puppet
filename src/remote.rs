@@ -258,6 +258,10 @@ pub struct Remote {
     pub slot_colors: Vec<(u32, [f32; 3])>,
     /// The colours as they show: glides and the rainbow (colorfx.rs)
     pub color_fx: crate::colorfx::ColorFx,
+    /// The colours redeems gave slots, over the source's properties (never
+    /// saved into them: the properties' colours are its normal, where Back to
+    /// normal and the timers go back to)
+    pub color_over: std::collections::HashMap<u32, [f32; 3]>,
     /// Tiles showing (not saved)
     pub tiles: Vec<ActiveTile>,
     /// How much of each layer shows now (0–1), easing toward its Show
@@ -697,21 +701,16 @@ fn ask(args: &Value, source: Ptr, remote: &Shared, shown: &mut Option<Vec<bool>>
             r.put_tiles(layer, &materials, if on { vec![tile] } else { Vec::new() }, fade);
         }
         // Every slot at once: { slot: colour } (one each), undone together
-        // Back to normal: the rainbow and the gradient off, every slot its own
-        // colour again (over the fade), the colour timers still to come dropped
+        // Back to normal: the rainbow and the gradient off, every slot the
+        // colour its properties give it again (over the fade), the colour
+        // timers still to come dropped
         "color" if args.get("reset").is_some_and(|v| v.as_bool() != Some(false)) => {
             let fade = args.get("fade").and_then(|v| v.as_f64()).unwrap_or(0.0).clamp(0.0, 30.0) as f32;
             r.color_fx.set_rainbow(None, Some(fade));
             r.color_fx.set_gradient(None, Some(fade));
             r.color_fx.fade_next(fade);
             r.timers.retain(|t| !(t.target == "rainbow" || t.target == "gradient" || t.target == "colors" || t.target.starts_with("color ")));
-            let slots = r.slots.clone();
-            drop(r);
-            for slot in slots {
-                if crate::source::get_color_setting(source, slot).is_some() {
-                    crate::source::set_color_setting(source, slot, None);
-                }
-            }
+            r.color_over.clear();
         }
         // The rainbow: every slot its own hue, still or turning; false: off
         "color" if args.get("rainbow").is_some() => {
@@ -756,7 +755,6 @@ fn ask(args: &Value, source: Ptr, remote: &Shared, shown: &mut Option<Vec<bool>>
             // Over this long (red, green and blue gliding)
             let fade = args.get("fade").and_then(|v| v.as_f64()).unwrap_or(0.0).clamp(0.0, 30.0) as f32;
             r.color_fx.fade_next(fade);
-            drop(r);
             let mut set = Vec::new();
             // "random" on several slots: each its own hue (golden-ratio steps round the wheel)
             let base = parse_color("random").map_or(0.0, |c| c[0] * 0.37 + c[1] * 0.11 + c[2] * 0.53);
@@ -780,11 +778,15 @@ fn ask(args: &Value, source: Ptr, remote: &Shared, shown: &mut Option<Vec<bool>>
             if set.is_empty() {
                 return Err("no colour given".into());
             }
+            // Over the properties' colours ("reset": that slot back to its properties')
             let mut before = serde_json::Map::new();
             for (slot, rgb) in set {
-                let was = crate::source::get_color_setting(source, slot).map_or_else(|| "reset".to_string(), |c| format!("#{:02x}{:02x}{:02x}", (c[0] * 255.0).round() as u8, (c[1] * 255.0).round() as u8, (c[2] * 255.0).round() as u8));
+                let was = r.color_over.get(&slot).copied().map_or_else(|| "reset".to_string(), |c| format!("#{:02x}{:02x}{:02x}", (c[0] * 255.0).round() as u8, (c[1] * 255.0).round() as u8, (c[2] * 255.0).round() as u8));
                 before.insert(slot.to_string(), json!(was));
-                crate::source::set_color_setting(source, slot, rgb);
+                match rgb {
+                    Some(c) => r.color_over.insert(slot, c),
+                    None => r.color_over.remove(&slot),
+                };
             }
             *undo = Some(("colors".into(), Undo::Args(json!({ "action": "color", "colors": before, "fade": fade }))));
         }
@@ -793,11 +795,13 @@ fn ask(args: &Value, source: Ptr, remote: &Shared, shown: &mut Option<Vec<bool>>
             let color = text("color");
             let fade = args.get("fade").and_then(|v| v.as_f64()).unwrap_or(0.0).clamp(0.0, 30.0) as f32;
             r.color_fx.fade_next(fade);
-            drop(r);
             let rgb = if color.eq_ignore_ascii_case("reset") { None } else { Some(parse_color(&color).ok_or_else(|| format!("colour \"{color}\": #rrggbb, a name (red, pink…), random or reset"))?) };
-            let before = crate::source::get_color_setting(source, slot).map_or_else(|| "reset".to_string(), |c| format!("#{:02x}{:02x}{:02x}", (c[0] * 255.0).round() as u8, (c[1] * 255.0).round() as u8, (c[2] * 255.0).round() as u8));
+            let before = r.color_over.get(&slot).copied().map_or_else(|| "reset".to_string(), |c| format!("#{:02x}{:02x}{:02x}", (c[0] * 255.0).round() as u8, (c[1] * 255.0).round() as u8, (c[2] * 255.0).round() as u8));
             *undo = Some((format!("color {slot}"), Undo::Args(json!({ "action": "color", "slot": slot, "color": before, "fade": fade }))));
-            crate::source::set_color_setting(source, slot, rgb);
+            match rgb {
+                Some(c) => r.color_over.insert(slot, c),
+                None => r.color_over.remove(&slot),
+            };
         }
         "list" | "" => {}
         other => return Err(format!("no action \"{other}\"")),
@@ -1211,6 +1215,25 @@ mod tests {
         step(0.3);
         assert!(step(0.3).is_empty(), "still coloured after Back to normal");
         assert!(remote.lock().unwrap().timers.is_empty(), "a colour timer is left");
+    }
+
+    /// A redeem's colours go over the properties' (never into them); its
+    /// timer and Back to normal go back to the properties' colours
+    #[test]
+    fn redeem_colours_go_over_the_properties_and_back() {
+        let remote: Shared = Arc::new(Mutex::new(Remote::default()));
+        let start = Instant::now();
+        let over = |r: &Shared| r.lock().unwrap().color_over.clone();
+        apply_at(&json!({ "action": "color", "slot": 1, "color": "#ff0000", "timer": 2 }), std::ptr::null_mut(), &remote, start).unwrap();
+        assert_eq!(over(&remote).get(&1), Some(&[1.0, 0.0, 0.0]));
+        run_due_at(std::ptr::null_mut(), &remote, start + Duration::from_secs(3));
+        assert!(over(&remote).is_empty(), "the timer left the redeem's colour: {:?}", over(&remote));
+        // Every slot at once, then one changed again, then Back to normal
+        apply_at(&json!({ "action": "color", "colors": { "1": "#00ff00", "2": "blue" } }), std::ptr::null_mut(), &remote, start).unwrap();
+        apply_at(&json!({ "action": "color", "slot": 2, "color": "reset" }), std::ptr::null_mut(), &remote, start).unwrap();
+        assert_eq!(over(&remote).keys().copied().collect::<Vec<_>>(), vec![1], "reset on a slot: back to its properties'");
+        apply_at(&json!({ "action": "color", "reset": true, "fade": 1 }), std::ptr::null_mut(), &remote, start).unwrap();
+        assert!(over(&remote).is_empty(), "Back to normal left a redeem's colour");
     }
 
     #[test]
