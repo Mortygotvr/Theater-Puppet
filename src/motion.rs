@@ -342,6 +342,11 @@ impl Rig {
     }
 
     /// One frame: `dt` seconds later, with what's tracked now
+    /// Its bones and palms where they are now (points.rs: 2D effects' origins and targets)
+    pub fn points(&self) -> Vec<(String, Vec3)> {
+        crate::points::bone_points(&self.model, &self.pose)
+    }
+
     /// Its colliders where they are now (ends, how thick at each): the
     /// avatar's, and a GLB's on bones the avatar hasn't
     pub fn capsules(&self) -> Vec<(Vec3, Vec3, f32, f32)> {

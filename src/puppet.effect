@@ -446,6 +446,41 @@ float4 PSGBuffer(GOut v) : TARGET
 	return float4(normalize(v.norm) * 0.5 + 0.5, v.depth);
 }
 
+// The avatar's distance from the camera (metres, as theater_puppet_points'
+// depth), one float a pixel: Theater Scene hides a 2D effect behind it
+uniform float4x4 view_m;
+
+struct DepthOut {
+	float4 pos   : POSITION;
+	float2 uv    : TEXCOORD0;
+	float  depth : TEXCOORD1;
+};
+
+DepthOut VSDepth(VertIn v)
+{
+	DepthOut o;
+	o.pos = mul(float4(v.pos.xyz, 1.0), mvp);
+	o.uv = v.uv;
+	o.depth = -mul(float4(v.pos.xyz, 1.0), view_m).z;
+	return o;
+}
+
+float4 PSDepth(DepthOut v) : TARGET
+{
+	if ((base_color * texel(v.uv)).a < alpha_cutoff || faded_out(v.pos.xy))
+		discard;
+	return float4(v.depth, 0.0, 0.0, 1.0);
+}
+
+technique Depth
+{
+	pass
+	{
+		vertex_shader = VSDepth(v);
+		pixel_shader  = PSDepth(v);
+	}
+}
+
 technique GBuffer
 {
 	pass

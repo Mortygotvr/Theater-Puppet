@@ -84,6 +84,7 @@ pub const GS_SHADER_PARAM_TEXTURE: u32 = 12;
 
 pub const GS_RGBA: u32 = 3;
 pub const GS_RGBA16F: u32 = 9;
+pub const GS_R32F: u32 = 14;
 pub const GS_ZS_NONE: u32 = 0;
 pub const GS_Z24_S8: u32 = 2;
 pub const GS_UNSIGNED_LONG: u32 = 1;

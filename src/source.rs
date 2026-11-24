@@ -314,6 +314,9 @@ struct Puppet {
     source: Ptr,
     /// Its body parts map, for Theater Scene (parts.rs)
     parts: crate::parts::Shared,
+    /// Its points and depth for Scene's 2D effects (points.rs), and its bones now
+    space: crate::points::Shared,
+    bones: Mutex<Vec<(String, glam::Vec3)>>,
     /// What Control Panel and Scene ask of it, and what it tells them (remote.rs)
     remote: crate::remote::Shared,
     /// GLB prefabs on screen (prefab.rs): stepped by video_tick, drawn by video_render
@@ -1009,12 +1012,16 @@ unsafe extern "C" fn style_changed(props: Ptr, _prop: Ptr, settings: Ptr) -> boo
 unsafe extern "C" fn create(settings: Ptr, source: Ptr) -> Ptr {
     let parts: crate::parts::Shared = Default::default();
     crate::parts::add_source(source, parts.clone());
+    let space: crate::points::Shared = Default::default();
+    crate::points::add_source(source, space.clone());
     let remote: crate::remote::Shared = Default::default();
     crate::remote::add_source(source, remote.clone());
     let puppet = Box::new(Puppet {
         styles_read: AtomicU64::new(0),
         source,
         parts,
+        space,
+        bones: Mutex::new(Vec::new()),
         remote,
         prefabs: Mutex::new(Vec::new()),
         colors: Mutex::new(HashMap::new()),
@@ -1064,6 +1071,7 @@ unsafe extern "C" fn destroy(data: Ptr) {
     let puppet = unsafe { Box::from_raw(data as *mut Puppet) };
     crate::tracking::config::set_own(puppet.source as usize, None);
     crate::parts::remove_source(puppet.source);
+    crate::points::remove_source(puppet.source);
     crate::remote::remove_source(puppet.source);
     puppet.generation.fetch_add(1, Ordering::SeqCst);
     let gpu = puppet.gpu.lock().unwrap().take();
@@ -1666,6 +1674,8 @@ unsafe extern "C" fn video_tick(data: Ptr, dt: f32) {
         }
         puppet.remote.lock().unwrap().step_fade(dt);
         rig.step(dt, motion);
+        // Its bones where they are now (projected where it's drawn: points.rs)
+        *puppet.bones.lock().unwrap() = rig.points();
         // Its colliders where they are now, to draw (when shown)
         *puppet.capsules.lock().unwrap() = if puppet.show_colliders.load(Ordering::Relaxed) { rig.capsules() } else { Vec::new() };
         crate::timing::tick(started.elapsed());
@@ -1933,6 +1943,19 @@ unsafe extern "C" fn video_render(data: Ptr, _effect: Ptr) {
             })
             .flatten();
         g.draw(width, height, view, s, &frame, &filters, reflection);
+        // Its points and depth, for Scene's 2D effects (points.rs)
+        {
+            let bones = puppet.bones.lock().unwrap().clone();
+            let at: Vec<glam::Vec3> = bones.iter().map(|(_, p)| *p).collect();
+            let projected = g.project(width, height, view, &at);
+            let wanted = puppet.space.lock().unwrap().depth_wanted();
+            let depth = if wanted { g.depth(width, height, view, s, &frame).map_or(0, |t| t as usize) } else { 0 };
+            let mut space = puppet.space.lock().unwrap();
+            space.width = width;
+            space.height = height;
+            space.points = bones.into_iter().map(|(n, _)| n).zip(projected).collect();
+            space.depth = depth;
+        }
         // The body parts map, for Theater Scene
         if let Some(pixels) = g.parts(width, height, view, s) {
             let map = crate::parts::PartMap { pixels, width, height };

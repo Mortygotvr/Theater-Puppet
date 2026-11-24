@@ -16,6 +16,7 @@ pub mod motion;
 pub mod obs;
 pub mod parts;
 pub mod place;
+pub mod points;
 pub mod prefab;
 pub mod remote;
 pub mod pose;
@@ -146,6 +147,7 @@ pub extern "C" fn obs_module_load() -> bool {
     }
     source::register();
     parts::register_procs();
+    points::register_procs();
     tracking::dock::register();
     place::register();
     camera::register();

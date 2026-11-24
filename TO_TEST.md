@@ -548,3 +548,14 @@ what went wrong) and it comes off the list.
 - [ ] Restart OBS: it listens again by itself (the source picked kept).
 - [ ] The old "🎤 Puppet Lipsync" filter (if still on a source) keeps
       working; its name now points to the Configuration tab.
+
+## 2D in 3D: a bolt from the palm (engine only; the redeem comes later in Rhai)
+- [ ] Puppet's log: "Registered theater_puppet_points / theater_puppet_depth".
+- [ ] A Lua redeem (Custom Script) with
+      `trust.spawn_lightning({ target = "<a target>", origin = "<Puppet source>:right_palm" })`:
+      the bolt starts at the right palm and follows the hand as it moves.
+- [ ] Curl the fingers in front of it / turn the back of the hand to the
+      camera: they hide the start of the bolt; the body behind is covered by
+      the bolt. depthBias (default 0.04 m) for how much nearer hides it.
+- [ ] Other points: "left_palm", any bone ("Head", "LeftHandIndex4"…).
+- [ ] Normal bolts (no origin) look exactly as before.

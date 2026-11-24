@@ -103,6 +103,7 @@ fn param(effect: Ptr, name: &str) -> Ptr {
 
 struct Params {
     mvp: Ptr,
+    view_m: Ptr,
     image: Ptr,
     base_color: Ptr,
     shade_color: Ptr,
@@ -192,6 +193,8 @@ fn param_size(kind: u32) -> Option<usize> {
 /// starts: so they're set again before each draw.
 struct FrameValues<'a> {
     mvp: [f32; 16],
+    /// The camera's view of the model (no projection): the depth pass's distances
+    view: [f32; 16],
     light: [f32; 4],
     light_color: [f32; 4],
     eye: [f32; 4],
@@ -217,6 +220,7 @@ impl Shader {
         let p = |n| param(effect, n);
         let params = Params {
             mvp: p("mvp"),
+            view_m: p("view_m"),
             image: p("image"),
             base_color: p("base_color"),
             shade_color: p("shade_color"),
@@ -283,6 +287,9 @@ impl Shader {
                 (api.gs_effect_set_val)(*param, zeros.as_ptr() as *const _, *size);
             }
             (api.gs_effect_set_matrix4)(p.mvp, &v.mvp);
+            if !p.view_m.is_null() {
+                (api.gs_effect_set_matrix4)(p.view_m, &v.view);
+            }
             (api.gs_effect_set_vec4)(p.light_dir, &v.light);
             (api.gs_effect_set_vec4)(p.light_color, &v.light_color);
             (api.gs_effect_set_vec4)(p.eye, &v.eye);
@@ -567,6 +574,8 @@ pub struct Gpu {
     /// The parts map for Theater Scene: drawn small, copied back a frame later
     parts_rt: Ptr,
     parts_stage: std::sync::Mutex<PartsStage>,
+    /// The avatar's distance at each pixel (points.rs), drawn while Scene asks
+    depth_rt: Ptr,
     /// What the camera frames: the avatar and the GLBs drawn with it (not
     /// the controller or desk); the avatar's own, kept for when they change
     pub min: Vec3,
@@ -647,12 +656,27 @@ unsafe fn obs_copy<T: Copy>(src: &[T]) -> *mut T {
 /// What the camera works out for a frame
 struct Camera {
     mvp: Mat4,
+    /// The camera's view of the model (no projection)
+    view: Mat4,
     /// Towards the light, in the avatar's own space
     light: Vec3,
     /// Its colour x strength
     light_color: [f32; 4],
     /// The camera, in the avatar's own space
     eye: Vec3,
+}
+
+/// The depth map's value where nothing of the avatar is (metres)
+pub const FAR_AWAY: f32 = 1.0e6;
+
+/// `p` (the avatar's space) where `cam` shows it on a width x height
+/// picture: x, y in pixels (y down), and its distance from the camera (metres)
+fn project(cam: &Camera, width: u32, height: u32, p: Vec3) -> [f32; 3] {
+    let c = cam.mvp * p.extend(1.0);
+    let w = if c.w.abs() < 1e-6 { 1e-6 } else { c.w };
+    let (nx, ny) = (c.x / w, c.y / w);
+    let depth = -(cam.view * p.extend(1.0)).z;
+    [(nx * 0.5 + 0.5) * width as f32, (0.5 - ny * 0.5) * height as f32, depth]
 }
 
 /// The camera for a model from `min` to `max` (Gpu::camera)
@@ -696,6 +720,7 @@ fn camera(min: Vec3, max: Vec3, width: u32, height: u32, view: View) -> Camera {
     let inverse = (look * model).inverse();
     Camera {
         mvp: proj * look * model,
+        view: look * model,
         light: inverse.transform_vector3(view.light.normalize_or(View::LIGHT.normalize())).normalize(),
         light_color: [view.light_color[0], view.light_color[1], view.light_color[2], 1.0],
         eye: inverse.transform_point3(Vec3::ZERO),
@@ -714,6 +739,7 @@ impl Gpu {
         let gbuf = unsafe { (api.gs_texrender_create)(obs::GS_RGBA16F, obs::GS_Z24_S8) };
         let inked = unsafe { (api.gs_texrender_create)(obs::GS_RGBA, obs::GS_ZS_NONE) };
         let parts_rt = unsafe { (api.gs_texrender_create)(obs::GS_RGBA, obs::GS_Z24_S8) };
+        let depth_rt = unsafe { (api.gs_texrender_create)(obs::GS_R32F, obs::GS_Z24_S8) };
         let env_rt = unsafe { (api.gs_texrender_create)(obs::GS_RGBA, obs::GS_ZS_NONE) };
         let chain = unsafe { [(api.gs_texrender_create)(obs::GS_RGBA, obs::GS_ZS_NONE), (api.gs_texrender_create)(obs::GS_RGBA, obs::GS_ZS_NONE)] };
         let unpremultiply = create_effect(UNPREMULTIPLY, c"unpremultiply.effect").unwrap_or_else(|e| {
@@ -749,6 +775,7 @@ impl Gpu {
             parts_rt,
             env_rt,
             parts_stage: Default::default(),
+            depth_rt,
             main_bounds: (model.min, model.max),
             min: model.min,
             max: model.max,
@@ -779,6 +806,7 @@ impl Gpu {
                 let values = FrameValues {
                     // Transposed, as OBS does with its own ViewProj before it reaches the shader
                     mvp: cam.mvp.transpose().to_cols_array(),
+                    view: cam.view.transpose().to_cols_array(),
                     light: [cam.light.x, cam.light.y, cam.light.z, 0.0], light_color: cam.light_color,
                     eye: [cam.eye.x, cam.eye.y, cam.eye.z, 1.0],
                     time: seconds(),
@@ -1090,6 +1118,7 @@ impl Gpu {
             let cam = self.camera(width, height, view);
             let values = FrameValues {
                 mvp: cam.mvp.transpose().to_cols_array(),
+                view: cam.view.transpose().to_cols_array(),
                 light: [0.0; 4],
                 light_color: [1.0; 4],
                 eye: [cam.eye.x, cam.eye.y, cam.eye.z, 1.0],
@@ -1175,12 +1204,62 @@ impl Gpu {
         }
     }
 
+    /// `points` (the avatar's space) where the picture shows them: on the
+    /// source (pixels, y down) and how far from the camera (metres)
+    pub fn project(&self, width: u32, height: u32, view: View, points: &[Vec3]) -> Vec<[f32; 3]> {
+        let cam = self.camera(width, height, view);
+        points.iter().map(|p| project(&cam, width, height, *p)).collect()
+    }
+
+    /// The avatar's distance from the camera at each pixel (metres; far away
+    /// where it isn't): its texture, or None when it couldn't draw
+    pub fn depth(&self, width: u32, height: u32, view: View, shader: &Shader, frame: &Frame) -> Option<Ptr> {
+        if self.depth_rt.is_null() {
+            return None;
+        }
+        let api = obs::api();
+        let cam = self.camera(width, height, view);
+        let values = FrameValues {
+            mvp: cam.mvp.transpose().to_cols_array(),
+            view: cam.view.transpose().to_cols_array(),
+            light: [cam.light.x, cam.light.y, cam.light.z, 0.0], light_color: cam.light_color,
+            eye: [cam.eye.x, cam.eye.y, cam.eye.z, 1.0],
+            time: seconds(),
+            frame,
+            reflection: None,
+        };
+        unsafe {
+            (api.gs_texrender_reset)(self.depth_rt);
+            if !(api.gs_texrender_begin)(self.depth_rt, width, height) {
+                return None;
+            }
+            (api.gs_clear)(obs::GS_CLEAR_COLOR | obs::GS_CLEAR_DEPTH, &[FAR_AWAY, 0.0, 0.0, 1.0], 1.0, 0);
+            (api.gs_blend_state_push)();
+            let cull = (api.gs_get_cull_mode)();
+            (api.gs_set_cull_mode)(obs::GS_NEITHER);
+            (api.gs_enable_depth_test)(true);
+            (api.gs_depth_function)(obs::GS_LESS);
+            (api.gs_enable_blending)(false);
+            // See-through bits (glass, lashes) don't hide what's behind
+            self.pass(shader, &values, c"Depth", |m| m.alpha != Alpha::Blend);
+            (api.gs_load_vertexbuffer)(std::ptr::null_mut());
+            (api.gs_load_indexbuffer)(std::ptr::null_mut());
+            (api.gs_enable_depth_test)(false);
+            (api.gs_set_cull_mode)(cull);
+            (api.gs_blend_state_pop)();
+            (api.gs_texrender_end)(self.depth_rt);
+            let t = (api.gs_texrender_get_texture)(self.depth_rt);
+            (!t.is_null()).then_some(t)
+        }
+    }
+
     /// The avatar's normals and distances, each pixel (for the ink lines and
     /// filters that ask for them). Its texture, or None when it couldn't draw.
     unsafe fn gbuffer(&self, width: u32, height: u32, cam: &Camera, shader: &Shader, frame: &Frame) -> Option<Ptr> {
         let api = obs::api();
         let values = FrameValues {
             mvp: cam.mvp.transpose().to_cols_array(),
+            view: cam.view.transpose().to_cols_array(),
             light: [cam.light.x, cam.light.y, cam.light.z, 0.0], light_color: cam.light_color,
             eye: [cam.eye.x, cam.eye.y, cam.eye.z, 1.0],
             time: seconds(),
@@ -1218,7 +1297,7 @@ impl Gpu {
     unsafe fn ink(&self, picture: Ptr, gbuf: Ptr, width: u32, height: u32, frame: &Frame) -> Option<Ptr> {
         let api = obs::api();
         let ink = self.ink.as_ref()?;
-        let values = FrameValues { mvp: [0.0; 16], light: [0.0; 4], light_color: [1.0; 4], eye: [0.0; 4], time: seconds(), frame, reflection: None };
+        let values = FrameValues { mvp: [0.0; 16], view: [0.0; 16], light: [0.0; 4], light_color: [1.0; 4], eye: [0.0; 4], time: seconds(), frame, reflection: None };
         unsafe {
             (api.gs_texrender_reset)(self.inked);
             if !(api.gs_texrender_begin)(self.inked, width, height) {
@@ -1422,6 +1501,9 @@ impl Gpu {
             }
             destroy_effect(self.unpremultiply);
             (api.gs_texrender_destroy)(self.parts_rt);
+            if !self.depth_rt.is_null() {
+                (api.gs_texrender_destroy)(self.depth_rt);
+            }
             (api.gs_texrender_destroy)(self.env_rt);
             if let Some((surface, _, _)) = self.parts_stage.into_inner().ok().and_then(|s| s.surface) {
                 (api.gs_stagesurface_destroy)(surface);
@@ -1445,6 +1527,25 @@ mod tests {
         // Straight above, and from the camera's side
         assert!((View::light_from(0.0, 90.0) - Vec3::Y).length() < 1e-5);
         assert!((View::light_from(0.0, 0.0) - Vec3::Z).length() < 1e-5);
+    }
+
+    /// A point projected: the model's middle in the middle of the picture,
+    /// higher up higher on it (smaller y), its depth the camera's distance;
+    /// the same in orthographic
+    #[test]
+    fn points_land_where_the_picture_shows_them() {
+        let (min, max) = (Vec3::new(-0.3, 0.0, -0.2), Vec3::new(0.3, 1.8, 0.2));
+        for ortho in [false, true] {
+            let v = View { zoom: 1.0, height: 0.0, yaw: 0.0, orbit: 0.0, orthographic: ortho, position: Vec3::ZERO, light: View::LIGHT, light_color: [1.0; 3] };
+            let cam = camera(min, max, 1920, 1080, v);
+            let mid = project(&cam, 1920, 1080, Vec3::new(0.0, 0.9, 0.0));
+            let head = project(&cam, 1920, 1080, Vec3::new(0.0, 1.7, 0.0));
+            let front = project(&cam, 1920, 1080, Vec3::new(0.0, 0.9, 0.2));
+            assert!((mid[0] - 960.0).abs() < 1.0 && (mid[1] - 540.0).abs() < 2.0, "{ortho}: middle at {mid:?}");
+            assert!(head[1] < mid[1] - 100.0, "{ortho}: head {head:?} not above {mid:?}");
+            assert!((mid[2] - (cam.eye - Vec3::new(0.0, 0.9, 0.0)).length()).abs() < 0.05, "{ortho}: depth {} vs eye {:?}", mid[2], cam.eye);
+            assert!((mid[2] - front[2] - 0.2).abs() < 1e-3, "{ortho}: 0.2 m nearer is 0.2 m nearer: {} {}", mid[2], front[2]);
+        }
     }
 
     fn view(orbit: f32, orthographic: bool) -> View {
