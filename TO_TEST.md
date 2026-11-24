@@ -195,6 +195,9 @@ what went wrong) and it comes off the list.
       camera eases back to its original angle (Orbit kept), the shortest way,
       in one second however far round: several Puppets stopped at once settle
       together. Spin goes up to 360 (a turn a second) either way.
+- [ ] A Studio pose with Spin 0 (from one spinning): the return starts as
+      the pose starts (no second of slower turning first); a pose with a
+      spin still speeds up smoothly.
       While spinning it never jumps back by itself. Negative: the other way.
 - [ ] In Scene's Studio, the source's filter part shows its sliders; two poses
       with different Zoom / Turn / Position ease from one to the other.
