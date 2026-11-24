@@ -192,8 +192,8 @@ what went wrong) and it comes off the list.
       start (1, as the source, 0…): nothing changes.
 - [ ] Spin 45: the camera goes round the model (the model doesn't turn;
       the lit side changes as the camera goes round). Spin back to 0: the
-      camera stops where it is, and stays there (no going back to 0°).
-      Negative: the other way round.
+      camera eases back to its original angle (Orbit kept), the shortest way.
+      While spinning it never jumps back by itself. Negative: the other way.
 - [ ] In Scene's Studio, the source's filter part shows its sliders; two poses
       with different Zoom / Turn / Position ease from one to the other.
 

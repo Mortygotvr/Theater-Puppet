@@ -99,9 +99,20 @@ pub fn apply(view: &mut crate::render::View, (c, turned): (Camera, f32)) {
 }
 
 /// A spin `dt` seconds on: the camera going round at `spin` degrees a second;
-/// at 0 it stays where it got to (it doesn't go back)
+/// at 0, back to its original angle (the nearest whole turn, the shortest way)
+/// over about a second
 fn spun(turned: f32, spin: f32, dt: f32) -> f32 {
-    (turned + spin * dt).rem_euclid(360.0)
+    if spin != 0.0 {
+        return (turned + spin * dt).rem_euclid(360.0);
+    }
+    let home = (turned / 360.0).round() * 360.0;
+    let d = home - turned;
+    // Eased, but never slower than 20 degrees a second: it does get there
+    let mut step = d * (dt * 3.0).min(1.0);
+    if step.abs() < 20.0 * dt {
+        step = d.signum() * (20.0 * dt).min(d.abs());
+    }
+    (turned + step).rem_euclid(360.0)
 }
 
 pub fn register() {
@@ -219,7 +230,7 @@ unsafe extern "C" fn get_properties(_: Ptr) -> Ptr {
         ] {
             (api.obs_properties_add_float_slider)(props, key.as_ptr(), label.as_ptr(), -range, range, 0.01);
         }
-        (api.obs_properties_add_float_slider)(props, S_SPIN.as_ptr(), c"Spin: the camera goes round the model, degrees a second (0: it stops where it is)".as_ptr(), -180.0, 180.0, 1.0);
+        (api.obs_properties_add_float_slider)(props, S_SPIN.as_ptr(), c"Spin: the camera goes round the model, degrees a second (0: back to its original angle)".as_ptr(), -180.0, 180.0, 1.0);
         (api.obs_properties_add_text)(
             props,
             c"camera_info".as_ptr(),
@@ -303,17 +314,23 @@ mod tests {
     }
 
     #[test]
-    fn the_spin_goes_round_and_stops_where_it_is() {
+    fn the_spin_goes_round_and_back_to_its_original_angle() {
         let mut t = 0.0;
         for _ in 0..60 {
             t = spun(t, 90.0, 1.0 / 60.0);
         }
         assert!((t - 90.0).abs() < 1e-3, "a second at 90 a second: {t}");
-        // Spin 0: it stays there
-        for _ in 0..600 {
+        // Spin 0: back to the original angle (0 here), and it stays there
+        for _ in 0..240 {
             t = spun(t, 0.0, 1.0 / 60.0);
         }
-        assert!((t - 90.0).abs() < 1e-3, "it went back: {t}");
+        assert!(t.abs() < 1e-3 || (t - 360.0).abs() < 1e-3, "not back: {t}");
+        // Past half a turn: on round the shortest way (to 360, the same angle)
+        let mut w = 200.0;
+        for _ in 0..240 {
+            w = spun(w, 0.0, 1.0 / 60.0);
+        }
+        assert!(w.abs() < 1e-3 || (w - 360.0).abs() < 1e-3, "not back: {w}");
         // Round and round: no jump at a whole turn; backwards too
         let mut u = 350.0;
         u = spun(u, 60.0, 0.5);
