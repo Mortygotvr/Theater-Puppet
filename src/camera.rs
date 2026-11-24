@@ -60,6 +60,8 @@ struct Entry {
     camera: Camera,
     parent: usize,
     turned: f32,
+    /// Going back to its original angle (Spin set to 0): where from, and for how long now
+    back: Option<(f32, f32)>,
 }
 
 static FILTERS: Mutex<Vec<Entry>> = Mutex::new(Vec::new());
@@ -98,21 +100,32 @@ pub fn apply(view: &mut crate::render::View, (c, turned): (Camera, f32)) {
     view.orbit += turned;
 }
 
-/// A spin `dt` seconds on: the camera going round at `spin` degrees a second;
-/// at 0, back to its original angle (the nearest whole turn, the shortest way)
-/// over about a second
-fn spun(turned: f32, spin: f32, dt: f32) -> f32 {
+/// How long the camera takes back to its original angle, however far round:
+/// Puppets stopped together settle together
+const BACK_SECONDS: f32 = 1.0;
+
+/// A spin `dt` seconds on: the camera going round at `spin` degrees a
+/// second; at 0, back to its original angle (the nearest whole turn, the
+/// shortest way), eased, in BACK_SECONDS. `back`: that return under way
+fn spun(turned: f32, back: &mut Option<(f32, f32)>, spin: f32, dt: f32) -> f32 {
     if spin != 0.0 {
+        *back = None;
         return (turned + spin * dt).rem_euclid(360.0);
     }
-    let home = (turned / 360.0).round() * 360.0;
-    let d = home - turned;
-    // Eased, but never slower than 20 degrees a second: it does get there
-    let mut step = d * (dt * 3.0).min(1.0);
-    if step.abs() < 20.0 * dt {
-        step = d.signum() * (20.0 * dt).min(d.abs());
+    let at_home = turned.min(360.0 - turned) < 1e-4;
+    if at_home && back.is_none() {
+        return 0.0;
     }
-    (turned + step).rem_euclid(360.0)
+    let (from, t) = back.get_or_insert((turned, 0.0));
+    *t += dt;
+    let k = (*t / BACK_SECONDS).clamp(0.0, 1.0);
+    if k >= 1.0 {
+        *back = None;
+        return 0.0;
+    }
+    let home = (*from / 360.0).round() * 360.0;
+    let eased = k * k * (3.0 - 2.0 * k);
+    (*from + (home - *from) * eased).rem_euclid(360.0)
 }
 
 pub fn register() {
@@ -230,7 +243,7 @@ unsafe extern "C" fn get_properties(_: Ptr) -> Ptr {
         ] {
             (api.obs_properties_add_float_slider)(props, key.as_ptr(), label.as_ptr(), -range, range, 0.01);
         }
-        (api.obs_properties_add_float_slider)(props, S_SPIN.as_ptr(), c"Spin: the camera goes round the model, degrees a second (0: back to its original angle)".as_ptr(), -180.0, 180.0, 1.0);
+        (api.obs_properties_add_float_slider)(props, S_SPIN.as_ptr(), c"Spin: the camera goes round the model, degrees a second (0: back to its original angle in a second)".as_ptr(), -360.0, 360.0, 1.0);
         (api.obs_properties_add_text)(
             props,
             c"camera_info".as_ptr(),
@@ -243,7 +256,7 @@ unsafe extern "C" fn get_properties(_: Ptr) -> Ptr {
 
 /// The filter's OBS source (its `data`: it needs nothing else)
 unsafe extern "C" fn create(settings: Ptr, filter: Ptr) -> Ptr {
-    FILTERS.lock().unwrap().push(Entry { filter: filter as usize, camera: Camera::default(), parent: 0, turned: 0.0 });
+    FILTERS.lock().unwrap().push(Entry { filter: filter as usize, camera: Camera::default(), parent: 0, turned: 0.0, back: None });
     unsafe { update(filter, settings) };
     filter
 }
@@ -279,7 +292,7 @@ unsafe extern "C" fn video_tick(filter: Ptr, dt: f32) {
     let parent = unsafe { if (api.obs_source_enabled)(filter) { (api.obs_filter_get_parent)(filter) as usize } else { 0 } };
     if let Some(e) = FILTERS.lock().unwrap().iter_mut().find(|e| e.filter == filter as usize) {
         e.parent = parent;
-        e.turned = spun(e.turned, e.camera.spin, dt.clamp(0.0, 0.1));
+        e.turned = spun(e.turned, &mut e.back, e.camera.spin, dt.clamp(0.0, 0.1));
     }
 }
 
@@ -293,7 +306,7 @@ mod tests {
     use super::*;
 
     fn entry(filter: usize, camera: Camera, parent: usize, turned: f32) -> Entry {
-        Entry { filter, camera, parent, turned }
+        Entry { filter, camera, parent, turned, back: None }
     }
 
     #[test]
@@ -315,27 +328,40 @@ mod tests {
 
     #[test]
     fn the_spin_goes_round_and_back_to_its_original_angle() {
+        let mut back = None;
         let mut t = 0.0;
         for _ in 0..60 {
-            t = spun(t, 90.0, 1.0 / 60.0);
+            t = spun(t, &mut back, 90.0, 1.0 / 60.0);
         }
         assert!((t - 90.0).abs() < 1e-3, "a second at 90 a second: {t}");
         // Spin 0: back to the original angle (0 here), and it stays there
-        for _ in 0..240 {
-            t = spun(t, 0.0, 1.0 / 60.0);
+        for _ in 0..90 {
+            t = spun(t, &mut back, 0.0, 1.0 / 60.0);
         }
-        assert!(t.abs() < 1e-3 || (t - 360.0).abs() < 1e-3, "not back: {t}");
-        // Past half a turn: on round the shortest way (to 360, the same angle)
-        let mut w = 200.0;
-        for _ in 0..240 {
-            w = spun(w, 0.0, 1.0 / 60.0);
+        assert_eq!(t, 0.0);
+        // Two cameras far apart (one past half a turn: on round to 360), stopped
+        // together: back together, in a second
+        let (mut a, mut b) = (30.0, 250.0);
+        let (mut ba, mut bb) = (None, None);
+        for i in 0..60 {
+            a = spun(a, &mut ba, 0.0, 1.0 / 60.0);
+            b = spun(b, &mut bb, 0.0, 1.0 / 60.0);
+            if i == 29 {
+                // Half way: each half way (eased: exactly half at the middle)
+                assert!((a - 15.0).abs() < 0.5 && (b - 305.0).abs() < 0.5, "half way: {a} {b}");
+            }
         }
-        assert!(w.abs() < 1e-3 || (w - 360.0).abs() < 1e-3, "not back: {w}");
+        assert_eq!((a, b), (0.0, 0.0), "not back together");
+        // A full 360 a second
+        let mut back = None;
+        let f = spun(0.0, &mut back, 360.0, 0.25);
+        assert!((f - 90.0).abs() < 1e-3);
         // Round and round: no jump at a whole turn; backwards too
         let mut u = 350.0;
-        u = spun(u, 60.0, 0.5);
+        let mut back = None;
+        u = spun(u, &mut back, 60.0, 0.5);
         assert!((u - 20.0).abs() < 1e-3, "{u}");
-        u = spun(u, -60.0, 1.0);
+        u = spun(u, &mut back, -60.0, 1.0);
         assert!((u - 320.0).abs() < 1e-3, "{u}");
         // It moves the camera round (orbit), not the model (yaw)
         let mut view = crate::render::View { zoom: 1.0, height: 0.0, yaw: 5.0, orbit: 10.0, orthographic: false, position: Vec3::ZERO, light: crate::render::View::LIGHT, light_color: [1.0; 3] };
