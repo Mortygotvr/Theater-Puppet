@@ -556,9 +556,11 @@ what went wrong) and it comes off the list.
 
 ## 2D in 3D: a bolt from the palm (engine only; the redeem comes later in Rhai)
 - [ ] Puppet's log: "Registered theater_puppet_points / theater_puppet_depth".
-- [ ] A Lua redeem (Custom Script) with
-      `trust.spawn_lightning({ target = "<a target>", origin = "<Puppet source>:right_palm" })`:
-      the bolt starts at the right palm and follows the hand as it moves.
+- [ ] Studio → a ⚡ Lightning redeem → Strike Origin "🎭 A Puppet's point":
+      pick the Puppet (or the first one) and the point (right palm…), a
+      target, Test: the bolt starts at the palm and follows the hand as it
+      moves (also with the Puppet source not ticked as a target). Saved and
+      reopened: the point is kept.
 - [ ] Curl the fingers in front of it / turn the back of the hand to the
       camera: they hide the start of the bolt; the body behind is covered by
       the bolt. depthBias (default 0.04 m) for how much nearer hides it.
