@@ -408,8 +408,8 @@ fn ui(ui) {
                 av_pick(ui, this.puppet, avatar, "desk_hands", "Hands", [["gaming", "One on the keys, the other on the mouse (gaming)"], ["switching", "Both typing; one goes to the mouse while it's used"], ["typing", "Both on the keys (typing only)"]]);
                 av_pick(ui, this.puppet, avatar, "desk_keys", "What the keys show", [["area", "Area: WASD, Space, Shift, Ctrl exactly; others only tap (typing can't be read)"], ["exact", "Exact: every key (viewers could read your typing)"], ["motion", "Motion only: fingers tap, no keys shown"]]);
                 av_check(ui, this.puppet, avatar, "desk_left_handed", "Left-handed (the mouse on the left)");
-                av_slider(ui, this.puppet, avatar, "desk_up", "Desk lower (-) or higher (+), metres", -0.25, 0.3);
-                av_slider(ui, this.puppet, avatar, "desk_forward", "Desk closer (-) or farther (+), metres", -0.2, 0.3);
+                av_slider(ui, this.puppet, avatar, "desk_up", "Keyboard & mouse lower (-) or higher (+), metres", -0.25, 0.6);
+                av_slider(ui, this.puppet, avatar, "desk_forward", "Keyboard & mouse closer (-) or farther (+), metres", -0.2, 0.3);
                 av_slider(ui, this.puppet, avatar, "desk_left_hand_up", "Left hand lower (-) or higher (+), metres", -0.1, 0.15);
                 av_slider(ui, this.puppet, avatar, "desk_left_hand_forward", "Left hand back (-) or forward (+), metres", -0.1, 0.1);
                 av_slider(ui, this.puppet, avatar, "desk_right_hand_up", "Right hand lower (-) or higher (+), metres", -0.1, 0.15);
