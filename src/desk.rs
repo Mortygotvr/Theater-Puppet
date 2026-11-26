@@ -360,8 +360,9 @@ pub fn fingers(layout: &Layout, state: &State, look: &Look, input: &Desk) -> [Ha
     let mousing = || {
         let mut h = Hand::default();
         let click = |b: u8| input.buttons & b != 0;
-        h.bend[1] = if click(1) { [0.6, 0.7, 0.5] } else { [0.45, 0.55, 0.4] };
-        h.bend[2] = if click(2) { [0.6, 0.7, 0.5] } else { [0.45, 0.55, 0.4] };
+        // (Seen live: 0.45 / 0.6 at the knuckle sat 10-15° above the keyboard hand's)
+        h.bend[1] = if click(1) { [0.82, 0.7, 0.5] } else { [0.67, 0.55, 0.4] };
+        h.bend[2] = if click(2) { [0.82, 0.7, 0.5] } else { [0.67, 0.55, 0.4] };
         h.bend[3] = [0.85, 0.95, 0.65];
         h.bend[4] = [0.9, 1.0, 0.65];
         h.bend[0] = [0.15, 0.1, 0.05];
