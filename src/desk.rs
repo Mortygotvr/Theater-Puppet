@@ -311,7 +311,8 @@ pub fn wrists(layout: &Layout, state: &State, look: &Look, input: &Desk) -> [Wri
                 palm: Vec3::new(0.0, -1.0, 0.15),
             }
         });
-        let on_mouse = Wrist { at: layout.mouse_now(look, input) + Vec3::new(0.0, 0.065, -0.10), fingers: Vec3::new(0.0, -0.25, 1.0), palm: Vec3::new(0.0, -1.0, 0.1) };
+        // (Seen live: 6.5 cm up, fingers 14° down: the hand floated flat over the mouse)
+        let on_mouse = Wrist { at: layout.mouse_now(look, input) + Vec3::new(0.0, 0.05, -0.10), fingers: Vec3::new(0.0, -0.5, 1.0), palm: Vec3::new(0.0, -1.0, 0.1) };
         let keys = on_keys.unwrap_or(on_mouse);
         let t = if hand == mh { state.on_mouse } else { 0.0 };
         let w = if t <= 0.0 {
@@ -360,9 +361,10 @@ pub fn fingers(layout: &Layout, state: &State, look: &Look, input: &Desk) -> [Ha
     let mousing = || {
         let mut h = Hand::default();
         let click = |b: u8| input.buttons & b != 0;
-        // (Seen live: 0.45 / 0.6 at the knuckle sat ~25° above the keyboard hand's)
-        h.bend[1] = if click(1) { [1.04, 0.7, 0.5] } else { [0.89, 0.55, 0.4] };
-        h.bend[2] = if click(2) { [1.04, 0.7, 0.5] } else { [0.89, 0.55, 0.4] };
+        // (Seen live: 0.45 / 0.6 at the knuckle sat above the keyboard hand's;
+        // the rest of the gap was the whole hand's pitch, see wrists)
+        h.bend[1] = if click(1) { [0.82, 0.7, 0.5] } else { [0.67, 0.55, 0.4] };
+        h.bend[2] = if click(2) { [0.82, 0.7, 0.5] } else { [0.67, 0.55, 0.4] };
         h.bend[3] = [0.85, 0.95, 0.65];
         h.bend[4] = [0.9, 1.0, 0.65];
         h.bend[0] = [0.15, 0.1, 0.05];
