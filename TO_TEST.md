@@ -331,6 +331,8 @@ what went wrong) and it comes off the list.
 - [ ] Moving the mouse moves the avatar's mouse and hand (now through a
       mouse hook: also in a game that holds the cursor); clicks bend the
       index / middle finger. Your own mouse doesn't feel any slower.
+- [ ] On the mouse, the index and middle fingers sit about as low as the
+      keyboard hand's (they were 10-15° higher).
 - [ ] Each hand's own height and forward / back sliders; the tilt and
       finger curl sliders.
 - [ ] Puppet properties → "Keyboard & mouse: hands": switching (both
@@ -564,5 +566,25 @@ what went wrong) and it comes off the list.
 - [ ] Curl the fingers in front of it / turn the back of the hand to the
       camera: they hide the start of the bolt; the body behind is covered by
       the bolt. depthBias (default 0.04 m) for how much nearer hides it.
+- [x] Head as the origin: the bolt starts inside the head; the face hides it
+      until it leaves the head's outline (fixed 2026-11-24: before, only the
+      first segment was depth-tested, so it was drawn over the face).
+- [x] The bolt comes out toward the viewer (its distance runs from the
+      origin's to the front at the target): the face hides its start, but the
+      body / arm behind it no longer hides the rest of the bolt.
 - [ ] Other points: "left_palm", any bone ("Head", "LeftHandIndex4"…).
 - [ ] Normal bolts (no origin) look exactly as before.
+
+## Avatar reactions stack (Scene)
+- [ ] Doom on the Puppet: the swirl alone (its squish and jolt were removed;
+      add one with the redeem's reaction at start: both show together).
+- [ ] Doom, then a throw with a bounce reaction on the same avatar during
+      it: the swirl keeps going, the bounce runs with it (before: the
+      bounce replaced the swirl).
+- [ ] Two throws with the same reaction: still one reaction, the hits add
+      up (bite marks) as before.
+- [ ] A redeem with a single reaction from the editor looks as before.
+- [ ] Doom's swirl on the full-screen Puppet twists around the avatar (not
+      the middle of the screen), sized to it, and stays sharp. Swirl size is
+      now relative to the avatar (Doom saved with 0.1: try ~0.85).
+- [ ] Doom's swirl on a normal (small) avatar looks as before.
