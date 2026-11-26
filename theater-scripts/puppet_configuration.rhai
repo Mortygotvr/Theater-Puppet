@@ -416,6 +416,7 @@ fn ui(ui) {
                 av_slider(ui, this.puppet, avatar, "desk_right_hand_forward", "Right hand back (-) or forward (+), metres", -0.1, 0.1);
                 av_slider(ui, this.puppet, avatar, "desk_hand_tilt", "Hands tilted back (-) or forward (+), degrees", -45.0, 45.0);
                 av_slider(ui, this.puppet, avatar, "desk_curl", "Fingers straighter (-) or more curled (+)", -0.6, 0.8);
+                av_slider(ui, this.puppet, avatar, "desk_mouse_fingers", "Mouse: index & middle fingers higher (-) or lower (+), degrees", -45.0, 60.0);
                 this.model_path(ui, avatar, "desk_model", "Keyboard & mouse GLB (empty: the built-in one)");
             }
         },

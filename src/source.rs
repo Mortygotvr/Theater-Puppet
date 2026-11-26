@@ -186,6 +186,7 @@ const S_DESK_LEFT_FORWARD: &CStr = c"desk_left_hand_forward";
 const S_DESK_RIGHT_FORWARD: &CStr = c"desk_right_hand_forward";
 const S_DESK_HAND_TILT: &CStr = c"desk_hand_tilt";
 const S_DESK_CURL: &CStr = c"desk_curl";
+const S_DESK_MOUSE_FINGERS: &CStr = c"desk_mouse_fingers";
 
 /// Colour slots (Theater Rig's Color<N>) a source can set
 const COLOR_SLOTS: u32 = 100;
@@ -1175,6 +1176,7 @@ unsafe extern "C" fn update(data: Ptr, settings: Ptr) {
                 hand_forward: [S_DESK_LEFT_FORWARD, S_DESK_RIGHT_FORWARD].map(|k| (api.obs_data_get_double)(settings, k.as_ptr()) as f32),
                 hand_tilt: (api.obs_data_get_double)(settings, S_DESK_HAND_TILT.as_ptr()) as f32,
                 curl: (api.obs_data_get_double)(settings, S_DESK_CURL.as_ptr()) as f32,
+                mouse_fingers: (api.obs_data_get_double)(settings, S_DESK_MOUSE_FINGERS.as_ptr()) as f32,
             },
             desk_offset: [(api.obs_data_get_double)(settings, S_DESK_UP.as_ptr()) as f32, (api.obs_data_get_double)(settings, S_DESK_FORWARD.as_ptr()) as f32],
             own_assign: crate::tracking::config::OwnAssign(crate::tracking::Part::ALL.map(|p| crate::tracking::config::pick_from(&get_string(settings, &cstring(&crate::tracking::config::OwnAssign::key(p)))))),
@@ -1567,6 +1569,7 @@ pub(crate) const AVATAR_SETTINGS: &[(&str, char)] = &[
     ("desk_right_hand_forward", 'd'),
     ("desk_hand_tilt", 'd'),
     ("desk_curl", 'd'),
+    ("desk_mouse_fingers", 'd'),
 ];
 
 /// Those settings of a Puppet source, as they are (defaults included)

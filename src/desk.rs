@@ -75,6 +75,9 @@ pub struct Look {
     pub hand_tilt: f32,
     /// The fingers curled more (+) or less (-), radians at each joint
     pub curl: f32,
+    /// On the mouse, the index and middle fingers lowered (+) or raised (-)
+    /// at the knuckle, degrees
+    pub mouse_fingers: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -311,8 +314,7 @@ pub fn wrists(layout: &Layout, state: &State, look: &Look, input: &Desk) -> [Wri
                 palm: Vec3::new(0.0, -1.0, 0.15),
             }
         });
-        // (Seen live: 6.5 cm up, fingers 14° down: the hand floated flat over the mouse)
-        let on_mouse = Wrist { at: layout.mouse_now(look, input) + Vec3::new(0.0, 0.05, -0.10), fingers: Vec3::new(0.0, -0.5, 1.0), palm: Vec3::new(0.0, -1.0, 0.1) };
+        let on_mouse = Wrist { at: layout.mouse_now(look, input) + Vec3::new(0.0, 0.065, -0.10), fingers: Vec3::new(0.0, -0.25, 1.0), palm: Vec3::new(0.0, -1.0, 0.1) };
         let keys = on_keys.unwrap_or(on_mouse);
         let t = if hand == mh { state.on_mouse } else { 0.0 };
         let w = if t <= 0.0 {
@@ -365,6 +367,10 @@ pub fn fingers(layout: &Layout, state: &State, look: &Look, input: &Desk) -> [Ha
         // the rest of the gap was the whole hand's pitch, see wrists)
         h.bend[1] = if click(1) { [0.82, 0.7, 0.5] } else { [0.67, 0.55, 0.4] };
         h.bend[2] = if click(2) { [0.82, 0.7, 0.5] } else { [0.67, 0.55, 0.4] };
+        // The mouse fingers slider
+        for f in 1..3 {
+            h.bend[f][0] += look.mouse_fingers.to_radians();
+        }
         h.bend[3] = [0.85, 0.95, 0.65];
         h.bend[4] = [0.9, 1.0, 0.65];
         h.bend[0] = [0.15, 0.1, 0.05];

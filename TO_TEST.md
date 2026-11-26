@@ -332,7 +332,8 @@ what went wrong) and it comes off the list.
       mouse hook: also in a game that holds the cursor); clicks bend the
       index / middle finger. Your own mouse doesn't feel any slower.
 - [ ] On the mouse, the index and middle fingers sit about as low as the
-      keyboard hand's (they were 10-15° higher).
+      keyboard hand's (they were 10-15° higher). New slider "Mouse: index &
+      middle fingers higher (-) or lower (+)" moves just those two, live.
 - [ ] Each hand's own height and forward / back sliders; the tilt and
       finger curl sliders.
 - [ ] Puppet properties → "Keyboard & mouse: hands": switching (both
