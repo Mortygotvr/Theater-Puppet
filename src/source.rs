@@ -445,6 +445,20 @@ unsafe extern "C" fn get_defaults(settings: Ptr) {
         (api.obs_data_set_default_double)(settings, S_HAND_APART.as_ptr(), m.hand_offset[1] as f64);
         (api.obs_data_set_default_string)(settings, S_DESK_KEYS.as_ptr(), c"area".as_ptr());
         (api.obs_data_set_default_string)(settings, S_DESK_HANDS.as_ptr(), c"gaming".as_ptr());
+        // The keyboard & mouse as the user tuned it live
+        for (key, v) in [
+            (S_DESK_UP, 0.38),
+            (S_DESK_FORWARD, -0.01),
+            (S_DESK_LEFT_UP, -0.052),
+            (S_DESK_LEFT_FORWARD, -0.06),
+            (S_DESK_RIGHT_UP, -0.045),
+            (S_DESK_RIGHT_FORWARD, 0.0),
+            (S_DESK_HAND_TILT, -29.0),
+            (S_DESK_CURL, -0.54),
+            (S_DESK_MOUSE_FINGERS, 0.0),
+        ] {
+            (api.obs_data_set_default_double)(settings, key.as_ptr(), v);
+        }
         // The springs' adjustments: the avatar's, and each Also draw GLB's
         for prefix in std::iter::once(String::new()).chain((1..=MAX_EXTRAS).map(extra_prefix)) {
             for kind in 0..KINDS.len() {

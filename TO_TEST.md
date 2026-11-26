@@ -331,6 +331,10 @@ what went wrong) and it comes off the list.
 - [ ] Moving the mouse moves the avatar's mouse and hand (now through a
       mouse hook: also in a game that holds the cursor); clicks bend the
       index / middle finger. Your own mouse doesn't feel any slower.
+- [ ] A new Puppet source starts with the keyboard & mouse as tuned on
+      Theater Puppet 3 (desk +0.38 / -0.01, hands, tilt -29°, curl -0.54).
+- [ ] Closing OBS normally with lip sync on a microphone: no crash
+      (theater_puppet.log: "lip sync: its microphone source removed, let go").
 - [ ] On the mouse, the index and middle fingers sit about as low as the
       keyboard hand's (they were 10-15° higher). New slider "Mouse: index &
       middle fingers higher (-) or lower (+)" moves just those two, live.

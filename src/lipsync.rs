@@ -461,6 +461,10 @@ static ATTACHING: Mutex<()> = Mutex::new(());
 type CaptureCallback = unsafe extern "C" fn(Ptr, Ptr, *const AudioData, bool);
 type AddCapture = unsafe extern "C" fn(Ptr, CaptureCallback, Ptr);
 type GetFlags = unsafe extern "C" fn(Ptr) -> u32;
+type SignalCallback = unsafe extern "C" fn(Ptr, Ptr);
+type GetSignals = unsafe extern "C" fn(Ptr) -> Ptr;
+type Connect = unsafe extern "C" fn(Ptr, *const std::ffi::c_char, SignalCallback, Ptr);
+type Removed = unsafe extern "C" fn(Ptr) -> bool;
 const OBS_SOURCE_AUDIO_FLAG: u32 = 1 << 1;
 
 /// New settings (the inputs restarted): kept, and the source listened to (or not)
@@ -490,7 +494,13 @@ pub fn ensure() {
     }
     let api = obs::api();
     let Ok(cname) = std::ffi::CString::new(name) else { return };
-    let found = unsafe { (api.obs_get_source_by_name)(cname.as_ptr()) };
+    let mut found = unsafe { (api.obs_get_source_by_name)(cname.as_ptr()) };
+    // A removed one (OBS closing, or deleted) isn't listened to: held, it
+    // would outlive OBS's audio and crash it on exit
+    if !found.is_null() && crate::tracking::obs_function::<Removed>(c"obs_source_removed").is_some_and(|f| unsafe { f(found) }) {
+        unsafe { (api.obs_source_release)(found) };
+        found = std::ptr::null_mut();
+    }
     let attached = ATTACHED.load(std::sync::atomic::Ordering::Acquire);
     if !found.is_null() && found as usize == attached {
         unsafe { (api.obs_source_release)(found) };
@@ -507,6 +517,31 @@ pub fn ensure() {
     // Its reference kept while listened to
     ATTACHED.store(found as usize, std::sync::atomic::Ordering::Release);
     unsafe { add(found, captured, std::ptr::null_mut()) };
+    // Let go the moment OBS removes it (OBS closing removes every source
+    // before it unloads the plugins: held till then, the mic was destroyed
+    // during shutdown, its audio still coming, and OBS crashed)
+    signal(found, c"signal_handler_connect");
+}
+
+/// Connects (or disconnects, by `how`) `removed` to `source`'s "remove" signal
+fn signal(source: Ptr, how: &std::ffi::CStr) {
+    let (Some(get), Some(f)) = (crate::tracking::obs_function::<GetSignals>(c"obs_source_get_signal_handler"), crate::tracking::obs_function::<Connect>(how)) else { return };
+    let handler = unsafe { get(source) };
+    if !handler.is_null() {
+        unsafe { f(handler, c"remove".as_ptr(), removed, std::ptr::null_mut()) };
+    }
+}
+
+/// The source listened to was removed: let go of it now
+unsafe extern "C" fn removed(_data: Ptr, _calldata: Ptr) {
+    // (Not while an attach / detach runs: it lets go itself, or `ensure`
+    // drops a removed source next time)
+    let Ok(_one) = ATTACHING.try_lock() else {
+        crate::log("[Puppet] lip sync: its microphone source removed while busy, let go later");
+        return;
+    };
+    detach_now();
+    crate::log("[Puppet] lip sync: its microphone source removed, let go");
 }
 
 /// Not listening any more (OBS unloading the plugin)
@@ -521,6 +556,7 @@ fn detach_now() {
         return;
     }
     let source = attached as Ptr;
+    signal(source, c"signal_handler_disconnect");
     if let Some(remove) = crate::tracking::obs_function::<AddCapture>(c"obs_source_remove_audio_capture_callback") {
         unsafe { remove(source, captured, std::ptr::null_mut()) };
     }
